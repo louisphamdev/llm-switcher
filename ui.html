@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Switcher — Multi-Protocol Gateway</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-hover: #172033;
+      --card-border: #1f293d;
+      --card-border-active: #3b82f6;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
+      --accent: #6366f1;
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.25);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 28px 20px; min-height: 100vh; line-height: 1.5; }
+    .container { max-width: 980px; margin: 0 auto; }
+
+    /* Header */
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--card-border); }
+    .title-group { display: flex; align-items: center; gap: 14px; }
+    .logo-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #6366f1); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3); }
+    .title-group h1 { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
+    .title-group p { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+    /* Buttons */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: var(--radius-sm); border: none; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
+    .btn-primary { background: var(--primary); color: #0f172a; }
+    .btn-primary:hover { background: var(--primary-hover); color: #fff; }
+    .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.25); color: #fff; }
+    .btn-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .btn-success:hover { background: rgba(16, 185, 129, 0.25); color: #fff; }
+    .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--card-border); }
+    .btn-outline:hover { background: rgba(255, 255, 255, 0.05); border-color: #475569; }
+
+    /* Status Banner */
+    .status-banner { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 26px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); }
+    .status-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .status-dot-wrapper { position: relative; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); transition: all 0.3s; }
+    .status-dot.active { background: var(--success); box-shadow: 0 0 12px var(--success); }
+    .status-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .status-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; word-break: break-all; }
+
+    /* Section Headers */
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .section-title { font-size: 15px; font-weight: 700; color: #e2e8f0; letter-spacing: -0.01em; }
+    .section-subtitle { font-size: 12px; color: var(--text-muted); }
+
+    /* Profile Cards Grid */
+    .profiles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .profile-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 16px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+    .profile-card:hover { border-color: #3b82f6; background: var(--card-hover); transform: translateY(-2px); }
+    .profile-card.editing { border-color: var(--primary); box-shadow: 0 0 16px rgba(56, 189, 248, 0.15); }
+    .profile-card.active { border-left: 4px solid var(--success); }
+
+    .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .card-name-group { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+    .card-name { font-size: 14px; font-weight: 700; color: #fff; }
+
+    .badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+    .badge-hybrid { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+    .badge-direct { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-convert { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-route { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); font-family: monospace; }
+    .badge-1m { background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
+    .badge-1m-warn { background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-left: 4px; white-space: nowrap; cursor: help; }
+    .warning-callout { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fbbf24; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 14px; line-height: 1.5; display: flex; gap: 8px; align-items: flex-start; }
+
+    .card-url { font-size: 11px; color: var(--text-muted); word-break: break-all; margin-bottom: 10px; font-family: monospace; }
+    .card-models { font-size: 11px; color: #cbd5e1; display: flex; flex-direction: column; gap: 4px; background: rgba(0, 0, 0, 0.25); padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; }
+    .card-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-top: 6px; }
+
+    /* Switch Slider */
+    .switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .25s; border-radius: 20px; }
+    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .25s; border-radius: 50%; }
+    input:checked + .slider { background-color: var(--success); }
+    input:checked + .slider:before { transform: translateX(18px); }
+
+    /* Editor Form Panel */
+    .form-panel { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 22px; margin-bottom: 30px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); }
+    
+    /* Tabs */
+    .tab-bar { display: flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--card-border); padding-bottom: 10px; flex-wrap: wrap; }
+    .tab-btn { background: transparent; border: none; color: var(--text-muted); padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+    .tab-btn.active { color: #fff; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); }
+
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .form-group.full { grid-column: span 2; }
+    label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+    input, select { background: #0b1120; border: 1px solid var(--card-border); border-radius: 6px; padding: 9px 12px; color: #fff; font-size: 13px; outline: none; transition: border-color 0.2s; width: 100%; max-width: 100%; min-width: 0; }
+    input:focus, select:focus { border-color: var(--primary); }
+
+    .preset-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .preset-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .form-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--card-border); gap: 12px; flex-wrap: wrap; }
+
+    /* Test Results Card */
+    .test-result-box { margin-top: 14px; border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12px; display: none; }
+    .test-result-box.success { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }
+    .test-result-box.error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }
+    .test-meta { display: flex; gap: 12px; font-weight: 700; margin-bottom: 6px; }
+    .test-sample { background: rgba(0, 0, 0, 0.4); padding: 8px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; color: #e2e8f0; }
+
+    /* Interactive Model Explorer */
+    .model-browser { margin-top: 10px; background: #070c16; border: 1px solid var(--card-border); border-radius: var(--radius-sm); padding: 14px; }
+    .model-browser-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
+    .model-list-scroll { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+    .model-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; gap: 10px; }
+    .model-row:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(56, 189, 248, 0.3); }
+    .model-id { font-family: monospace; color: #e2e8f0; word-break: break-all; }
+    .model-btn-group { display: flex; gap: 4px; flex-shrink: 0; }
+
+    /* Active CLI Targets Grid */
+    .cli-slots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .cli-slot-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s; }
+    .cli-slot-card.active { border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.04); }
+    .cli-slot-header { display: flex; justify-content: space-between; align-items: center; }
+    .cli-slot-title-group { display: flex; align-items: center; gap: 8px; }
+    .cli-slot-icon { font-size: 16px; }
+    .cli-slot-name { font-size: 13px; font-weight: 700; color: #fff; }
+    .cli-slot-route { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+    .cli-slot-select { background: #0b1120; border: 1px solid var(--card-border); border-radius: 6px; padding: 7px 10px; color: #fff; font-size: 12px; width: 100%; outline: none; cursor: pointer; }
+    .cli-slot-select:focus { border-color: var(--primary); }
+
+    /* Inspector Logs */
+    .log-item { background: #070c16; border: 1px solid var(--card-border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+    .log-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .log-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .log-body { background: rgba(0,0,0,0.35); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 11px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; max-height: 110px; overflow-y: auto; }
+
+    /* Toast Notification */
+    .toast { position: fixed; bottom: 24px; right: 24px; background: #1e293b; border: 1px solid #334155; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: none; z-index: 1000; transition: all 0.3s; }
+
+    @media (max-width: 640px) {
+      body { padding: 16px 12px; }
+      .form-grid { grid-template-columns: minmax(0, 1fr); }
+      .form-group.full { grid-column: span 1; }
+      .status-banner { flex-direction: column; align-items: stretch; gap: 12px; }
+      #status-action .btn { width: 100%; }
+      .form-actions { flex-direction: column; align-items: stretch; }
+      .form-actions > div { display: flex; flex-direction: column; width: 100%; }
+      .cli-slots-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="title-group">
+        <div class="logo-icon">⇄</div>
+        <div>
+          <h1>LLM Switcher</h1>
+          <p>Multi-Protocol Gateway • Multi-Active CLI Routing • Zero Config Mutation</p>
+        </div>
+      </div>
+      <div>
+        <button class="btn btn-outline btn-sm" onclick="loadStatus()">🔄 Refresh</button>
+      </div>
+    </header>
+
+    <!-- Status Banner -->
+    <div class="status-banner">
+      <div class="status-left">
+        <div class="status-dot-wrapper">
+          <div id="status-dot" class="status-dot"></div>
+        </div>
+        <div>
+          <div id="status-title" class="status-title">Checking status...</div>
+          <div id="status-sub" class="status-sub">Detecting current configuration</div>
+        </div>
+      </div>
+      <div id="status-action">
+        <button id="btn-toggle" class="btn btn-primary" onclick="toggleProxy()">Toggle All</button>
+      </div>
+    </div>
+
+    <!-- Active Multi-CLI Slots -->
+    <div class="section-header" style="margin-bottom: 8px;">
+      <div>
+        <span class="section-title">Active CLI Routing (Multi-Active)</span>
+        <span class="section-subtitle" style="margin-left: 8px;">Mỗi CLI mở độc lập 1 profile, cùng lúc nhiều CLI</span>
+      </div>
+    </div>
+    <div class="cli-slots-grid">
+      <!-- Slot: Claude Code -->
+      <div id="card-slot-anthropic" class="cli-slot-card">
+        <div class="cli-slot-header">
+          <div class="cli-slot-title-group">
+            <span class="cli-slot-icon">🤖</span>
+            <div>
+              <div class="cli-slot-name">Claude Code</div>
+              <div class="cli-slot-route">/v1/messages</div>
+            </div>
+          </div>
+          <span id="badge-slot-anthropic" class="badge">OFF</span>
+        </div>
+        <select id="select-slot-anthropic" class="cli-slot-select" onchange="switchCliTarget('anthropic', this.value)">
+          <option value="">(Off / Official Subscription)</option>
+        </select>
+      </div>
+
+      <!-- Slot: Codex -->
+      <div id="card-slot-responses" class="cli-slot-card">
+        <div class="cli-slot-header">
+          <div class="cli-slot-title-group">
+            <span class="cli-slot-icon">⚡</span>
+            <div>
+              <div class="cli-slot-name">Codex</div>
+              <div class="cli-slot-route">/v1/responses</div>
+            </div>
+          </div>
+          <span id="badge-slot-responses" class="badge">OFF</span>
+        </div>
+        <select id="select-slot-responses" class="cli-slot-select" onchange="switchCliTarget('responses', this.value)">
+          <option value="">(Off / Official)</option>
+        </select>
+      </div>
+
+      <!-- Slot: OpenAI Chat -->
+      <div id="card-slot-openai-chat" class="cli-slot-card">
+        <div class="cli-slot-header">
+          <div class="cli-slot-title-group">
+            <span class="cli-slot-icon">💬</span>
+            <div>
+              <div class="cli-slot-name">OpenAI Chat</div>
+              <div class="cli-slot-route">/v1/chat/completions</div>
+            </div>
+          </div>
+          <span id="badge-slot-openai-chat" class="badge">OFF</span>
+        </div>
+        <select id="select-slot-openai-chat" class="cli-slot-select" onchange="switchCliTarget('openai-chat', this.value)">
+          <option value="">(Off / Official)</option>
+        </select>
+      </div>
+
+      <!-- Slot: Vertex -->
+      <div id="card-slot-vertex" class="cli-slot-card">
+        <div class="cli-slot-header">
+          <div class="cli-slot-title-group">
+            <span class="cli-slot-icon">🔮</span>
+            <div>
+              <div class="cli-slot-name">Vertex / Gemini</div>
+              <div class="cli-slot-route">/v1beta/models/*</div>
+            </div>
+          </div>
+          <span id="badge-slot-vertex" class="badge">OFF</span>
+        </div>
+        <select id="select-slot-vertex" class="cli-slot-select" onchange="switchCliTarget('vertex', this.value)">
+          <option value="">(Off / Official)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Providers & Profiles List -->
+    <div class="section-header">
+      <div>
+        <span class="section-title">Providers & Profiles</span>
+        <span class="section-subtitle" style="margin-left: 8px;">(Click card to edit)</span>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="initNewProfile()">+ Add Provider</button>
+    </div>
+    <div id="profiles-grid" class="profiles-grid"></div>
+
+    <!-- Edit Profile Form Panel -->
+    <div class="form-panel">
+      <div class="section-header">
+        <div id="form-title" class="section-title">Edit Provider</div>
+        <span id="active-tag" style="font-size: 12px; color: var(--success); font-weight: 700;"></span>
+      </div>
+
+      <!-- Quick Presets -->
+      <div class="preset-bar">
+        <span class="preset-label">Presets:</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('9router')">9Router</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('openrouter')">OpenRouter</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('momo')">Selfhost Hybrid</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('custom')">Local OpenAI</button>
+      </div>
+
+      <!-- Tabs Bar -->
+      <div class="tab-bar">
+        <button type="button" class="tab-btn active" onclick="switchTab('tab-general')">1. General & Endpoint</button>
+        <button type="button" class="tab-btn" onclick="switchTab('tab-routing')">2. Protocols & Routing</button>
+        <button type="button" class="tab-btn" onclick="switchTab('tab-models')">3. Models & 1M Context</button>
+        <button type="button" class="tab-btn" onclick="switchTab('tab-inspector'); loadInspectorLogs();">4. Live Inspector</button>
+      </div>
+
+      <form id="profile-form" onsubmit="saveProfile(event)">
+        <!-- Tab 1: General & Endpoint -->
+        <div id="tab-general" class="tab-pane active">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Provider Key (Unique ID)</label>
+              <input type="text" id="p-key" required placeholder="e.g. 9router, openrouter, my-llm">
+            </div>
+            <div class="form-group">
+              <label>Display Name</label>
+              <input type="text" id="p-name" required placeholder="e.g. 9Router Cloud, OpenRouter Pro">
+            </div>
+            <div class="form-group full">
+              <label>Base URL</label>
+              <input type="url" id="p-url" required placeholder="https://api.your-provider.com/v1">
+            </div>
+            <div class="form-group full">
+              <label>API Key / Bearer Token</label>
+              <input type="password" id="p-key-val" placeholder="sk-...">
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Protocols & Routing -->
+        <div id="tab-routing" class="tab-pane">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Client Format (Input)</label>
+              <select id="p-informat">
+                <option value="auto">AUTO (Accepts Claude / OpenAI / Codex / Vertex)</option>
+                <option value="anthropic">Anthropic Messages (/v1/messages)</option>
+                <option value="openai-chat">OpenAI Chat (/v1/chat/completions)</option>
+                <option value="responses">OpenAI Responses — Codex (/v1/responses)</option>
+                <option value="vertex">Vertex generateContent (/v1beta/models/*)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Upstream Format (Output)</label>
+              <select id="p-outformat">
+                <option value="">AUTO (Determined by Routing Mode)</option>
+                <option value="openai-chat">OpenAI Chat Completions</option>
+                <option value="anthropic">Anthropic Messages</option>
+                <option value="vertex">Vertex generateContent</option>
+              </select>
+            </div>
+            <div class="form-group full">
+              <label>Routing Mode (Legacy)</label>
+              <select id="p-mode">
+                <option value="hybrid">HYBRID (Claude models -> Direct Native | Other models -> Convert)</option>
+                <option value="convert">CONVERT (Always convert protocols via gateway)</option>
+                <option value="direct">DIRECT (Always forward directly via native Anthropic API)</option>
+              </select>
+            </div>
+            <div class="form-group full" style="border-top: 1px solid var(--card-border); padding-top: 12px; margin-top: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                <label>Token Optimizer URL (Tùy chọn - Lớp nén trung gian)</label>
+                <span style="font-size: 11px; color: var(--primary);">Headroom • Ponytail • RTK</span>
+              </div>
+              <input type="url" id="p-optimizer-url" placeholder="e.g. http://127.0.0.1:8787 (để trống nếu gọi thẳng upstream)">
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                💡 <strong>Phân tầng:</strong> Switcher sẽ gửi payload sang tool này để nén, rồi làm cửa ngõ cuối cùng ra internet gọi LLM (tự chữa lành tin nhắn mồ côi, giữ 1M và thinking trace).
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Models & 1M Context -->
+        <div id="tab-models" class="tab-pane">
+          <div class="warning-callout">
+            <span style="font-size: 16px; flex-shrink: 0;">⚠️</span>
+            <div>
+              <strong>Cảnh báo về 1M Context:</strong> Khi bật <code>[1M Context]</code>, gateway sẽ thiết lập <code>CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000</code>. Nếu model phía upstream <strong>không thực sự hỗ trợ</strong> 1M token (ví dụ các model chỉ giới hạn 128k hoặc 200k như <code>ag/claude-opus-4-6-thinking</code>), khi đoạn hội thoại dài vượt quá ngưỡng hỗ trợ của model sẽ bị upstream báo lỗi <code>HTTP 400 (Bad Request / Context Exceeded)</code>.
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <span style="font-size: 13px; font-weight: 600; color: #cbd5e1;">Tier Mapping (Claude Code / Switcher)</span>
+            <button type="button" id="btn-fetch-models" class="btn btn-outline btn-sm" onclick="fetchModelList()">
+              🔄 Fetch Upstream Models
+            </button>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                <label>Opus Model</label>
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
+                  <input type="checkbox" id="p-opus-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
+                  <span id="warn-opus-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
+                </label>
+              </div>
+              <input type="text" id="p-opus" list="model-options" placeholder="e.g. ag/claude-opus-4-6-thinking">
+            </div>
+
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                <label>Sonnet Model</label>
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
+                  <input type="checkbox" id="p-sonnet-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
+                  <span id="warn-sonnet-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
+                </label>
+              </div>
+              <input type="text" id="p-sonnet" list="model-options" placeholder="e.g. ag/claude-sonnet-4-6">
+            </div>
+
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                <label>Haiku Model</label>
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
+                  <input type="checkbox" id="p-haiku-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
+                  <span id="warn-haiku-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
+                </label>
+              </div>
+              <input type="text" id="p-haiku" list="model-options" placeholder="e.g. ag/gemini-3.7-flash-high">
+            </div>
+
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                <label>Fable Model</label>
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
+                  <input type="checkbox" id="p-fable-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
+                  <span id="warn-fable-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
+                </label>
+              </div>
+              <input type="text" id="p-fable" list="model-options" placeholder="e.g. ag/gemini-3.8-flash-high">
+            </div>
+
+            <!-- Model Explorer Box -->
+            <div class="form-group full" id="model-browser" style="display: none;">
+              <div class="model-browser">
+                <div class="model-browser-header">
+                  <span id="model-count-label" style="font-size: 12px; font-weight: 700; color: var(--primary);">Available Upstream Models</span>
+                  <input type="text" id="model-filter" placeholder="Filter models..." style="padding: 5px 10px; font-size: 12px; width: 220px;" oninput="filterModels()">
+                </div>
+                <div id="model-items" class="model-list-scroll"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Live Inspector -->
+        <div id="tab-inspector" class="tab-pane">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <span style="font-size: 13px; font-weight: 700; color: #fff;">Real-time Request Inspector</span>
+              <span style="font-size: 11px; color: var(--text-muted); margin-left: 8px;">Soi prompt, token, latency & thinking block</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <label style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                <input type="checkbox" id="chk-auto-refresh-logs" checked onchange="toggleLogAutoRefresh(this.checked)"> Auto-refresh
+              </label>
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadInspectorLogs()">🔄 Refresh</button>
+              <button type="button" class="btn btn-danger btn-sm" onclick="clearInspectorLogs()">Clear</button>
+            </div>
+          </div>
+
+          <div id="inspector-logs-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 440px; overflow-y: auto;">
+            <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 24px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+              No requests recorded yet. Make a request via Claude Code, Codex, or curl.
+            </div>
+          </div>
+        </div>
+
+        <datalist id="model-options"></datalist>
+
+        <!-- Test Connection Result Box -->
+        <div id="test-result" class="test-result-box">
+          <div class="test-meta">
+            <span id="test-status-badge"></span>
+            <span id="test-latency"></span>
+          </div>
+          <div id="test-sample" class="test-sample"></div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" id="btn-test-conn" class="btn btn-outline" onclick="testConnection()">⚡ Test Connection</button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="btn-delete" class="btn btn-danger" onclick="deleteProfile()" style="display: none;">Delete</button>
+            <button type="submit" class="btn btn-primary">Save Provider</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    let state = {
+      config: null,
+      activeProfile: '',
+      isUsingProxy: false,
+      claudeBaseURL: ''
+    };
+    let currentlyEditingKey = '';
+    let loadedModels = [];
+
+    // Helper: Anti-XSS Sanitizer
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function showToast(msg, isError = false) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.style.borderColor = isError ? 'var(--danger)' : '#334155';
+      t.style.background = isError ? 'rgba(239, 68, 68, 0.95)' : '#1e293b';
+      t.style.display = 'block';
+      setTimeout(() => t.style.display = 'none', 3500);
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+      
+      const targetPane = document.getElementById(tabId);
+      if (targetPane) targetPane.classList.add('active');
+      
+      const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick')?.includes(tabId));
+      if (activeBtn) activeBtn.classList.add('active');
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        state = data;
+        if (!currentlyEditingKey || !state.config.profiles[currentlyEditingKey]) {
+          currentlyEditingKey = state.activeProfile;
+        }
+        render();
+      } catch (err) {
+        showToast('Failed to connect to gateway service', true);
+      }
+    }
+
+    function render() {
+      const dot = document.getElementById('status-dot');
+      const title = document.getElementById('status-title');
+      const sub = document.getElementById('status-sub');
+      const toggleBtn = document.getElementById('btn-toggle');
+
+      const activeMap = state.activeProfiles || (state.config.activeProfiles || {});
+      const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
+      const isAnyActive = activeTargets.length > 0;
+
+      if (isAnyActive) {
+        dot.className = 'status-dot active';
+        title.innerText = `Gateway Active (${activeTargets.length} Client Target${activeTargets.length > 1 ? 's' : ''} Online)`;
+        const parts = [];
+        if (activeMap.anthropic) parts.push(`Claude: ${activeMap.anthropic}`);
+        if (activeMap.responses) parts.push(`Codex: ${activeMap.responses}`);
+        if (activeMap['openai-chat']) parts.push(`OpenAI: ${activeMap['openai-chat']}`);
+        if (activeMap.vertex) parts.push(`Vertex: ${activeMap.vertex}`);
+        sub.innerText = `Port ${state.port} • [${parts.join(' | ')}]`;
+        toggleBtn.className = 'btn btn-danger';
+        toggleBtn.innerText = 'Switch All to Official';
+      } else {
+        dot.className = 'status-dot';
+        title.innerText = 'Official Subscription (All Clients)';
+        sub.innerText = 'Gateway is idle. Clients connect directly to official endpoints.';
+        toggleBtn.className = 'btn btn-success';
+        toggleBtn.innerText = 'Activate All';
+      }
+
+      // Update 4 CLI Slots (Mỗi CLI chỉ được 1 active profile)
+      const slots = [
+        { id: 'anthropic', name: 'Claude Code', key: 'anthropic' },
+        { id: 'responses', name: 'Codex', key: 'responses' },
+        { id: 'openai-chat', name: 'OpenAI Chat', key: 'openai-chat' },
+        { id: 'vertex', name: 'Vertex / Gemini', key: 'vertex' }
+      ];
+
+      for (const slot of slots) {
+        const card = document.getElementById(`card-slot-${slot.id}`);
+        const badge = document.getElementById(`badge-slot-${slot.id}`);
+        const select = document.getElementById(`select-slot-${slot.id}`);
+        const currentActive = activeMap[slot.key];
+
+        if (select) {
+          select.innerHTML = '<option value="">(Off / Official Subscription)</option>';
+          for (const [key, p] of Object.entries(state.config.profiles)) {
+            const inFmt = p.inFormat || 'auto';
+            if (inFmt === 'auto' || inFmt === slot.key) {
+              const opt = document.createElement('option');
+              opt.value = key;
+              opt.textContent = `${p.name} (${key})`;
+              select.appendChild(opt);
+            }
+          }
+          select.value = currentActive || '';
+        }
+
+        if (currentActive) {
+          if (card) card.classList.add('active');
+          if (badge) {
+            badge.className = 'badge badge-direct';
+            badge.textContent = currentActive;
+          }
+        } else {
+          if (card) card.classList.remove('active');
+          if (badge) {
+            badge.className = 'badge badge-outline';
+            badge.textContent = 'OFF';
+          }
+        }
+      }
+
+      // Render Cards Grid
+      const grid = document.getElementById('profiles-grid');
+      grid.innerHTML = '';
+
+      for (const [key, p] of Object.entries(state.config.profiles)) {
+        const activeCLIs = [];
+        if (activeMap.anthropic === key) activeCLIs.push('Claude');
+        if (activeMap.responses === key) activeCLIs.push('Codex');
+        if (activeMap['openai-chat'] === key) activeCLIs.push('OpenAI');
+        if (activeMap.vertex === key) activeCLIs.push('Vertex');
+        const isActiveAny = activeCLIs.length > 0;
+        const isEditing = (key === currentlyEditingKey);
+        const shortFmt = (f) => ({ auto: 'auto', anthropic: 'anth', 'openai-chat': 'chat', responses: 'resp', vertex: 'vtx' }[f] || f || 'auto');
+        const routeBadge = `${shortFmt(p.inFormat)}→${shortFmt(p.outFormat || p.mode)}`;
+
+        const card = document.createElement('div');
+        card.className = `profile-card ${isEditing ? 'editing' : ''} ${isActiveAny ? 'active' : ''}`;
+        card.onclick = () => selectProfileForEdit(key);
+
+        card.innerHTML = `
+          <div class="card-top">
+            <div class="card-name-group">
+              <div class="card-name">${escapeHtml(p.name)}</div>
+              <span class="badge badge-${escapeHtml(p.mode || 'hybrid')}">${escapeHtml(p.mode || 'hybrid')}</span>
+              <span class="badge badge-route" title="Client input -> Upstream output">${escapeHtml(routeBadge)}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;" onclick="event.stopPropagation()">
+              <span style="font-size: 11px; font-weight: 700; color: ${isActiveAny ? 'var(--success)' : 'var(--text-muted)'};">${isActiveAny ? 'ACTIVE' : 'OFF'}</span>
+              <label class="switch">
+                <input type="checkbox" ${isActiveAny ? 'checked' : ''} onchange="toggleProfileAllCli('${escapeHtml(key)}', this.checked)">
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+          <div class="card-url">${escapeHtml(p.baseURL)}</div>
+          <div class="card-models">
+            <div><strong>Opus:</strong> ${escapeHtml(p.defaultModels?.opus || '-')} ${p.model1M?.opus ? '<span class="badge-1m">1M</span>' : ''}</div>
+            <div><strong>Sonnet:</strong> ${escapeHtml(p.defaultModels?.sonnet || '-')} ${p.model1M?.sonnet ? '<span class="badge-1m">1M</span>' : ''}</div>
+            <div><strong>Haiku:</strong> ${escapeHtml(p.defaultModels?.haiku || '-')} ${p.model1M?.haiku ? '<span class="badge-1m">1M</span>' : ''}</div>
+            <div><strong>Fable:</strong> ${escapeHtml(p.defaultModels?.fable || '-')} ${p.model1M?.fable ? '<span class="badge-1m">1M</span>' : ''}</div>
+          </div>
+          <div class="card-footer">
+            <span style="color: ${isEditing ? 'var(--primary)' : 'var(--text-muted)'}; font-weight: 600;">
+              ${isEditing ? '● Currently Editing' : 'Click to edit'}
+            </span>
+            <div>
+              ${activeCLIs.map(c => `<span class="badge badge-direct" style="font-size: 9px; margin-left: 3px;">✓ ${escapeHtml(c)}</span>`).join('')}
+            </div>
+          </div>
+        `;
+        grid.appendChild(card);
+      }
+
+      loadProfileToForm(currentlyEditingKey);
+    }
+
+    function selectProfileForEdit(key) {
+      currentlyEditingKey = key;
+      render();
+    }
+
+    async function switchCliTarget(target, profileKey) {
+      showToast(`Setting ${target} active profile...`);
+      try {
+        const res = await fetch('/api/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target, profile: profileKey || null })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`Updated ${target} to "${profileKey || 'Official'}"!`);
+          loadStatus();
+        } else {
+          showToast(data.error || 'Failed to switch', true);
+        }
+      } catch (err) {
+        showToast('Error switching target', true);
+      }
+    }
+
+    async function toggleProfileAllCli(key, isChecked) {
+      if (isChecked) {
+        showToast(`Activating provider "${key}"...`);
+        try {
+          const res = await fetch('/api/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: key })
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(`Provider "${key}" activated!`);
+            currentlyEditingKey = key;
+            loadStatus();
+          } else {
+            showToast(data.error || 'Failed to switch', true);
+            loadStatus();
+          }
+        } catch (err) {
+          showToast('Error activating provider', true);
+          loadStatus();
+        }
+      } else {
+        showToast(`Deactivating provider "${key}"...`);
+        try {
+          await fetch('/api/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: null })
+          });
+          showToast(`Deactivated "${key}"!`);
+          loadStatus();
+        } catch (err) {
+          showToast('Error deactivating provider', true);
+          loadStatus();
+        }
+      }
+    }
+
+    function update1mWarnings() {
+      ['opus', 'sonnet', 'haiku', 'fable'].forEach(tier => {
+        const chk = document.getElementById('p-' + tier + '-1m');
+        const badge = document.getElementById('warn-' + tier + '-1m');
+        if (chk && badge) {
+          badge.style.display = chk.checked ? 'inline-block' : 'none';
+        }
+      });
+    }
+
+    function loadProfileToForm(key) {
+      const p = state.config?.profiles?.[key];
+      if (!p) return;
+      document.getElementById('form-title').innerText = `Edit Provider: ${p.name}`;
+      document.getElementById('p-key').value = key;
+      document.getElementById('p-key').disabled = true;
+      document.getElementById('p-name').value = p.name;
+      document.getElementById('p-mode').value = p.mode || 'hybrid';
+      document.getElementById('p-informat').value = p.inFormat || 'auto';
+      document.getElementById('p-outformat').value = p.outFormat || '';
+      document.getElementById('p-optimizer-url').value = p.optimizerURL || '';
+      document.getElementById('p-url').value = p.baseURL;
+      document.getElementById('p-key-val').value = p.apiKey;
+      document.getElementById('p-opus').value = p.defaultModels?.opus || '';
+      document.getElementById('p-sonnet').value = p.defaultModels?.sonnet || '';
+      document.getElementById('p-haiku').value = p.defaultModels?.haiku || '';
+      document.getElementById('p-fable').value = p.defaultModels?.fable || '';
+      document.getElementById('p-opus-1m').checked = Boolean(p.model1M?.opus);
+      document.getElementById('p-sonnet-1m').checked = Boolean(p.model1M?.sonnet);
+      document.getElementById('p-haiku-1m').checked = Boolean(p.model1M?.haiku);
+      document.getElementById('p-fable-1m').checked = Boolean(p.model1M?.fable);
+      update1mWarnings();
+      document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
+      document.getElementById('active-tag').innerText = (key === state.activeProfile && state.isUsingProxy) ? '(Active Gateway)' : '';
+      
+      document.getElementById('model-browser').style.display = 'none';
+      document.getElementById('test-result').style.display = 'none';
+      loadedModels = [];
+    }
+
+    function initNewProfile() {
+      currentlyEditingKey = '';
+      document.getElementById('form-title').innerText = 'Create New Provider';
+      document.getElementById('p-key').value = '';
+      document.getElementById('p-key').disabled = false;
+      document.getElementById('p-name').value = '';
+      document.getElementById('p-mode').value = 'hybrid';
+      document.getElementById('p-informat').value = 'auto';
+      document.getElementById('p-outformat').value = '';
+      document.getElementById('p-optimizer-url').value = '';
+      document.getElementById('p-url').value = 'https://';
+      document.getElementById('p-key-val').value = '';
+      document.getElementById('p-opus').value = '';
+      document.getElementById('p-sonnet').value = '';
+      document.getElementById('p-haiku').value = '';
+      document.getElementById('p-fable').value = '';
+      document.getElementById('p-opus-1m').checked = false;
+      document.getElementById('p-sonnet-1m').checked = false;
+      document.getElementById('p-haiku-1m').checked = false;
+      document.getElementById('p-fable-1m').checked = false;
+      update1mWarnings();
+      document.getElementById('btn-delete').style.display = 'none';
+      document.getElementById('active-tag').innerText = '';
+      document.getElementById('model-browser').style.display = 'none';
+      document.getElementById('test-result').style.display = 'none';
+      loadedModels = [];
+      switchTab('tab-general');
+    }
+
+    function applyTemplate(type) {
+      if (type === '9router') {
+        document.getElementById('p-key').value = '9router';
+        document.getElementById('p-name').value = '9Router Cloud';
+        document.getElementById('p-mode').value = 'convert';
+        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-outformat').value = 'openai-chat';
+        document.getElementById('p-url').value = 'https://api.9router.com/v1';
+        document.getElementById('p-opus').value = 'ag/claude-opus-4-6-thinking';
+        document.getElementById('p-sonnet').value = 'ag/claude-sonnet-4-6';
+        document.getElementById('p-haiku').value = 'ag/gemini-3.7-flash-high';
+        document.getElementById('p-fable').value = 'ag/gemini-3.8-flash-high';
+        document.getElementById('p-opus-1m').checked = true;
+        document.getElementById('p-sonnet-1m').checked = true;
+        document.getElementById('p-haiku-1m').checked = false;
+        document.getElementById('p-fable-1m').checked = true;
+      } else if (type === 'openrouter') {
+        document.getElementById('p-key').value = 'openrouter';
+        document.getElementById('p-name').value = 'OpenRouter';
+        document.getElementById('p-mode').value = 'convert';
+        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-outformat').value = 'openai-chat';
+        document.getElementById('p-url').value = 'https://openrouter.ai/api/v1';
+        document.getElementById('p-opus').value = 'anthropic/claude-3.7-sonnet:thinking';
+        document.getElementById('p-sonnet').value = 'anthropic/claude-3.7-sonnet';
+        document.getElementById('p-haiku').value = 'google/gemini-2.0-flash-001';
+        document.getElementById('p-fable').value = 'qwen/qwq-32b';
+        document.getElementById('p-opus-1m').checked = true;
+        document.getElementById('p-sonnet-1m').checked = true;
+        document.getElementById('p-haiku-1m').checked = false;
+        document.getElementById('p-fable-1m').checked = false;
+      } else if (type === 'momo') {
+        document.getElementById('p-key').value = 'selfhost';
+        document.getElementById('p-name').value = 'Selfhost Hybrid';
+        document.getElementById('p-mode').value = 'hybrid';
+        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-outformat').value = '';
+        document.getElementById('p-url').value = 'https://llm.example.com/v1';
+        document.getElementById('p-opus').value = 'claude-opus-4-7';
+        document.getElementById('p-sonnet').value = 'claude-sonnet-4-6';
+        document.getElementById('p-haiku').value = 'claude-haiku-4-5-20251001';
+        document.getElementById('p-fable').value = 'claude-haiku-4-5-20251001';
+        document.getElementById('p-opus-1m').checked = true;
+        document.getElementById('p-sonnet-1m').checked = true;
+        document.getElementById('p-haiku-1m').checked = false;
+        document.getElementById('p-fable-1m').checked = false;
+      } else if (type === 'custom') {
+        document.getElementById('p-key').value = 'local-openai';
+        document.getElementById('p-name').value = 'Local OpenAI Server';
+        document.getElementById('p-mode').value = 'convert';
+        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-outformat').value = 'openai-chat';
+        document.getElementById('p-url').value = 'http://127.0.0.1:8000/v1';
+        document.getElementById('p-opus').value = 'gpt-4o';
+        document.getElementById('p-sonnet').value = 'gpt-4o-mini';
+        document.getElementById('p-haiku').value = 'gpt-3.5-turbo';
+        document.getElementById('p-fable').value = 'gpt-4o-mini';
+        document.getElementById('p-opus-1m').checked = false;
+        document.getElementById('p-sonnet-1m').checked = false;
+        document.getElementById('p-haiku-1m').checked = false;
+        document.getElementById('p-fable-1m').checked = false;
+      }
+      update1mWarnings();
+      showToast(`Applied ${type} template!`);
+    }
+
+    async function fetchModelList() {
+      const baseURL = document.getElementById('p-url').value.trim();
+      const apiKey = document.getElementById('p-key-val').value.trim();
+      if (!baseURL) {
+        showToast('Please enter Base URL first', true);
+        switchTab('tab-general');
+        return;
+      }
+
+      const btn = document.getElementById('btn-fetch-models');
+      btn.innerText = 'Loading...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/fetch-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseURL, apiKey })
+        });
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.models)) {
+          loadedModels = data.models;
+          populateModelOptions(loadedModels);
+          renderModelBrowser(loadedModels);
+          showToast(`Loaded ${loadedModels.length} models from upstream!`);
+        } else {
+          showToast(`Failed to load models: ${data.error || 'Unknown error'}`, true);
+        }
+      } catch (err) {
+        showToast(`Fetch error: ${err.message}`, true);
+      } finally {
+        btn.innerText = '🔄 Fetch Upstream Models';
+        btn.disabled = false;
+      }
+    }
+
+    function populateModelOptions(models) {
+      const datalist = document.getElementById('model-options');
+      datalist.innerHTML = '';
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        datalist.appendChild(opt);
+      }
+    }
+
+    function renderModelBrowser(models) {
+      const container = document.getElementById('model-browser');
+      const items = document.getElementById('model-items');
+      const countLabel = document.getElementById('model-count-label');
+      
+      container.style.display = 'block';
+      countLabel.innerText = `Available Models (${models.length})`;
+      items.innerHTML = '';
+
+      if (models.length === 0) {
+        items.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 6px;">No matching models found.</div>';
+        return;
+      }
+
+      for (const m of models) {
+        const row = document.createElement('div');
+        row.className = 'model-row';
+
+        const idSpan = document.createElement('span');
+        idSpan.className = 'model-id';
+        idSpan.textContent = m;
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'model-btn-group';
+
+        ['opus', 'sonnet', 'haiku', 'fable'].forEach(tier => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-outline btn-sm';
+          btn.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+          btn.onclick = () => selectModel(tier, m);
+          btnGroup.appendChild(btn);
+        });
+
+        row.appendChild(idSpan);
+        row.appendChild(btnGroup);
+        items.appendChild(row);
+      }
+    }
+
+    function filterModels() {
+      const q = (document.getElementById('model-filter').value || '').toLowerCase().trim();
+      const filtered = loadedModels.filter(m => m.toLowerCase().includes(q));
+      renderModelBrowser(filtered);
+    }
+
+    function selectModel(tier, modelId) {
+      const targetInput = document.getElementById('p-' + tier);
+      if (targetInput) targetInput.value = modelId;
+      const is1M = /1m|gemini-3|glm-5|kimi|nemotron-3-ultra/i.test(modelId);
+      if (is1M) {
+        document.getElementById('p-' + tier + '-1m').checked = true;
+      }
+      update1mWarnings();
+      showToast(`Assigned "${modelId}" to ${tier.toUpperCase()}`);
+    }
+
+    async function toggleProxy() {
+      const nextState = !state.isUsingProxy;
+      showToast(nextState ? 'Activating gateway...' : 'Restoring official subscription...');
+      try {
+        const res = await fetch('/api/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: nextState })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(nextState ? 'Gateway Activated!' : 'Restored to Official Subscription!');
+          loadStatus();
+        }
+      } catch (err) {
+        showToast('Failed to toggle gateway state', true);
+      }
+    }
+
+    async function saveProfile(e) {
+      e.preventDefault();
+      const key = document.getElementById('p-key').value.trim();
+      const outFormat = document.getElementById('p-outformat').value;
+      const profile = {
+        name: document.getElementById('p-name').value.trim(),
+        mode: document.getElementById('p-mode').value,
+        inFormat: document.getElementById('p-informat').value || 'auto',
+        optimizerURL: document.getElementById('p-optimizer-url').value.trim(),
+        baseURL: document.getElementById('p-url').value.trim(),
+        apiKey: document.getElementById('p-key-val').value.trim(),
+        defaultModels: {
+          opus: document.getElementById('p-opus').value.trim(),
+          sonnet: document.getElementById('p-sonnet').value.trim(),
+          haiku: document.getElementById('p-haiku').value.trim(),
+          fable: document.getElementById('p-fable').value.trim()
+        },
+        model1M: {
+          opus: document.getElementById('p-opus-1m').checked,
+          sonnet: document.getElementById('p-sonnet-1m').checked,
+          haiku: document.getElementById('p-haiku-1m').checked,
+          fable: document.getElementById('p-fable-1m').checked
+        }
+      };
+      if (outFormat) profile.outFormat = outFormat;
+
+      try {
+        const res = await fetch('/api/save-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, profile })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Provider profile saved!');
+          currentlyEditingKey = key;
+          loadStatus();
+        } else {
+          showToast(data.error || 'Failed to save', true);
+        }
+      } catch (err) {
+        showToast('Error saving provider', true);
+      }
+    }
+
+    async function deleteProfile() {
+      const key = document.getElementById('p-key').value;
+      if (!confirm(`Are you sure you want to delete provider "${key}"?`)) return;
+
+      try {
+        const res = await fetch('/api/delete-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Provider deleted.');
+          currentlyEditingKey = '';
+          loadStatus();
+        } else {
+          showToast(data.error || 'Failed to delete', true);
+        }
+      } catch (err) {
+        showToast('Error deleting provider', true);
+      }
+    }
+
+    // Modern Non-blocking Connection Tester (Replaces alert)
+    async function testConnection() {
+      const btn = document.getElementById('btn-test-conn');
+      const box = document.getElementById('test-result');
+      const statusBadge = document.getElementById('test-status-badge');
+      const latencyBadge = document.getElementById('test-latency');
+      const sampleBox = document.getElementById('test-sample');
+
+      btn.innerText = 'Testing...';
+      btn.disabled = true;
+      box.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/test-upstream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseURL: document.getElementById('p-url').value.trim(),
+            apiKey: document.getElementById('p-key-val').value.trim(),
+            mode: document.getElementById('p-mode').value,
+            model: document.getElementById('p-sonnet').value.trim() || 'default'
+          })
+        });
+        const data = await res.json();
+        box.style.display = 'block';
+
+        if (data.ok) {
+          box.className = 'test-result-box success';
+          statusBadge.textContent = '✓ HTTP 200 OK';
+          latencyBadge.textContent = `Latency: ${data.latency}ms`;
+          sampleBox.textContent = `Sample Output: ${data.sample}`;
+          showToast(`Connection successful (${data.latency}ms)`);
+        } else {
+          box.className = 'test-result-box error';
+          statusBadge.textContent = `✗ Failed (${data.status || 'Error'})`;
+          latencyBadge.textContent = '';
+          sampleBox.textContent = `Error details: ${data.error || 'Connection failed'}`;
+          showToast('Upstream test failed', true);
+        }
+      } catch (err) {
+        box.style.display = 'block';
+        box.className = 'test-result-box error';
+        statusBadge.textContent = '✗ Network Error';
+        latencyBadge.textContent = '';
+        sampleBox.textContent = err.message;
+        showToast('Network error testing upstream', true);
+      } finally {
+        btn.innerText = '⚡ Test Connection';
+        btn.disabled = false;
+      }
+    }
+
+    let logRefreshInterval = null;
+
+    function toggleLogAutoRefresh(enabled) {
+      if (logRefreshInterval) {
+        clearInterval(logRefreshInterval);
+        logRefreshInterval = null;
+      }
+      if (enabled) {
+        logRefreshInterval = setInterval(() => {
+          const tab = document.getElementById('tab-inspector');
+          if (tab && tab.classList.contains('active')) {
+            loadInspectorLogs();
+          }
+        }, 2500);
+      }
+    }
+
+    async function loadInspectorLogs() {
+      try {
+        const res = await fetch('/api/logs');
+        const data = await res.json();
+        const container = document.getElementById('inspector-logs-container');
+        if (!container) return;
+
+        if (!data.logs || data.logs.length === 0) {
+          container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 24px; background: rgba(0,0,0,0.2); border-radius: 8px;">No requests recorded yet. Make a request via Claude Code, Codex, or curl.</div>';
+          return;
+        }
+
+        container.innerHTML = '';
+        for (const l of data.logs) {
+          const row = document.createElement('div');
+          row.className = 'log-item';
+          const isErr = l.status >= 400;
+          const statusClass = isErr ? 'badge-convert' : 'badge-direct';
+
+          let details = '';
+          if (l.requestPreview) {
+            details += `<div><strong style="color: var(--primary);">Prompt:</strong> ${escapeHtml(l.requestPreview)}</div>`;
+          }
+          if (l.thinkingChars > 0) {
+            details += `<div><strong style="color: #fbbf24;">Thinking:</strong> ${l.thinkingChars} chars extracted</div>`;
+          }
+          if (l.responsePreview) {
+            details += `<div><strong style="color: #34d399;">Output:</strong> ${escapeHtml(l.responsePreview)}</div>`;
+          }
+          if (l.error) {
+            details += `<div><strong style="color: #f87171;">Error:</strong> ${escapeHtml(l.error)}</div>`;
+          }
+
+          row.innerHTML = `
+            <div class="log-header">
+              <div class="log-badges">
+                <span class="badge ${statusClass}">${l.status}</span>
+                <span style="font-family: monospace; font-size: 11px; color: #fff;">${escapeHtml(l.clientFormat)} ➔ ${escapeHtml(l.outFormat)}</span>
+                <span style="font-size: 11px; color: var(--text-muted);">[${escapeHtml(l.model)}]</span>
+                <span style="font-size: 10px; color: var(--text-dim);">${escapeHtml(l.timestamp)}</span>
+              </div>
+              <div style="display: flex; gap: 8px; font-size: 11px; color: var(--text-muted);">
+                <span>⏱ ${l.duration}ms</span>
+                <span>▲ ${l.tokens?.prompt || 0} tks</span>
+                <span>▼ ${l.tokens?.completion || 0} tks</span>
+              </div>
+            </div>
+            ${details ? `<div class="log-body">${details}</div>` : ''}
+          `;
+          container.appendChild(row);
+        }
+      } catch (err) {
+        console.error('Failed to load logs', err);
+      }
+    }
+
+    async function clearInspectorLogs() {
+      try {
+        await fetch('/api/logs/clear', { method: 'POST' });
+        loadInspectorLogs();
+        showToast('Logs cleared');
+      } catch (err) {
+        showToast('Failed to clear logs', true);
+      }
+    }
+
+    toggleLogAutoRefresh(true);
+    loadStatus();
+  </script>
+</body>
+</html>

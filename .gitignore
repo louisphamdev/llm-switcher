@@ -1,0 +1,12 @@
+# Local secrets & runtime state — NEVER commit
+config.json
+*.flag
+proxy.pid
+*.pid
+*.bak
+*.bak-*
+env.cmd
+env.sh
+node_modules/
+.DS_Store
+Thumbs.db

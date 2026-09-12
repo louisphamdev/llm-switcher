@@ -1,0 +1,73 @@
+{
+  "port": 3456,
+  "activeProfile": "9router",
+  "activeProfiles": {
+    "anthropic": "9router",
+    "responses": "example-codex-vertex",
+    "openai-chat": "9router",
+    "vertex": "example-codex-vertex"
+  },
+  "profiles": {
+    "9router": {
+      "name": "9Router",
+      "mode": "convert",
+      "inFormat": "auto",
+      "outFormat": "openai-chat",
+      "baseURL": "https://YOUR-9ROUTER-HOST/v1",
+      "apiKey": "sk-REPLACE-ME",
+      "defaultModels": {
+        "opus": "ag/claude-opus-4-6-thinking",
+        "sonnet": "ag/claude-sonnet-4-6",
+        "haiku": "ag/gemini-3.7-flash-high",
+        "fable": "ag/gemini-3.8-flash-high"
+      },
+      "model1M": {
+        "opus": true,
+        "sonnet": true,
+        "haiku": false,
+        "fable": true
+      }
+    },
+    "example-direct": {
+      "name": "Example Native Anthropic (Direct Forward)",
+      "mode": "direct",
+      "inFormat": "auto",
+      "outFormat": "anthropic",
+      "baseURL": "https://api.anthropic.com/v1",
+      "apiKey": "sk-ant-REPLACE-ME",
+      "defaultModels": {
+        "opus": "claude-opus-4-7",
+        "sonnet": "claude-sonnet-4-6",
+        "haiku": "claude-haiku-4-5-20251001",
+        "fable": "claude-haiku-4-5-20251001"
+      },
+      "model1M": {
+        "opus": false,
+        "sonnet": false,
+        "haiku": false,
+        "fable": false
+      }
+    },
+    "example-codex-vertex": {
+      "name": "Example Codex client -> Vertex upstream",
+      "mode": "convert",
+      "inFormat": "responses",
+      "outFormat": "vertex",
+      "baseURL": "https://YOUR-VERTEX-GATEWAY/v1",
+      "apiKey": "REPLACE-ME",
+      "defaultModels": {
+        "opus": "gemini-3.8-flash-high",
+        "sonnet": "gemini-3.7-flash-high",
+        "haiku": "gemini-3.7-flash-low",
+        "fable": "gemini-3.7-flash-low"
+      },
+      "model1M": {
+        "opus": false,
+        "sonnet": false,
+        "haiku": false,
+        "fable": false
+      }
+    }
+  },
+  "debug": false
+}

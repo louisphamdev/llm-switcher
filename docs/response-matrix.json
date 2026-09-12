@@ -1,0 +1,1131 @@
+{
+  "generated": "2026-09-12",
+  "gateway": "9router (OpenAI-compatible /v1/chat/completions)",
+  "method": "live sampling, hard reasoning prompt except tool/trunc variants",
+  "variants": [
+    "base-stream",
+    "think-stream",
+    "think-nostream",
+    "tool-stream",
+    "trunc-stream",
+    "effort-stream"
+  ],
+  "backends": {
+    "claude-budget": {
+      "model": "ag/claude-opus-4-6-thinking",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 172,
+          "textChars": 846,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 172,
+          "textChars": 893,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1760,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 61,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 172,
+          "textChars": 853,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 233,
+          "textChars": 1200,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        }
+      }
+    },
+    "claude-adaptive": {
+      "model": "ag/claude-sonnet-4-6",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 996,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1077,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 2242,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "role",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 140,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 1
+          },
+          "deltaKeys": [
+            "role",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1103,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        }
+      }
+    },
+    "gemini": {
+      "model": "ag/gemini-3.8-flash-high",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 307,
+          "textChars": 1371,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 272,
+          "textChars": 1264,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 2876,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "role",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 771,
+          "textChars": 1409,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 823,
+          "textChars": 1498,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        }
+      }
+    },
+    "openai": {
+      "model": "ag/gpt-oss-120b-medium",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 244,
+          "textChars": 858,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 73,
+          "textChars": 943,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1666,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 115,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "tool_calls"
+          ],
+          "usageKeySets": [],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 151,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content"
+          ],
+          "usageKeySets": [],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 503,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {},
+          "deltaKeys": [],
+          "usageKeySets": [],
+          "idPrefix": null
+        }
+      }
+    },
+    "qwen": {
+      "model": "cf/@cf/qwen/qwq-32b",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1945,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 4
+          },
+          "deltaKeys": [
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 2019,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 4
+          },
+          "deltaKeys": [
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 4406,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 857,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 4
+          },
+          "deltaKeys": [
+            "content",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 124,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 3
+          },
+          "deltaKeys": [
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1891,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 3
+          },
+          "deltaKeys": [
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        }
+      }
+    },
+    "zai": {
+      "model": "cf/@cf/zai-org/glm-4.7-flash",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 3800,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 2
+          },
+          "deltaKeys": [
+            "role",
+            "content",
+            "reasoning_content",
+            "reasoning"
+          ],
+          "usageKeySets": [
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 1538,
+          "textChars": 521,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 2
+          },
+          "deltaKeys": [
+            "role",
+            "content",
+            "reasoning_content",
+            "reasoning"
+          ],
+          "usageKeySets": [
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 8416,
+          "textChars": 0,
+          "contentNull": true,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 460,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 2
+          },
+          "deltaKeys": [
+            "role",
+            "content",
+            "reasoning_content",
+            "reasoning",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 342,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 2
+          },
+          "deltaKeys": [
+            "role",
+            "content",
+            "reasoning_content",
+            "reasoning"
+          ],
+          "usageKeySets": [
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 3792,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 2
+          },
+          "deltaKeys": [
+            "role",
+            "content",
+            "reasoning_content",
+            "reasoning"
+          ],
+          "usageKeySets": [
+            "completion_tokens,neurons,prompt_tokens,prompt_tokens_details,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,total_tokens",
+            "completion_tokens,estimated,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "id"
+        }
+      }
+    },
+    "nvidia": {
+      "model": "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 232,
+          "textChars": 993,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,estimated,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 91,
+          "textChars": 652,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,estimated,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1852,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 99,
+          "textChars": 0,
+          "contentNull": false,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,estimated,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 101,
+          "textChars": 101,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,estimated,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": "reasoning_content",
+          "reasoningChars": 206,
+          "textChars": 1040,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "role",
+            "reasoning_content",
+            "content"
+          ],
+          "usageKeySets": [
+            "completion_tokens,estimated,prompt_tokens,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        }
+      }
+    },
+    "plain": {
+      "model": "gh/gpt-4o-mini",
+      "thinkingFormat": null,
+      "variants": {
+        "base-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1182,
+          "contentNull": true,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "content",
+            "role"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 1013,
+          "contentNull": true,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "content",
+            "role"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "think-nostream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 2006,
+          "contentNull": false,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "tool-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 0,
+          "contentNull": true,
+          "toolCalls": true,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "tool_calls": 1
+          },
+          "deltaKeys": [
+            "content",
+            "role",
+            "tool_calls"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "trunc-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 177,
+          "contentNull": true,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "length": 1
+          },
+          "deltaKeys": [
+            "content",
+            "role"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        },
+        "effort-stream": {
+          "status": 200,
+          "reasoningField": null,
+          "reasoningChars": 0,
+          "textChars": 960,
+          "contentNull": true,
+          "toolCalls": false,
+          "functionCall": false,
+          "thinkTagInContent": false,
+          "vertexParts": false,
+          "finishReasons": {
+            "stop": 1
+          },
+          "deltaKeys": [
+            "content",
+            "role"
+          ],
+          "usageKeySets": [
+            "completion_tokens,completion_tokens_details,prompt_tokens,prompt_tokens_details,total_tokens"
+          ],
+          "idPrefix": "chatcmpl"
+        }
+      }
+    }
+  }
+}
