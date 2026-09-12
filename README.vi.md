@@ -20,6 +20,33 @@
 
 ---
 
+> ### 🎯 Vấn đề Cốt lõi: Vì sao Proxy Chung Chung Làm "Tê Liệt" Công cụ Coding AI?
+>
+> Mỗi nhà cung cấp LLM hiện nay sử dụng một **chuẩn API response hoàn toàn khác nhau**:
+> - **Anthropic** bắt buộc phải có các block `thinking` riêng biệt (`thinking_delta` + `signature_delta`), luật xen kẽ lượt nghiêm ngặt (`roles must alternate`), và schema `tool_use` có định kiểu.
+> - **OpenAI** stream reasoning qua các chunk delta `reasoning_content` hoặc `reasoning_details[]`, và định dạng tool thành `tool_calls` chứa chuỗi JSON arguments.
+> - **Google Vertex AI** đặt khối suy luận vào `candidates[0].content.parts[{thought: true, text, thoughtSignature}]` và truyền arguments dạng object thuần.
+> - **Các model mã nguồn mở (DeepSeek, Qwen, GLM)** thường đổ thẳng chain-of-thought vào nội dung `content`, hoặc trả trùng lặp nhiều trường gây rối loạn parser.
+>
+> **Khi các công cụ lập trình cao cấp như Claude Code hoặc Codex nhận về response không chuẩn định dạng gốc, chúng không chỉ hiển thị lỗi — mà hiệu năng và trí thông minh của AI bị suy giảm nghiêm trọng:**
+> 1. **Mất Khối Suy Luận (Lost Chain-of-Thought):** Nếu Claude Code không nhận được block `thinking_delta` chuẩn của Anthropic, nó **hoàn toàn không nhận biết được tiến trình suy luận** của model. Agent sẽ hành động vội vàng, bỏ qua bước lập kế hoạch kiến trúc, và sinh ra code lỗi.
+> 2. **Lỗi Thực Thi Công Cụ (Broken Tool Calling):** Sự sai lệch về stop reason (`tool_calls` vs `tool_use`) hoặc cách cắt chunk arguments làm agent không parse được tham số lệnh, dẫn đến vòng lặp lỗi vô tận.
+> 3. **Lệch Token & Hỏng Prompt Cache:** Tính toán sai cấu trúc token usage làm vỡ cơ chế KV-cache của provider và kích hoạt nén ngữ cảnh (compaction) quá sớm.
+>
+> Nhiều lập trình viên lầm tưởng model AI "ngày càng ngáo đi", nhưng thực chất là **do proxy trung gian đã làm biến dạng cấu trúc response!**
+>
+> ### 🛡️ Giải pháp: Giả Lập Chuẩn Gốc Không Hao Hụt (Zero-Loss Native Emulation)
+>
+> **LLM Switcher giải quyết triệt để bài toán này bằng cơ chế giả lập giao thức chuẩn xác 100%.**
+>
+> Dù upstream phía sau của bạn là 9Router, OpenRouter, Vertex hay DeepSeek, Switcher sẽ chuẩn hoá và tái tạo lại **chính xác từng byte event stream theo đúng chuẩn mà client đó được thiết kế để tiếp nhận**:
+> - **Claude Code** nhận về 100% luồng Anthropic SSE xịn (`message_start` ➔ `thinking_delta` ➔ `signature_delta` ➔ `tool_use` ➔ `message_delta`), hoạt động **mượt mà y hệt như đang dùng gói thuê bao chính chủ đắt đỏ**.
+> - **Codex** nhận về 100% luồng Responses API xịn (`response.created` ➔ `output_text.delta` ➔ `function_call` ➔ `response.completed`).
+>
+> **Bạn vừa được hưởng lợi ích chi phí và độ phủ 1M context của các API bên thứ ba, vừa giữ trọn 100% trí thông minh và sức mạnh của công cụ như dùng gói subscription gốc.**
+
+---
+
 > ### 💡 Triết lý Thiết kế: Phần Mở Rộng Ở Biên Tối Ưu Cho 9Router
 >
 > **LLM Switcher CỐ TÌNH KHÔNG làm các tính năng xoay vòng API key (key rotation), quản lý account pool, theo dõi quota, hay chia tải (load balancing) giữa nhiều key của cùng một nhà cung cấp.**

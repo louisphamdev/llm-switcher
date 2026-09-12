@@ -20,6 +20,33 @@
 
 ---
 
+> ### 🎯 The Core Problem: Why Generic Proxies Cripple Your AI Coding Tools
+>
+> Every LLM provider uses a **subtly or drastically different API response standard**:
+> - **Anthropic** requires dedicated `thinking` blocks (`thinking_delta` + `signature_delta`), strict alternating turn rules, and typed `tool_use` input schemas.
+> - **OpenAI** streams reasoning as `reasoning_content` delta chunks or `reasoning_details[]`, and formats tools as `tool_calls` with JSON string arguments.
+> - **Google Vertex AI** places reasoning in `candidates[0].content.parts[{thought: true, text, thoughtSignature}]` and tool arguments as raw objects.
+> - **Open-source models (DeepSeek, Qwen, GLM)** often dump chain-of-thought directly into `content` or duplicate fields under conflicting keys.
+>
+> **When coding tools like Claude Code or Codex receive non-native or partially converted responses, they don't just look wrong — the agent's performance degrades catastrophically:**
+> 1. **Lost Chain-of-Thought:** If Claude Code does not receive native `thinking_delta` blocks, it **completely misses the model's internal reasoning**. The agent acts prematurely, skips architectural planning, and produces buggy code.
+> 2. **Broken Tool Execution:** Mismatched stop reasons (`tool_calls` vs `tool_use`) and split argument chunks cause tool execution failures and infinite retries.
+> 3. **Token & Cache Miscounting:** Non-standard usage accounting breaks prompt cache alignment and premature context compaction.
+>
+> Developers often blame the model for "getting dumber" when in reality **their proxy mangled the response protocol.**
+>
+> ### 🛡️ The Solution: Zero-Loss Native Emulation (Subscription-Grade Quality)
+>
+> **LLM Switcher solves this by acting as a high-precision, zero-loss protocol emulator.**
+>
+> It normalizes whatever your upstream provider emits (9Router, OpenRouter, Vertex, DeepSeek) and re-synthesizes it into the **exact native event stream the client agent was built to consume**:
+> - **Claude Code** receives 100% genuine Anthropic SSE events (`message_start` ➔ `thinking_delta` ➔ `signature_delta` ➔ `content_block_start: tool_use` ➔ `message_delta`), performing **identically to an official Anthropic subscription**.
+> - **Codex** receives 100% genuine Responses API events (`response.created` ➔ `output_text.delta` ➔ `function_call` ➔ `response.completed`).
+>
+> **You get the freedom and cost savings of 3rd-party APIs while maintaining 100% official subscription-grade agent intelligence.**
+
+---
+
 > ### 💡 Design Philosophy: The Client-Side Edge Companion to 9Router
 >
 > **LLM Switcher intentionally does NOT implement multi-account pooling, key rotation, quota tracking, or provider load balancing.**
