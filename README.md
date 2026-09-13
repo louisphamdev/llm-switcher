@@ -185,7 +185,7 @@ flowchart LR
   - Automatically restores thinking parameters if an intermediary tool stripped them.
   - Merges consecutive same-role turns to enforce strict alternating turn requirements.
 - **1M Context Window Unlocker:** Automatically sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` and calculates auto-compact thresholds (`900000`), with built-in visual risk warnings for unsupported models.
-- **Zero Config Mutation:** Never modifies `~/.claude/settings.json` permanently. Uses launcher flags and environment injection to prevent annoying provider warning banners.
+- **Zero Config Mutation:** Never writes endpoints or keys into `~/.claude/settings.json` (it only removes stale proxy variables, and only when present). Uses launcher flags and environment injection to prevent annoying provider warning banners.
 - **Live Request / Response Inspector:** Built-in dashboard tab displaying real-time requests, latency, token consumption, prompt previews, and thinking blocks.
 - **Native Background Service:** Install and run as an OS background daemon on Windows (Task Scheduler), macOS (launchd), or Linux (systemd).
 
@@ -200,7 +200,7 @@ flowchart LR
 ### 2. Setup Configuration
 Clone this repository and create your local configuration:
 ```bash
-git clone https://github.com/your-username/llm-switcher.git
+git clone https://github.com/louisphamdev/llm-switcher.git
 cd llm-switcher
 
 # Copy example config (config.json is git-ignored for safety)
@@ -249,6 +249,7 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
 
 2. Patch your global Claude Code launcher (`claude.cmd` in your npm global directory):
    ```cmd
+   SETLOCAL EnableDelayedExpansion
    IF EXIST "path\to\llm-switcher\active.flag" (
      SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
      SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
@@ -261,6 +262,7 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
+   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "path\to\llm-switcher\env.cmd"` and then `claude %*`.
 
 ---
 
@@ -268,6 +270,7 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
 
 In your Codex launcher wrapper (`codex.cmd`):
 ```cmd
+SETLOCAL EnableDelayedExpansion
 IF EXIST "path\to\llm-switcher\active.flag" (
   SET "CODEX_BASE_URL=http://127.0.0.1:3456/v1"
   SET "OPENAI_BASE_URL=http://127.0.0.1:3456/v1"
@@ -303,10 +306,13 @@ If you use prompt-trimming tools like **Headroom**, **Ponytail**, or **RTK (Rust
 | **Orphaned `tool` role in Chat API** | ❌ **HTTP 400 Crash**: `tool role must respond to tool_calls` | ✅ **HTTP 200 OK**: Converts orphaned tool into user context |
 | **Custom optimizer headers** (`x-rtk-*`, `traceparent`) | ⚠️ Connection dropped / unrecognized header warnings | ✅ **HTTP 200 OK**: Clean transparent header passthrough |
 
-Run the automated verification suite:
+Run the automated verification suites:
 ```bash
-node tests/test-optimizer-interop.mjs
-# Result: 5 PASSED / 0 FAILED (100% healed)
+# Offline (mock upstream, no API key needed): protocol conversion, healer, streaming, security
+npm test
+
+# Live (requires a running gateway and a real upstream; consumes tokens)
+node tests/live-optimizer-interop.mjs
 ```
 
 See the full research report in [📖 `docs/TOKEN-OPTIMIZER-INTEROP.md`](docs/TOKEN-OPTIMIZER-INTEROP.md).
@@ -358,11 +364,13 @@ Add to your MCP configuration (e.g. `opencode.jsonc`, `claude_desktop_config.jso
 switch ui                      # Open the Web UI dashboard in your browser
 switch status                  # Display status for all active CLI targets
 switch doctor                  # Audit environment, settings & routing
+switch on [profile]            # Start the gateway and activate a profile for all compatible targets
 switch <profile>               # Activate profile for all compatible targets
 switch claude <profile>        # Set active profile specifically for Claude Code
 switch codex <profile>         # Set active profile specifically for Codex
 switch openai <profile>        # Set active profile specifically for OpenAI Chat
 switch vertex <profile>        # Set active profile specifically for Vertex / Gemini
+switch port <number>           # Change the gateway port (restarts it if running)
 switch service install         # Install OS background autostart service (Windows / macOS / Linux)
 switch service uninstall       # Remove background autostart service
 switch off [target]            # Deactivate gateway (or specific target) and restore official
@@ -388,6 +396,7 @@ switch off [target]            # Deactivate gateway (or specific target) and res
       "mode": "convert",             // hybrid | convert | direct
       "inFormat": "auto",            // auto | anthropic | openai-chat | responses | vertex
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
+      "thinkingMode": "auto",        // auto | native | off (see Advanced Options)
       "baseURL": "https://api.9router.com/v1",
       "apiKey": "sk-...",
       "defaultModels": {
@@ -409,6 +418,33 @@ switch off [target]            # Deactivate gateway (or specific target) and res
 ```
 
 ---
+
+## Advanced Options
+
+| Option | Description |
+|---|---|
+| `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the repo (the proxy, `switch` and `mcp.mjs` all honour it). |
+| `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port (priority: flag > env > `config.port`). |
+| `x-llm-profile: <key>` header or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
+| `profile.thinkingMode` | `auto` (default, for gateways like 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
+| `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
+| `profile.endpoints` | Override upstream URLs per format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
+| `CLAUDE_CONFIG_DIR` | Respected when locating Claude Code's `settings.json`. |
+
+## Security Model
+
+- The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
+- API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one.
+- Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams; only tracing headers (`x-*`, `traceparent`) are passed through.
+- `config.json` is written atomically; `~/.claude/settings.json` is only rewritten when it actually contains stale proxy variables.
+
+## Compatibility Notes
+
+- **Direct Anthropic passthrough:** valid requests are forwarded byte-for-byte (thinking signatures, `cache_control`, documents stay intact). Malformed ones are repaired in place by a native Anthropic healer: orphaned `tool_result` → text, missing `tool_result` → placeholder, results moved to the start of the user turn.
+- **Thinking signatures:** thinking blocks produced by conversion carry a gateway signature (`reasoning-sig`, or a foreign signature prefixed with `lsw1.`). They are stripped before a request reaches Anthropic. If that leaves an in-progress tool loop without the thinking block Anthropic requires, thinking is disabled for that single request instead of failing.
+- **Codex tools:** `custom`/freeform tools (e.g. `apply_patch` with its Lark grammar), `namespace` tools and `local_shell` are exposed to upstreams as function tools and converted back to `custom_tool_call` / namespaced `function_call` / `local_shell_call` items. Hosted tools (`web_search`, `file_search`, `tool_search`, image generation) execute on OpenAI's servers, so other upstreams cannot provide them and they are omitted.
+- **Gemini 3 thought signatures:** signatures returned with function calls are cached in memory by tool call id (last 5,000 calls) and replayed on the matching `functionCall` part, including through Gemini's OpenAI-compatible `extra_content`. After a gateway restart, unknown calls in the current turn get Google's documented `skip_thought_signature_validator` value, which Google notes may reduce quality.
+- **`/v1/messages/count_tokens`:** exact when the active Claude Code profile uses a native Anthropic upstream; otherwise an estimate (other providers have no equivalent endpoint).
 
 ## Research & Protocol Matrices
 

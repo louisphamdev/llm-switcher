@@ -1,7 +1,6 @@
-import http from 'node:http';
-import fs from 'node:fs';
-
-const GATEWAY_PORT = 3456;
+// LIVE test: cần gateway đang chạy (switch on) và upstream thật (tốn token).
+// Test offline không cần mạng: npm test
+const GATEWAY_PORT = Number(process.env.LLM_SWITCHER_PORT) || 3456;
 const BASE_URL = `http://127.0.0.1:${GATEWAY_PORT}`;
 
 console.log('================================================================');

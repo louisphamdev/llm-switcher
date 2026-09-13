@@ -76,7 +76,8 @@
     .badge-hybrid { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
     .badge-direct { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-convert { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-route { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); font-family: monospace; }
+    .badge-outline { background: transparent; color: var(--text-muted); border: 1px solid var(--card-border); }
+    .badge-route {background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); font-family: monospace; }
     .badge-1m { background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
     .badge-1m-warn { background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-left: 4px; white-space: nowrap; cursor: help; }
     .warning-callout { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fbbf24; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 14px; line-height: 1.5; display: flex; gap: 8px; align-items: flex-start; }
@@ -315,7 +316,7 @@
           <div class="form-grid">
             <div class="form-group">
               <label>Provider Key (Unique ID)</label>
-              <input type="text" id="p-key" required placeholder="e.g. 9router, openrouter, my-llm">
+              <input type="text" id="p-key" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" title="Letters, digits, '.', '_' or '-' (max 64 chars)" placeholder="e.g. 9router, openrouter, my-llm">
             </div>
             <div class="form-group">
               <label>Display Name</label>
@@ -355,6 +356,14 @@
               </select>
             </div>
             <div class="form-group full">
+              <label>Thinking Mode (OpenAI Chat upstream)</label>
+              <select id="p-thinking-mode">
+                <option value="auto">AUTO — gateway (9Router): restore thinking, inject &lt;think&gt; guide, send thinking + reasoning_effort</option>
+                <option value="native">NATIVE — strict OpenAI API: only reasoning_effort when client asks, no prompt changes</option>
+                <option value="off">OFF — never send reasoning parameters</option>
+              </select>
+            </div>
+            <div class="form-group full">
               <label>Routing Mode (Legacy)</label>
               <select id="p-mode">
                 <option value="hybrid">HYBRID (Claude models -> Direct Native | Other models -> Convert)</option>
@@ -364,12 +373,11 @@
             </div>
             <div class="form-group full" style="border-top: 1px solid var(--card-border); padding-top: 12px; margin-top: 4px;">
               <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Token Optimizer URL (Tùy chọn - Lớp nén trung gian)</label>
+                <label>Token Optimizers</label>
                 <span style="font-size: 11px; color: var(--primary);">Headroom • Ponytail • RTK</span>
               </div>
-              <input type="url" id="p-optimizer-url" placeholder="e.g. http://127.0.0.1:8787 (để trống nếu gọi thẳng upstream)">
               <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-                💡 <strong>Phân tầng:</strong> Switcher sẽ gửi payload sang tool này để nén, rồi làm cửa ngõ cuối cùng ra internet gọi LLM (tự chữa lành tin nhắn mồ côi, giữ 1M và thinking trace).
+                💡 <strong>Phân tầng:</strong> trỏ CLI vào tool nén, và cấu hình upstream của tool nén về <code>http://127.0.0.1:<span class="gateway-port">3456</span></code>. Switcher là cửa ngõ cuối cùng ra internet (tự chữa lành tin nhắn mồ côi, giữ 1M và thinking trace).
               </span>
             </div>
           </div>
@@ -500,11 +508,16 @@
     let state = {
       config: null,
       activeProfile: '',
-      isUsingProxy: false,
+      activeProfiles: {},
       claudeBaseURL: ''
     };
     let currentlyEditingKey = '';
+    let creatingNew = false;   // đang tạo provider mới -> không để loadStatus() ghi đè form
+    let formLoadedKey = null;  // profile đang hiển thị trong form
+    let formDirty = false;     // có chỉnh sửa chưa lưu -> không reset form khi refresh trạng thái
     let loadedModels = [];
+    const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
+    const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
 
     // Helper: Anti-XSS Sanitizer
     function escapeHtml(str) {
@@ -541,14 +554,24 @@
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
+        if (!res.ok) {
+          showToast(data.error || `Gateway error HTTP ${res.status}`, true);
+          return;
+        }
         state = data;
-        if (!currentlyEditingKey || !state.config.profiles[currentlyEditingKey]) {
-          currentlyEditingKey = state.activeProfile;
+        document.querySelectorAll('.gateway-port').forEach(el => { el.textContent = state.port; });
+        if (!creatingNew && (!currentlyEditingKey || !state.config.profiles[currentlyEditingKey])) {
+          currentlyEditingKey = state.config.profiles[state.activeProfile] ? state.activeProfile : (Object.keys(state.config.profiles)[0] || '');
+          formDirty = false;
         }
         render();
       } catch (err) {
         showToast('Failed to connect to gateway service', true);
       }
+    }
+
+    function isAnyTargetActive() {
+      return Object.values(state.activeProfiles || {}).some(Boolean);
     }
 
     function render() {
@@ -649,10 +672,10 @@
               <span class="badge badge-${escapeHtml(p.mode || 'hybrid')}">${escapeHtml(p.mode || 'hybrid')}</span>
               <span class="badge badge-route" title="Client input -> Upstream output">${escapeHtml(routeBadge)}</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;" onclick="event.stopPropagation()">
+            <div class="card-toggle" style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
               <span style="font-size: 11px; font-weight: 700; color: ${isActiveAny ? 'var(--success)' : 'var(--text-muted)'};">${isActiveAny ? 'ACTIVE' : 'OFF'}</span>
               <label class="switch">
-                <input type="checkbox" ${isActiveAny ? 'checked' : ''} onchange="toggleProfileAllCli('${escapeHtml(key)}', this.checked)">
+                <input type="checkbox" ${isActiveAny ? 'checked' : ''}>
                 <span class="slider"></span>
               </label>
             </div>
@@ -673,14 +696,25 @@
             </div>
           </div>
         `;
+        // Gắn handler bằng JS thay vì inline onchange="...('${key}')": escapeHtml không chống được
+        // JS injection bên trong attribute (trình duyệt decode &#039; lại thành ' trước khi chạy).
+        const toggleWrap = card.querySelector('.card-toggle');
+        toggleWrap.addEventListener('click', ev => ev.stopPropagation());
+        toggleWrap.querySelector('input').addEventListener('change', ev => toggleProfileAllCli(key, ev.target.checked));
         grid.appendChild(card);
       }
 
-      loadProfileToForm(currentlyEditingKey);
+      // Chỉ nạp lại form khi đổi profile hoặc form chưa bị sửa, tránh mất dữ liệu đang nhập mỗi lần refresh.
+      if (!creatingNew && (formLoadedKey !== currentlyEditingKey || !formDirty)) {
+        loadProfileToForm(currentlyEditingKey);
+      }
     }
 
     function selectProfileForEdit(key) {
+      if (formDirty && key !== formLoadedKey && !confirm('Discard unsaved changes to this provider?')) return;
       currentlyEditingKey = key;
+      creatingNew = false;
+      formDirty = false;
       render();
     }
 
@@ -716,7 +750,6 @@
           const data = await res.json();
           if (data.success) {
             showToast(`Provider "${key}" activated!`);
-            currentlyEditingKey = key;
             loadStatus();
           } else {
             showToast(data.error || 'Failed to switch', true);
@@ -729,11 +762,14 @@
       } else {
         showToast(`Deactivating provider "${key}"...`);
         try {
-          await fetch('/api/switch', {
+          // Chỉ tắt các target đang dùng profile này, không tắt toàn bộ gateway.
+          const res = await fetch('/api/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ profile: null })
+            body: JSON.stringify({ deactivate: key })
           });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || 'Failed');
           showToast(`Deactivated "${key}"!`);
           loadStatus();
         } catch (err) {
@@ -762,10 +798,11 @@
       document.getElementById('p-name').value = p.name;
       document.getElementById('p-mode').value = p.mode || 'hybrid';
       document.getElementById('p-informat').value = p.inFormat || 'auto';
+      document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
       document.getElementById('p-outformat').value = p.outFormat || '';
-      document.getElementById('p-optimizer-url').value = p.optimizerURL || '';
       document.getElementById('p-url').value = p.baseURL;
-      document.getElementById('p-key-val').value = p.apiKey;
+      // API key thật không bao giờ được gửi xuống trình duyệt; giá trị che sẽ được server giữ nguyên khi lưu.
+      document.getElementById('p-key-val').value = p.apiKey || '';
       document.getElementById('p-opus').value = p.defaultModels?.opus || '';
       document.getElementById('p-sonnet').value = p.defaultModels?.sonnet || '';
       document.getElementById('p-haiku').value = p.defaultModels?.haiku || '';
@@ -776,15 +813,23 @@
       document.getElementById('p-fable-1m').checked = Boolean(p.model1M?.fable);
       update1mWarnings();
       document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
-      document.getElementById('active-tag').innerText = (key === state.activeProfile && state.isUsingProxy) ? '(Active Gateway)' : '';
+      const usedBy = Object.entries(state.activeProfiles || {}).filter(([, v]) => v === key).map(([t]) => t);
+      document.getElementById('active-tag').innerText = usedBy.length ? `(Active: ${usedBy.join(', ')})` : '';
       
       document.getElementById('model-browser').style.display = 'none';
       document.getElementById('test-result').style.display = 'none';
       loadedModels = [];
+      formLoadedKey = key;
+      formDirty = false;
     }
 
     function initNewProfile() {
+      if (formDirty && !confirm('Discard unsaved changes to this provider?')) return;
       currentlyEditingKey = '';
+      creatingNew = true;
+      formLoadedKey = null;
+      formDirty = false;
+      render();
       document.getElementById('form-title').innerText = 'Create New Provider';
       document.getElementById('p-key').value = '';
       document.getElementById('p-key').disabled = false;
@@ -792,7 +837,7 @@
       document.getElementById('p-mode').value = 'hybrid';
       document.getElementById('p-informat').value = 'auto';
       document.getElementById('p-outformat').value = '';
-      document.getElementById('p-optimizer-url').value = '';
+      document.getElementById('p-thinking-mode').value = 'auto';
       document.getElementById('p-url').value = 'https://';
       document.getElementById('p-key-val').value = '';
       document.getElementById('p-opus').value = '';
@@ -812,14 +857,21 @@
       switchTab('tab-general');
     }
 
+    // Preset chỉ gợi ý key khi tạo mới; đang sửa profile có sẵn thì giữ nguyên key (tránh ghi đè profile khác).
+    function setKeyIfNew(k) {
+      const input = document.getElementById('p-key');
+      if (!input.disabled) input.value = k;
+    }
+
     function applyTemplate(type) {
       if (type === '9router') {
-        document.getElementById('p-key').value = '9router';
+        setKeyIfNew('9router');
         document.getElementById('p-name').value = '9Router Cloud';
         document.getElementById('p-mode').value = 'convert';
         document.getElementById('p-informat').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'https://api.9router.com/v1';
+        document.getElementById('p-thinking-mode').value = 'auto';
         document.getElementById('p-opus').value = 'ag/claude-opus-4-6-thinking';
         document.getElementById('p-sonnet').value = 'ag/claude-sonnet-4-6';
         document.getElementById('p-haiku').value = 'ag/gemini-3.7-flash-high';
@@ -829,7 +881,7 @@
         document.getElementById('p-haiku-1m').checked = false;
         document.getElementById('p-fable-1m').checked = true;
       } else if (type === 'openrouter') {
-        document.getElementById('p-key').value = 'openrouter';
+        setKeyIfNew('openrouter');
         document.getElementById('p-name').value = 'OpenRouter';
         document.getElementById('p-mode').value = 'convert';
         document.getElementById('p-informat').value = 'auto';
@@ -844,7 +896,7 @@
         document.getElementById('p-haiku-1m').checked = false;
         document.getElementById('p-fable-1m').checked = false;
       } else if (type === 'momo') {
-        document.getElementById('p-key').value = 'selfhost';
+        setKeyIfNew('selfhost');
         document.getElementById('p-name').value = 'Selfhost Hybrid';
         document.getElementById('p-mode').value = 'hybrid';
         document.getElementById('p-informat').value = 'auto';
@@ -859,12 +911,13 @@
         document.getElementById('p-haiku-1m').checked = false;
         document.getElementById('p-fable-1m').checked = false;
       } else if (type === 'custom') {
-        document.getElementById('p-key').value = 'local-openai';
+        setKeyIfNew('local-openai');
         document.getElementById('p-name').value = 'Local OpenAI Server';
         document.getElementById('p-mode').value = 'convert';
         document.getElementById('p-informat').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'http://127.0.0.1:8000/v1';
+        document.getElementById('p-thinking-mode').value = 'native';
         document.getElementById('p-opus').value = 'gpt-4o';
         document.getElementById('p-sonnet').value = 'gpt-4o-mini';
         document.getElementById('p-haiku').value = 'gpt-3.5-turbo';
@@ -875,6 +928,7 @@
         document.getElementById('p-fable-1m').checked = false;
       }
       update1mWarnings();
+      formDirty = true;
       showToast(`Applied ${type} template!`);
     }
 
@@ -895,7 +949,7 @@
         const res = await fetch('/api/fetch-models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ baseURL, apiKey })
+          body: JSON.stringify({ baseURL, apiKey, key: formLoadedKey })
         });
         const data = await res.json();
         if (data.ok && Array.isArray(data.models)) {
@@ -978,11 +1032,12 @@
         document.getElementById('p-' + tier + '-1m').checked = true;
       }
       update1mWarnings();
+      formDirty = true;
       showToast(`Assigned "${modelId}" to ${tier.toUpperCase()}`);
     }
 
     async function toggleProxy() {
-      const nextState = !state.isUsingProxy;
+      const nextState = !isAnyTargetActive();
       showToast(nextState ? 'Activating gateway...' : 'Restoring official subscription...');
       try {
         const res = await fetch('/api/toggle', {
@@ -993,8 +1048,10 @@
         const data = await res.json();
         if (data.success) {
           showToast(nextState ? 'Gateway Activated!' : 'Restored to Official Subscription!');
-          loadStatus();
+        } else {
+          showToast(data.error || 'Failed to toggle gateway state', true);
         }
+        loadStatus();
       } catch (err) {
         showToast('Failed to toggle gateway state', true);
       }
@@ -1004,11 +1061,12 @@
       e.preventDefault();
       const key = document.getElementById('p-key').value.trim();
       const outFormat = document.getElementById('p-outformat').value;
+      if (creatingNew && state.config?.profiles?.[key] && !confirm(`Provider "${key}" already exists. Overwrite it?`)) return;
       const profile = {
         name: document.getElementById('p-name').value.trim(),
         mode: document.getElementById('p-mode').value,
         inFormat: document.getElementById('p-informat').value || 'auto',
-        optimizerURL: document.getElementById('p-optimizer-url').value.trim(),
+        thinkingMode: document.getElementById('p-thinking-mode').value || 'auto',
         baseURL: document.getElementById('p-url').value.trim(),
         apiKey: document.getElementById('p-key-val').value.trim(),
         defaultModels: {
@@ -1024,7 +1082,7 @@
           fable: document.getElementById('p-fable-1m').checked
         }
       };
-      if (outFormat) profile.outFormat = outFormat;
+      profile.outFormat = outFormat; // '' = xoá outFormat, dùng Routing Mode
 
       try {
         const res = await fetch('/api/save-profile', {
@@ -1036,6 +1094,9 @@
         if (data.success) {
           showToast('Provider profile saved!');
           currentlyEditingKey = key;
+          creatingNew = false;
+          formDirty = false;
+          formLoadedKey = null;
           loadStatus();
         } else {
           showToast(data.error || 'Failed to save', true);
@@ -1059,6 +1120,8 @@
         if (data.success) {
           showToast('Provider deleted.');
           currentlyEditingKey = '';
+          creatingNew = false;
+          formDirty = false;
           loadStatus();
         } else {
           showToast(data.error || 'Failed to delete', true);
@@ -1088,6 +1151,8 @@
             baseURL: document.getElementById('p-url').value.trim(),
             apiKey: document.getElementById('p-key-val').value.trim(),
             mode: document.getElementById('p-mode').value,
+            outFormat: document.getElementById('p-outformat').value,
+            key: formLoadedKey,
             model: document.getElementById('p-sonnet').value.trim() || 'default'
           })
         });
@@ -1096,7 +1161,7 @@
 
         if (data.ok) {
           box.className = 'test-result-box success';
-          statusBadge.textContent = '✓ HTTP 200 OK';
+          statusBadge.textContent = `✓ HTTP 200 OK (${data.outFormat || 'upstream'})`;
           latencyBadge.textContent = `Latency: ${data.latency}ms`;
           sampleBox.textContent = `Sample Output: ${data.sample}`;
           showToast(`Connection successful (${data.latency}ms)`);
@@ -1202,6 +1267,13 @@
         showToast('Failed to clear logs', true);
       }
     }
+
+    // Theo dõi chỉnh sửa form để không bị refresh trạng thái ghi đè.
+    const markDirty = (ev) => {
+      if (ev.target.id !== 'chk-auto-refresh-logs' && ev.target.id !== 'model-filter') formDirty = true;
+    };
+    document.getElementById('profile-form').addEventListener('input', markDirty);
+    document.getElementById('profile-form').addEventListener('change', markDirty);
 
     toggleLogAutoRefresh(true);
     loadStatus();

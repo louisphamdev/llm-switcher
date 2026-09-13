@@ -185,7 +185,7 @@ flowchart LR
   - Tự động bù lại tham số `thinking` nếu tool ngoài cắt mất trên các reasoning model.
   - Gộp các turn cùng role liên tiếp để đáp ứng nghiêm ngặt luật xen kẽ lượt nói của Anthropic.
 - **Mở khoá Context 1,000,000 Tokens (1M):** Tự động thiết lập `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` và tính toán cửa sổ nén `CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000`, tích hợp badge cảnh báo trực quan cho model không hỗ trợ.
-- **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu đè endpoint vào `~/.claude/settings.json`. Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
+- **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu endpoint hay key vào `~/.claude/settings.json` (chỉ gỡ các biến proxy cũ nếu có). Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
 - **Live Request / Response Inspector:** Bảng theo dõi thời gian thực ngay trên Web UI: xem độ trễ, token prompt/output, preview prompt câu hỏi và khối suy luận thinking.
 - **Cài đặt Daemon Service nền:** Cung cấp lệnh cài đặt gateway chạy ngầm tự khởi động cùng hệ điều hành trên Windows (Task Scheduler), macOS (launchd) và Linux (systemd).
 
@@ -200,7 +200,7 @@ flowchart LR
 ### 2. Cài đặt Cấu hình
 Clone repo và tạo file cấu hình cá nhân:
 ```bash
-git clone https://github.com/your-username/llm-switcher.git
+git clone https://github.com/louisphamdev/llm-switcher.git
 cd llm-switcher
 
 # Copy file cấu hình mẫu (config.json đã được gitignore chặn an toàn)
@@ -249,6 +249,7 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
 
 2. Thêm đoạn mã sau vào wrapper chính của Claude Code (`claude.cmd` trong thư mục global npm):
    ```cmd
+   SETLOCAL EnableDelayedExpansion
    IF EXIST "path\to\llm-switcher\active.flag" (
      SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
      SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
@@ -261,6 +262,7 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
+   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "path\to\llm-switcher\env.cmd"` rồi `claude %*`.
 
 ---
 
@@ -268,6 +270,7 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
 
 Trong file wrapper của Codex (`codex.cmd`):
 ```cmd
+SETLOCAL EnableDelayedExpansion
 IF EXIST "path\to\llm-switcher\active.flag" (
   SET "CODEX_BASE_URL=http://127.0.0.1:3456/v1"
   SET "OPENAI_BASE_URL=http://127.0.0.1:3456/v1"
@@ -305,8 +308,11 @@ Nếu bạn sử dụng các tool cắt tỉa prompt như **Headroom**, **Ponyta
 
 Chạy bộ kiểm thử tự động trên máy bạn:
 ```bash
-node tests/test-optimizer-interop.mjs
-# Kết quả: 5 PASSED / 0 FAILED (Chữa lành thành công 100%)
+# Offline (mock upstream, không cần API key): chuyển đổi giao thức, healer, streaming, bảo mật
+npm test
+
+# Live (cần gateway đang chạy và upstream thật; tốn token)
+node tests/live-optimizer-interop.mjs
 ```
 
 Đọc báo cáo nghiên cứu kỹ thuật chuyên sâu tại: [📖 `docs/TOKEN-OPTIMIZER-INTEROP.md`](docs/TOKEN-OPTIMIZER-INTEROP.md).
@@ -358,11 +364,13 @@ Thêm vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_config.js
 switch ui                      # Mở giao diện Web UI trên trình duyệt
 switch status                  # Xem trạng thái kích hoạt của tất cả các CLI
 switch doctor                  # Quét & thanh tra toàn bộ môi trường, settings và định tuyến
+switch on [profile]            # Khởi động gateway và kích hoạt profile cho mọi target tương thích
 switch <profile>               # Kích hoạt profile cho tất cả các target tương thích
 switch claude <profile>        # Đặt profile kích hoạt riêng cho Claude Code
 switch codex <profile>         # Đặt profile kích hoạt riêng cho Codex
 switch openai <profile>        # Đặt profile kích hoạt riêng cho OpenAI Chat
 switch vertex <profile>        # Đặt profile kích hoạt riêng cho Vertex / Gemini
+switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
 switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy
 switch service uninstall       # Gỡ bỏ service chạy ngầm
 switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) và quay về gói Official
@@ -388,6 +396,7 @@ switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) v�
       "mode": "convert",             // hybrid | convert | direct
       "inFormat": "auto",            // auto | anthropic | openai-chat | responses | vertex
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
+      "thinkingMode": "auto",        // auto | native | off (xem Tuỳ chọn Nâng cao)
       "baseURL": "https://api.9router.com/v1",
       "apiKey": "sk-...",
       "defaultModels": {
@@ -409,6 +418,33 @@ switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) v�
 ```
 
 ---
+
+## Tuỳ chọn Nâng cao
+
+| Tuỳ chọn | Mô tả |
+|---|---|
+| `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài repo (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
+| `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe (ưu tiên: flag > env > `config.port`). |
+| Header `x-llm-profile: <key>` hoặc `?profile=<key>` | Định tuyến riêng 1 request qua profile chỉ định. Key không tồn tại trả HTTP 400 thay vì âm thầm dùng profile khác. |
+| `profile.thinkingMode` | `auto` (mặc định, cho gateway như 9Router): phục hồi thinking bị xoá, chèn hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
+| `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |
+| `profile.endpoints` | Ghi đè URL upstream theo từng format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
+| `CLAUDE_CONFIG_DIR` | Được tôn trọng khi tìm `settings.json` của Claude Code. |
+
+## Mô hình Bảo mật
+
+- Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
+- API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới.
+- Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream; chỉ các header tracing (`x-*`, `traceparent`) được passthrough.
+- `config.json` được ghi atomic; `~/.claude/settings.json` chỉ bị ghi lại khi thực sự còn biến proxy cũ.
+
+## Ghi chú Tương thích
+
+- **Direct passthrough Anthropic:** request hợp lệ được chuyển tiếp nguyên bytes (giữ thinking signature, `cache_control`, document). Request lỗi được healer native của Anthropic sửa tại chỗ: `tool_result` mồ côi → text, thiếu `tool_result` → placeholder, đưa result lên đầu user turn.
+- **Chữ ký thinking:** thinking block sinh ra khi convert mang chữ ký của gateway (`reasoning-sig`, hoặc chữ ký provider khác có prefix `lsw1.`) và bị gỡ trước khi tới Anthropic. Nếu việc gỡ làm vòng tool đang dở thiếu thinking block mà Anthropic bắt buộc, gateway tắt thinking cho riêng request đó thay vì để lỗi.
+- **Tool của Codex:** tool `custom`/freeform (VD `apply_patch` với Lark grammar), tool `namespace` và `local_shell` được đưa lên upstream dưới dạng function tool rồi chuyển ngược thành item `custom_tool_call` / `function_call` có namespace / `local_shell_call`. Hosted tool (`web_search`, `file_search`, `tool_search`, sinh ảnh) chạy trên server OpenAI nên upstream khác không cung cấp được và bị lược bỏ.
+- **Thought signature của Gemini 3:** chữ ký đi kèm function call được cache trong RAM theo tool call id (5.000 call gần nhất) và gắn lại vào đúng part `functionCall`, kể cả qua `extra_content` của endpoint OpenAI-compatible của Gemini. Sau khi restart gateway, call không rõ chữ ký trong lượt hiện tại dùng giá trị `skip_thought_signature_validator` mà Google cho phép (Google lưu ý có thể giảm chất lượng).
+- **`/v1/messages/count_tokens`:** chính xác khi profile của Claude Code dùng upstream Anthropic native; các trường hợp khác là ước lượng (provider khác không có endpoint tương đương).
 
 ## Nghiên cứu & Ma trận Giao thức Response
 

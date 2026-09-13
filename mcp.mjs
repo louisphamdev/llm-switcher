@@ -11,34 +11,14 @@
 // ============================================================
 
 import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const configPath = path.join(__dirname, 'config.json');
+import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort } from './state.mjs';
 
 function loadConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } catch {
-    return { port: 3456, activeProfile: '9router', profiles: {} };
-  }
+  return loadSharedConfig() || { port: 3456, activeProfile: '', profiles: {} };
 }
 
 function getMcpPort() {
-  const args = process.argv.slice(2);
-  for (let i = 0; i < args.length; i++) {
-    if ((args[i] === '--port' || args[i] === '-p') && args[i + 1]) {
-      const p = parseInt(args[i + 1], 10);
-      if (!isNaN(p) && p > 0 && p <= 65535) return p;
-    }
-  }
-  const envP = parseInt(process.env.PORT || process.env.LLM_SWITCHER_PORT, 10);
-  if (!isNaN(envP) && envP > 0 && envP <= 65535) return envP;
-  const cfg = loadConfig();
-  return cfg.port || 3456;
+  return resolvePort(process.argv.slice(2), loadSharedConfig());
 }
 
 async function fetchStatus(port) {
@@ -61,7 +41,8 @@ async function postSwitch(port, target, profile) {
   const r = await fetch(`http://127.0.0.1:${port}/api/switch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target, profile: profile || null })
+    body: JSON.stringify({ target, profile: profile || null }),
+    signal: AbortSignal.timeout(5000)
   });
   return await r.json();
 }
@@ -152,7 +133,6 @@ async function handleToolCall(name, args) {
     }
 
     // 2. Kiểm tra settings.json của Claude Code có bị tool nào ghi bẩn không
-    const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
     if (fs.existsSync(claudeSettingsPath)) {
       try {
         const s = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
@@ -191,6 +171,10 @@ async function handleToolCall(name, args) {
 
   if (name === 'switcher_switch_profile') {
     const { target, profile } = args || {};
+    // Không có target và không có profile = tắt TOÀN BỘ gateway; bắt agent phải nói rõ ý định.
+    if (!target && !profile) {
+      return { content: [{ type: 'text', text: 'Refusing to deactivate all targets implicitly: pass a "target" to turn off one CLI, or a "profile" to activate.' }], isError: true };
+    }
     try {
       const res = await postSwitch(port, target || null, profile || null);
       if (res.success) {
@@ -227,6 +211,8 @@ async function handleToolCall(name, args) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
+const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
 // JSON-RPC 2.0 stdio framing
 function send(obj) {
   const json = JSON.stringify(obj);
@@ -259,7 +245,7 @@ process.stdin.on('data', async (chunk) => {
         jsonrpc: '2.0',
         id,
         result: {
-          protocolVersion: '2024-11-05',
+          protocolVersion: SUPPORTED_PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOLS[0],
           capabilities: { tools: {} },
           serverInfo: { name: 'llm-switcher', version: '1.0.0' }
         }
@@ -267,7 +253,12 @@ process.stdin.on('data', async (chunk) => {
       continue;
     }
 
-    if (method === 'notifications/initialized') {
+    if (method === 'ping') {
+      send({ jsonrpc: '2.0', id, result: {} });
+      continue;
+    }
+
+    if (typeof method === 'string' && method.startsWith('notifications/')) {
       continue;
     }
 

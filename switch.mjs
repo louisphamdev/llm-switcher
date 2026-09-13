@@ -1,46 +1,62 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync, execSync } from 'node:child_process';
 import http from 'node:http';
-import { fileURLToPath } from 'node:url';
+import {
+  ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
+  resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
+  applyLaunchState, clearLaunchState
+} from './state.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const configPath = path.join(__dirname, 'config.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-
+const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
+const proxyLogPath = path.join(ROOT_DIR, 'proxy.log');
 const userProfile = os.homedir();
-const claudeSettingsPath = path.join(userProfile, '.claude', 'settings.json');
-const claudeBackupPath = path.join(userProfile, '.claude', 'settings.json.bak-pre-9router-proxy');
-const pidFilePath = path.join(__dirname, 'proxy.pid');
-const activeFlagPath = path.join(__dirname, 'active.flag');
-const flag1MPath = path.join(__dirname, '1m.flag'); // Claude Code launcher flag
-const flagCodex1MPath = path.join(__dirname, 'codex-1m.flag'); // Codex launcher flag
-const flagOpenAI1MPath = path.join(__dirname, 'openai-1m.flag'); // OpenAI launcher flag
-const envCmdPath = path.join(__dirname, 'env.cmd');
-const envShPath = path.join(__dirname, 'env.sh');
 
-function getTargetPort() {
-  const args = process.argv.slice(2);
-  for (let i = 0; i < args.length; i++) {
-    if ((args[i] === '--port' || args[i] === '-p') && args[i + 1]) {
-      const p = parseInt(args[i + 1], 10);
-      if (!isNaN(p) && p > 0 && p <= 65535) return p;
-    }
+const config = loadConfig();
+if (!config) {
+  const err = getConfigLoadError();
+  console.error(`[Error] Cannot load ${configPath}: ${err ? err.message : 'file not found'}`);
+  if (!fs.existsSync(configPath)) {
+    console.error(`Create it first:  cp config.example.json config.json   (then edit baseURL / apiKey)`);
   }
-  const envP = parseInt(process.env.PORT || process.env.LLM_SWITCHER_PORT, 10);
-  if (!isNaN(envP) && envP > 0 && envP <= 65535) return envP;
-  return config.port || 3456;
+  process.exit(1);
 }
 
-async function checkProxyRunning(port) {
-  const p = port || getTargetPort();
+const TARGET_ALIASES = {
+  claude: 'anthropic', anthropic: 'anthropic',
+  codex: 'responses', responses: 'responses',
+  openai: 'openai-chat', chat: 'openai-chat', 'openai-chat': 'openai-chat',
+  vertex: 'vertex', gemini: 'vertex'
+};
+
+// Bỏ các cờ --port/-p khỏi positional args.
+function positionalArgs() {
+  const out = [];
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--port' || (argv[i] === '-p' && i > 0)) { i++; continue; }
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+function getTargetPort() {
+  return resolvePort(process.argv.slice(2), config);
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Chỉ coi là "đang chạy" khi /health trả đúng chữ ký của LLM Switcher (không nhầm với tool khác chiếm port).
+function checkProxyRunning(port) {
   return new Promise(resolve => {
-    const req = http.get(`http://127.0.0.1:${p}/health`, { timeout: 1000 }, res => {
-      res.resume();
-      resolve(res.statusCode === 200);
+    const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: 1000 }, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { data += c; });
+      res.on('end', () => {
+        try { resolve(res.statusCode === 200 && JSON.parse(data).proxy === 'llm-switcher'); } catch { resolve(false); }
+      });
     });
     req.on('error', () => resolve(false));
     req.on('timeout', () => {
@@ -51,336 +67,246 @@ async function checkProxyRunning(port) {
 }
 
 function startProxyBackground(port) {
-  const proxyScript = path.join(__dirname, 'proxy.mjs');
-  const targetPort = port || getTargetPort();
-  const child = spawn(process.execPath, [proxyScript, '--port', String(targetPort)], {
+  const log = fs.openSync(proxyLogPath, 'a');
+  const child = spawn(process.execPath, [proxyScript, '--port', String(port)], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', log, log],
     windowsHide: true
   });
   child.unref();
-  fs.writeFileSync(pidFilePath, String(child.pid), 'utf8');
+  fs.closeSync(log);
+  fs.writeFileSync(paths.pidFile, String(child.pid), 'utf8');
   return child.pid;
+}
+
+async function ensureProxyRunning(port) {
+  if (await checkProxyRunning(port)) {
+    console.log(`Proxy is running on port ${port} (config reloaded dynamically).`);
+    return;
+  }
+  console.log(`Starting proxy service on port ${port}...`);
+  startProxyBackground(port);
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    if (await checkProxyRunning(port)) return;
+  }
+  console.error(`[Error] Proxy did not come up on port ${port}. See ${proxyLogPath} for details.`);
+  process.exit(1);
 }
 
 function openBrowser(url) {
   try {
     if (process.platform === 'win32') {
-      execSync(`start ${url}`, { stdio: 'ignore' });
+      execFileSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' });
     } else if (process.platform === 'darwin') {
-      execSync(`open "${url}"`, { stdio: 'ignore' });
+      execFileSync('open', [url], { stdio: 'ignore' });
     } else {
-      execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
+      execFileSync('xdg-open', [url], { stdio: 'ignore' });
     }
   } catch {}
 }
 
-function stopProxy(port) {
-  const targetPort = port || getTargetPort();
-  if (fs.existsSync(pidFilePath)) {
-    try {
-      const pid = parseInt(fs.readFileSync(pidFilePath, 'utf8').trim(), 10);
-      if (!isNaN(pid)) {
-        try { process.kill(pid); } catch {}
-      }
-    } catch {}
-    try { fs.unlinkSync(pidFilePath); } catch {}
-  }
-
+// Tìm PID đang LISTEN đúng port (so khớp chính xác cột local address, không khớp nhầm :34560).
+function listeningPids(port) {
+  const pids = new Set();
   try {
     if (process.platform === 'win32') {
-      const out = execSync(`netstat -ano | findstr :${targetPort} | findstr LISTENING`, { encoding: 'utf8' });
-      const lines = out.trim().split('\n');
-      for (const line of lines) {
+      const out = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
+      for (const line of out.split(/\r?\n/)) {
         const parts = line.trim().split(/\s+/);
-        const pid = parts[parts.length - 1];
-        if (pid && !isNaN(parseInt(pid, 10)) && pid !== '0') {
-          execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
+        // Proto  Local  Foreign  State  PID  — foreign "0.0.0.0:0" = đang listen (không phụ thuộc ngôn ngữ OS)
+        if (parts.length >= 5 && /^TCP$/i.test(parts[0]) && parts[1].endsWith(`:${port}`) && /:0$/.test(parts[2])) {
+          const pid = parseInt(parts[parts.length - 1], 10);
+          if (pid > 0) pids.add(pid);
         }
       }
     } else {
-      execSync(`lsof -ti :${targetPort} | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
+      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
+      for (const s of out.split(/\s+/)) {
+        const pid = parseInt(s, 10);
+        if (pid > 0) pids.add(pid);
+      }
     }
   } catch {}
+  return [...pids];
+}
+
+async function stopProxy(port) {
+  const running = await checkProxyRunning(port);
+  if (fs.existsSync(paths.pidFile)) {
+    // Chỉ kill theo pid file khi xác nhận switcher đang chạy, tránh kill nhầm process đã tái sử dụng PID.
+    if (running) {
+      const pid = parseInt(fs.readFileSync(paths.pidFile, 'utf8').trim(), 10);
+      if (pid > 0) {
+        try { process.kill(pid); } catch {}
+      }
+    }
+    try { fs.unlinkSync(paths.pidFile); } catch {}
+  }
+  if (!running) return false;
+
+  for (let i = 0; i < 8; i++) {
+    await sleep(150);
+    if (!(await checkProxyRunning(port))) return true;
+  }
+  // Vẫn chạy (VD được start bởi service) -> kill process đang listen port, đã xác nhận đó là LLM Switcher.
+  for (const pid of listeningPids(port)) {
+    if (pid === process.pid) continue;
+    try {
+      if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
+      else process.kill(pid, 'SIGTERM');
+    } catch {}
+  }
+  return true;
 }
 
 async function changePort(newPortStr) {
-  const p = parseInt(newPortStr, 10);
-  if (isNaN(p) || p <= 0 || p > 65535) {
+  const p = parsePort(newPortStr);
+  if (!p) {
     console.error(`[Error] Invalid port: "${newPortStr}". Must be an integer between 1 and 65535.`);
     process.exit(1);
   }
-  const oldPort = config.port || 3456;
+  const oldPort = parsePort(config.port) || 3456;
   const isRunning = await checkProxyRunning(oldPort);
   if (isRunning) {
     console.log(`Stopping gateway on current port ${oldPort}...`);
-    stopProxy(oldPort);
+    await stopProxy(oldPort);
   }
   config.port = p;
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  saveConfig(config);
   console.log(`[SUCCESS] Port updated to ${p} in config.json.`);
+  if (process.env.PORT || process.env.LLM_SWITCHER_PORT) {
+    console.log(`[WARN] PORT / LLM_SWITCHER_PORT env var is set and overrides config.json.`);
+  }
   if (isRunning) {
     console.log(`Restarting gateway on new port ${p}...`);
-    await turnOn(config.activeProfile);
+    await ensureProxyRunning(p);
+  }
+  applyLaunchState(config, p);
+}
+
+function printProfile(profile) {
+  const d = profile.defaultModels || {};
+  console.log(`Input Target: ${(profile.inFormat || 'auto').toUpperCase()}`);
+  console.log(`Routing:      ${profile.outFormat ? `out=${profile.outFormat}` : `mode=${profile.mode || 'hybrid'}`}`);
+  console.log(`Upstream:     ${profile.baseURL || '(not set)'}`);
+  for (const tier of ['opus', 'sonnet', 'haiku', 'fable']) {
+    if (d[tier]) console.log(`${(tier[0].toUpperCase() + tier.slice(1) + ':').padEnd(14)}${d[tier]}${profile.model1M?.[tier] ? '  [1M]' : ''}`);
   }
 }
 
-async function turnOn(targetProfileName, cliTarget) {
-  const availableProfiles = Object.keys(config.profiles);
-  const profileKey = (targetProfileName || config.activeProfile || '9router').toLowerCase();
-  const targetPort = getTargetPort();
+function printTargets(activeMap) {
+  const labels = { anthropic: 'Claude Code', responses: 'Codex', 'openai-chat': 'OpenAI Chat', vertex: 'Vertex' };
+  for (const t of TARGETS) {
+    console.log(`  ${labels[t].padEnd(12)} (${t.padEnd(11)}) -> ${activeMap[t] || 'OFF (official)'}`);
+  }
+}
 
-  if (!config.profiles[profileKey]) {
-    console.error(`[Error] Profile "${profileKey}" not found in config.json!`);
-    console.error(`Available profiles: ${availableProfiles.join(', ')}`);
+async function turnOn(profileName, cliTarget) {
+  const port = getTargetPort();
+  const wanted = profileName || config.activeProfile || Object.keys(config.profiles)[0];
+  const key = findProfileKey(config, wanted);
+  if (!key) {
+    console.error(`[Error] Profile "${wanted}" not found in config.json!`);
+    console.error(`Available profiles: ${Object.keys(config.profiles).join(', ') || '(none)'}`);
     process.exit(1);
   }
 
-  const selectedProfile = config.profiles[profileKey];
-  config.activeProfile = profileKey;
-  if (!config.activeProfiles) {
-    config.activeProfiles = {
-      anthropic: profileKey,
-      responses: profileKey,
-      'openai-chat': profileKey,
-      vertex: profileKey
-    };
+  const err = cliTarget ? setTargetProfile(config, cliTarget, key) : activateProfile(config, key);
+  if (err) {
+    console.error(`[Error] ${err}`);
+    process.exit(1);
   }
-  if (cliTarget) {
-    config.activeProfiles[cliTarget] = profileKey;
-  }
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  saveConfig(config);
 
-  console.log(`Activating profile: [${selectedProfile.name}] (${profileKey}) on port ${targetPort}...`);
+  const profile = config.profiles[key];
+  console.log(`Activating profile: [${profile.name || key}] (${key})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
+  await ensureProxyRunning(port);
+  const st = applyLaunchState(config, port);
 
-  const isRunning = await checkProxyRunning(targetPort);
-  if (!isRunning) {
-    console.log(`Starting proxy service on port ${targetPort}...`);
-    startProxyBackground(targetPort);
-    let retries = 10;
-    while (retries-- > 0) {
-      await new Promise(r => setTimeout(r, 300));
-      if (await checkProxyRunning(targetPort)) break;
-    }
-  } else {
-    console.log(`Proxy is running on port ${targetPort} (config reloaded dynamically).`);
-  }
-
-  fs.writeFileSync(activeFlagPath, profileKey, 'utf8');
-
-  const inFmt = selectedProfile.inFormat || 'auto';
-  const has1M = Boolean(selectedProfile.model1M?.opus || selectedProfile.model1M?.sonnet || selectedProfile.model1M?.fable || selectedProfile.model1M?.haiku);
-  const primaryModel = selectedProfile.defaultModels?.opus || selectedProfile.defaultModels?.sonnet || selectedProfile.defaultModels?.haiku || '';
-
-  // 1. Claude Code 1M: CHỈ bật khi profile chọn input là 'anthropic' hoặc 'auto'
-  const isClaudeTarget = (inFmt === 'anthropic' || inFmt === 'auto');
-  const claudeTier1M = selectedProfile.model1M?.opus ? 'opus[1m]' :
-                       selectedProfile.model1M?.sonnet ? 'sonnet[1m]' :
-                       selectedProfile.model1M?.fable ? 'fable[1m]' : null;
-  if (isClaudeTarget && claudeTier1M) {
-    fs.writeFileSync(flag1MPath, claudeTier1M, 'utf8');
-  } else if (fs.existsSync(flag1MPath)) {
-    try { fs.unlinkSync(flag1MPath); } catch {}
-  }
-
-  // 2. Codex CLI 1M: bật khi input là 'responses' hoặc 'auto'
-  const isCodexTarget = (inFmt === 'responses' || inFmt === 'auto');
-  if (isCodexTarget && has1M) {
-    fs.writeFileSync(flagCodex1MPath, primaryModel || '1000000', 'utf8');
-  } else if (fs.existsSync(flagCodex1MPath)) {
-    try { fs.unlinkSync(flagCodex1MPath); } catch {}
-  }
-
-  // 3. OpenAI CLI 1M: bật khi input là 'openai-chat' hoặc 'auto'
-  const isOpenAITarget = (inFmt === 'openai-chat' || inFmt === 'auto');
-  if (isOpenAITarget && has1M) {
-    fs.writeFileSync(flagOpenAI1MPath, primaryModel || '1000000', 'utf8');
-  } else if (fs.existsSync(flagOpenAI1MPath)) {
-    try { fs.unlinkSync(flagOpenAI1MPath); } catch {}
-  }
-
-  // 4. Sinh file env.cmd và env.sh
-  const envCmdLines = ['@echo off', `REM Auto-generated environment for profile: ${selectedProfile.name}`];
-  const envShLines = ['#!/usr/bin/env sh', `# Auto-generated environment for profile: ${selectedProfile.name}`];
-
-  if (isClaudeTarget) {
-    envCmdLines.push(`SET "ANTHROPIC_BASE_URL=http://127.0.0.1:${config.port}"`);
-    envCmdLines.push('SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"');
-    envShLines.push(`export ANTHROPIC_BASE_URL="http://127.0.0.1:${config.port}"`);
-    envShLines.push('export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1');
-    if (claudeTier1M) {
-      envCmdLines.push(`SET "ANTHROPIC_MODEL=${claudeTier1M}"`);
-      envCmdLines.push('SET "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000"');
-      envCmdLines.push('SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"');
-      envShLines.push(`export ANTHROPIC_MODEL="${claudeTier1M}"`);
-      envShLines.push('export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000');
-      envShLines.push('export CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000');
-    }
-  }
-
-  if (isCodexTarget) {
-    envCmdLines.push(`SET "CODEX_BASE_URL=http://127.0.0.1:${config.port}/v1"`);
-    envCmdLines.push(`SET "OPENAI_BASE_URL=http://127.0.0.1:${config.port}/v1"`);
-    envShLines.push(`export CODEX_BASE_URL="http://127.0.0.1:${config.port}/v1"`);
-    envShLines.push(`export OPENAI_BASE_URL="http://127.0.0.1:${config.port}/v1"`);
-    if (has1M) {
-      envCmdLines.push('SET "CODEX_MAX_CONTEXT_TOKENS=1000000"');
-      envCmdLines.push('SET "CODEX_AUTO_COMPACT_WINDOW=900000"');
-      envShLines.push('export CODEX_MAX_CONTEXT_TOKENS=1000000');
-      envShLines.push('export CODEX_AUTO_COMPACT_WINDOW=900000');
-      if (primaryModel) {
-        envCmdLines.push(`SET "CODEX_MODEL=${primaryModel}"`);
-        envShLines.push(`export CODEX_MODEL="${primaryModel}"`);
-      }
-    }
-  }
-
-  if (isOpenAITarget && !isCodexTarget) {
-    envCmdLines.push(`SET "OPENAI_BASE_URL=http://127.0.0.1:${config.port}/v1"`);
-    envShLines.push(`export OPENAI_BASE_URL="http://127.0.0.1:${config.port}/v1"`);
-    if (has1M) {
-      envCmdLines.push('SET "OPENAI_MAX_CONTEXT_TOKENS=1000000"');
-      envShLines.push('export OPENAI_MAX_CONTEXT_TOKENS=1000000');
-    }
-  }
-
-  try {
-    fs.writeFileSync(envCmdPath, envCmdLines.join('\r\n'), 'utf8');
-    fs.writeFileSync(envShPath, envShLines.join('\n'), 'utf8');
-  } catch {}
-
-  // Keep ~/.claude/settings.json 100% clean (no ANTHROPIC_AUTH_TOKEN or custom models)
-  if (fs.existsSync(claudeSettingsPath)) {
-    let settings = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
-    if (settings.env) {
-      delete settings.env.ANTHROPIC_BASE_URL;
-      delete settings.env.ANTHROPIC_AUTH_TOKEN;
-      delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME;
-    }
-    fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
-  }
-
-  console.log(`\n[SUCCESS] Switched to profile "${selectedProfile.name}".`);
-  console.log(`Input Target: ${inFmt.toUpperCase()}`);
-  console.log(`Routing Mode: ${selectedProfile.mode.toUpperCase()}`);
-  console.log(`Upstream:     ${selectedProfile.baseURL}`);
-  console.log(`Opus:         ${selectedProfile.defaultModels.opus}`);
-  console.log(`Sonnet:       ${selectedProfile.defaultModels.sonnet}`);
-  console.log(`Haiku:        ${selectedProfile.defaultModels.haiku}`);
-  if (selectedProfile.defaultModels?.fable) {
-    console.log(`Fable:        ${selectedProfile.defaultModels.fable}`);
-  }
-  if (isClaudeTarget) {
-    console.log(`Claude 1M:    ${claudeTier1M ? `ACTIVE (${claudeTier1M})` : 'OFF'}`);
-  } else {
-    console.log(`Claude 1M:    DISABLED (Profile targets ${inFmt.toUpperCase()})`);
-  }
-  if (isCodexTarget) {
-    console.log(`Codex 1M:     ${has1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
-  }
-  console.log('Settings.json is 100% clean (no warning banners).');
+  console.log(`\n[SUCCESS] Switched to profile "${profile.name || key}".`);
+  printProfile(profile);
+  console.log('\nActive targets:');
+  printTargets(getActiveMap(config));
+  console.log(`\nClaude 1M:    ${st.claude1M ? `ACTIVE (${st.claude1M})` : 'OFF'}`);
+  console.log(`Codex 1M:     ${st.codex1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
 }
 
-async function turnOff() {
-  console.log('Deactivating Proxy and restoring Claude Official...');
-  stopProxy();
-  const flags = [activeFlagPath, flag1MPath, flagCodex1MPath, flagOpenAI1MPath, envCmdPath, envShPath];
-  for (const f of flags) {
-    if (fs.existsSync(f)) {
-      try { fs.unlinkSync(f); } catch {}
+async function turnOff(targetArg) {
+  const port = getTargetPort();
+  if (targetArg) {
+    const target = TARGET_ALIASES[targetArg.toLowerCase()];
+    if (!target) {
+      console.error(`[Error] Unknown target "${targetArg}". Use one of: claude, codex, openai, vertex`);
+      process.exit(1);
     }
-  }
-  console.log('Stopped local proxy service.');
-
-  if (fs.existsSync(claudeSettingsPath)) {
-    let settings = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
-    if (settings.env) {
-      delete settings.env.ANTHROPIC_BASE_URL;
-      delete settings.env.ANTHROPIC_AUTH_TOKEN;
-      delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
-      delete settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL;
-      delete settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME;
-    }
-    fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
+    setTargetProfile(config, target, null);
+    saveConfig(config);
+    applyLaunchState(config, port);
+    console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
+    printTargets(getActiveMap(config));
+    return;
   }
 
-  console.log('\n[SUCCESS] Switched back to Claude Official Subscription.');
+  console.log('Deactivating Proxy and restoring official endpoints...');
+  deactivateAll(config);
+  saveConfig(config);
+  clearLaunchState();
+  const stopped = await stopProxy(port);
+  console.log(stopped ? 'Stopped local proxy service.' : 'Proxy service was not running.');
+  console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
 }
 
 async function showStatus() {
-  const isRunning = await checkProxyRunning(config.port);
-  const isProxyActive = fs.existsSync(activeFlagPath) && isRunning;
-  const is1MActive = fs.existsSync(flag1MPath) && isProxyActive;
-  const isCodex1M = fs.existsSync(flagCodex1MPath) && isProxyActive;
-  const activeProfile = config.profiles[config.activeProfile] || { name: config.activeProfile };
-  const inFmt = activeProfile.inFormat || 'auto';
+  const port = getTargetPort();
+  const isRunning = await checkProxyRunning(port);
+  const activeMap = getActiveMap(config);
+  const flagged = fs.existsSync(paths.activeFlag);
 
   console.log('=== LLM Switcher Status ===');
-  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${config.port})` : 'STOPPED'}`);
-  console.log(`Web UI:         http://127.0.0.1:${config.port}/ui`);
-  console.log(`Active Profile: [${activeProfile.name}] (${config.activeProfile})`);
-  console.log(`Input Target:   ${inFmt.toUpperCase()}`);
-  console.log(`Routing Mode:   ${activeProfile.mode ? activeProfile.mode.toUpperCase() : 'N/A'}`);
-  console.log(`Formats:        in=${inFmt} -> out=${activeProfile.outFormat || ('auto-by-' + (activeProfile.mode || 'hybrid'))}`);
-  console.log(`Active State:   ${isProxyActive ? `PROXY ACTIVE -> ${activeProfile.name}` : 'OFFICIAL SUBSCRIPTION'}`);
-  if (inFmt === 'anthropic' || inFmt === 'auto') {
-    console.log(`Claude 1M Flag: ${is1MActive ? 'ACTIVE (CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000)' : 'OFF (Standard 200k)'}`);
-  } else {
-    console.log(`Claude 1M Flag: OFF (profile input is ${inFmt.toUpperCase()}, not Claude Code)`);
+  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : 'STOPPED'}`);
+  console.log(`Web UI:         http://127.0.0.1:${port}/ui`);
+  console.log(`Launcher Flag:  ${flagged ? 'active.flag present' : 'absent (launchers use official endpoints)'}`);
+  if (flagged && !isRunning) {
+    console.log(`[WARN] active.flag exists but proxy is STOPPED -> launched CLIs will fail to connect. Run 'switch on' or 'switch off'.`);
   }
-  if (inFmt === 'responses' || inFmt === 'auto') {
-    console.log(`Codex 1M Flag:  ${isCodex1M ? 'ACTIVE (CODEX_MAX_CONTEXT_TOKENS=1000000)' : 'OFF'}`);
-  }
-  console.log(`Settings File:  100% Clean (no warning banners)`);
+  console.log(`Claude 1M Flag: ${fs.existsSync(paths.flag1M) ? `ACTIVE (${fs.readFileSync(paths.flag1M, 'utf8').trim()})` : 'OFF'}`);
+  console.log(`Codex 1M Flag:  ${fs.existsSync(paths.flagCodex1M) ? 'ACTIVE' : 'OFF'}`);
+  console.log('\nActive targets:');
+  printTargets(activeMap);
   console.log('\nAvailable profiles:');
   for (const [key, p] of Object.entries(config.profiles)) {
-    const mark = key === config.activeProfile ? '* ' : '  ';
-    console.log(`${mark}- ${key.padEnd(16)} : [${p.inFormat || 'auto'}->${p.outFormat || p.mode}] ${p.name} (${p.baseURL})`);
+    const mark = Object.values(activeMap).includes(key) ? '* ' : '  ';
+    console.log(`${mark}${key.padEnd(20)} : [${p.inFormat || 'auto'}->${p.outFormat || p.mode || 'hybrid'}] ${p.name || ''} (${p.baseURL || 'no baseURL'})`);
   }
 }
 
 async function openUI() {
-  const isRunning = await checkProxyRunning(config.port);
-  if (!isRunning) {
-    console.log(`Starting proxy service on port ${config.port}...`);
-    startProxyBackground();
-    let retries = 10;
-    while (retries-- > 0) {
-      await new Promise(r => setTimeout(r, 300));
-      if (await checkProxyRunning(config.port)) break;
-    }
-  }
-  const url = `http://127.0.0.1:${config.port}/ui`;
+  const port = getTargetPort();
+  await ensureProxyRunning(port);
+  const url = `http://127.0.0.1:${port}/ui`;
   console.log(`Opening Web UI: ${url}`);
   openBrowser(url);
 }
 
+function xmlEscape(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function manageService(action) {
-  const proxyScript = path.join(__dirname, 'proxy.mjs');
   const nodeBin = process.execPath;
-  const targetPort = getTargetPort();
+  const port = getTargetPort();
 
   if (action === 'install') {
     if (process.platform === 'win32') {
       try {
-        execSync(`schtasks /Create /TN "LLMSwitcher" /TR "\"${nodeBin}\" \"${proxyScript}\"" /SC ONLOGON /RL HIGHEST /F`, { stdio: 'inherit' });
+        // execFileSync tự quote đúng cho schtasks; không cần /RL HIGHEST (gateway không cần quyền admin).
+        execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/TR', `"${nodeBin}" "${proxyScript}" --port ${port}`, '/SC', 'ONLOGON', '/F'], { stdio: 'inherit' });
         console.log('[SUCCESS] Installed Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
-        execSync(`schtasks /Run /TN "LLMSwitcher"`, { stdio: 'ignore' });
+        execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
         console.log('[SUCCESS] Started background service.');
       } catch (err) {
-        console.error('Failed to register task:', err.message);
+        console.error('Failed to register task (ONLOGON tasks may require an elevated terminal):', err.message);
       }
     } else if (process.platform === 'darwin') {
       const plistPath = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
@@ -392,9 +318,15 @@ function manageService(action) {
   <string>com.llmswitcher.gateway</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${nodeBin}</string>
-    <string>${proxyScript}</string>
+    <string>${xmlEscape(nodeBin)}</string>
+    <string>${xmlEscape(proxyScript)}</string>
+    <string>--port</string>
+    <string>${port}</string>
   </array>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(proxyLogPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(proxyLogPath)}</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -404,23 +336,25 @@ function manageService(action) {
       fs.mkdirSync(path.dirname(plistPath), { recursive: true });
       fs.writeFileSync(plistPath, plistContent, 'utf8');
       try {
-        execSync(`launchctl load "${plistPath}"`, { stdio: 'inherit' });
+        execFileSync('launchctl', ['load', plistPath], { stdio: 'inherit' });
         console.log('[SUCCESS] Installed and started macOS launchd service.');
       } catch (e) {
         console.error('Failed to load launchd service:', e.message);
       }
     } else {
       const servicePath = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
+      const q = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"`;
       const serviceContent = `[Unit]
 Description=LLM Switcher Local Gateway
 After=network.target
 
 [Service]
-ExecStart=${nodeBin} ${proxyScript} --port ${targetPort}
+ExecStart=${q(nodeBin)} ${q(proxyScript)} --port ${port}
 Restart=always
 
 [Install]
-WantedBy=default.target`;
+WantedBy=default.target
+`;
       fs.mkdirSync(path.dirname(servicePath), { recursive: true });
       fs.writeFileSync(servicePath, serviceContent, 'utf8');
       try {
@@ -436,7 +370,10 @@ WantedBy=default.target`;
   if (action === 'uninstall') {
     if (process.platform === 'win32') {
       try {
-        execSync('schtasks /Delete /TN "LLMSwitcher" /F', { stdio: 'inherit' });
+        execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+      } catch {}
+      try {
+        execFileSync('schtasks', ['/Delete', '/TN', 'LLMSwitcher', '/F'], { stdio: 'inherit' });
         console.log('[SUCCESS] Removed Windows Scheduled Task "LLMSwitcher".');
       } catch (err) {
         console.error('Failed to delete task (may not exist):', err.message);
@@ -444,63 +381,75 @@ WantedBy=default.target`;
     } else if (process.platform === 'darwin') {
       const plistPath = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
       if (fs.existsSync(plistPath)) {
-        try { execSync(`launchctl unload "${plistPath}"`, { stdio: 'ignore' }); } catch {}
+        try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }); } catch {}
         try { fs.unlinkSync(plistPath); } catch {}
       }
       console.log('[SUCCESS] Removed macOS launchd service.');
     } else {
       try {
         execSync('systemctl --user disable --now llm-switcher', { stdio: 'ignore' });
-        const servicePath = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
-        if (fs.existsSync(servicePath)) fs.unlinkSync(servicePath);
       } catch {}
+      const servicePath = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
+      try { if (fs.existsSync(servicePath)) fs.unlinkSync(servicePath); } catch {}
       console.log('[SUCCESS] Removed systemd user service.');
     }
-    stopProxy();
-    return;
+    return stopProxy(port);
   }
 
   console.log('Usage: switch service [install|uninstall]');
 }
 
 async function runDoctor() {
+  const port = getTargetPort();
   console.log('=== LLM Switcher System Doctor ===\n');
-  const isRunning = await checkProxyRunning(config.port);
+  const isRunning = await checkProxyRunning(port);
   let allHealthy = true;
+  const warn = (msg) => { console.log(msg); allHealthy = false; };
 
   // 1. Kiểm tra proxy liveness
   if (isRunning) {
-    console.log(`[PASS] Gateway service is RUNNING on http://127.0.0.1:${config.port}`);
+    console.log(`[PASS] Gateway service is RUNNING on http://127.0.0.1:${port}`);
   } else {
-    console.log(`[WARN] Gateway service is STOPPED. Run 'switch on' or 'switch start' to activate.`);
-    allHealthy = false;
+    warn(`[WARN] Gateway service is STOPPED on port ${port}. Run 'switch on' to activate.`);
   }
 
-  // 2. Kiểm tra ~/.claude/settings.json
+  // 2. Kiểm tra profile đang trỏ tới
+  const activeMap = getActiveMap(config);
+  for (const [t, key] of Object.entries(activeMap)) {
+    if (!key) continue;
+    const p = config.profiles[key];
+    if (!p) warn(`[WARN] Target ${t} points to missing profile "${key}".`);
+    else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${key}" (${t}) still has placeholder baseURL/apiKey.`);
+  }
+
+  // 3. Flag launcher khớp với trạng thái proxy
+  if (fs.existsSync(paths.activeFlag) && !isRunning) {
+    warn(`[WARN] active.flag exists but proxy is stopped: launched CLIs will get ECONNREFUSED.`);
+  }
+
+  // 4. Kiểm tra ~/.claude/settings.json
   if (fs.existsSync(claudeSettingsPath)) {
     try {
       const s = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
       if (s.env?.ANTHROPIC_BASE_URL) {
-        console.log(`[WARN] ~/.claude/settings.json contains hardcoded ANTHROPIC_BASE_URL="${s.env.ANTHROPIC_BASE_URL}".`);
-        console.log(`       This triggers warning banners in Claude Code. Run 'switch off' to clean.`);
-        allHealthy = false;
+        warn(`[WARN] ${claudeSettingsPath} contains hardcoded ANTHROPIC_BASE_URL="${s.env.ANTHROPIC_BASE_URL}".`);
+        console.log(`       This triggers warning banners in Claude Code. Run 'switch on' / 'switch off' to clean.`);
       } else {
-        console.log(`[PASS] ~/.claude/settings.json is clean (zero-mutation compliant).`);
+        console.log(`[PASS] ${claudeSettingsPath} has no proxy overrides.`);
       }
     } catch {
-      console.log(`[WARN] ~/.claude/settings.json exists but is not valid JSON.`);
+      warn(`[WARN] ${claudeSettingsPath} exists but is not valid JSON.`);
     }
   } else {
-    console.log(`[PASS] ~/.claude/settings.json does not exist (clean official state).`);
+    console.log(`[PASS] ${claudeSettingsPath} does not exist (clean official state).`);
   }
 
-  // 3. Kiểm tra biến môi trường
+  // 5. Kiểm tra biến môi trường
   const anthBase = process.env.ANTHROPIC_BASE_URL;
   if (anthBase) {
-    if (!anthBase.includes('127.0.0.1') && !anthBase.includes('localhost')) {
-      console.log(`[ALERT] Current ANTHROPIC_BASE_URL="${anthBase}" points to an external host!`);
-      console.log(`        It should point to LLM Switcher (http://127.0.0.1:${config.port}) or your local optimizer tool.`);
-      allHealthy = false;
+    if (!/\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(anthBase)) {
+      warn(`[ALERT] Current ANTHROPIC_BASE_URL="${anthBase}" points to an external host!`);
+      console.log(`        It should point to LLM Switcher (http://127.0.0.1:${port}) or your local optimizer tool.`);
     } else {
       console.log(`[PASS] ANTHROPIC_BASE_URL points to local address: ${anthBase}`);
     }
@@ -508,60 +457,52 @@ async function runDoctor() {
     console.log(`[INFO] ANTHROPIC_BASE_URL is not set in current shell (launcher wrapper will inject on demand).`);
   }
 
-  // 4. Kiểm tra cờ 1M
-  const is1M = fs.existsSync(flag1MPath);
-  const isCodex1M = fs.existsSync(flagCodex1MPath);
-  console.log(`[INFO] Active flags: Claude 1M=${is1M ? 'YES' : 'NO'}, Codex 1M=${isCodex1M ? 'YES' : 'NO'}`);
-
-  // 5. Kiểm tra file nạp môi trường
-  const hasEnvCmd = fs.existsSync(envCmdPath);
-  console.log(`[INFO] Universal environment loader: env.cmd=${hasEnvCmd ? 'READY' : 'PENDING'}`);
+  console.log(`[INFO] Active flags: Claude 1M=${fs.existsSync(paths.flag1M) ? 'YES' : 'NO'}, Codex 1M=${fs.existsSync(paths.flagCodex1M) ? 'YES' : 'NO'}`);
+  console.log(`[INFO] Universal environment loader: env.cmd=${fs.existsSync(paths.envCmd) ? 'READY' : 'PENDING'}`);
+  if (fs.existsSync(proxyLogPath)) console.log(`[INFO] Background proxy log: ${proxyLogPath}`);
 
   console.log('\n--- Intermediary Token Optimizers (Headroom / RTK / Ponytail) ---');
-  console.log(`If using a token compressor, ensure its upstream target is configured to http://127.0.0.1:${config.port}.`);
+  console.log(`If using a token compressor, ensure its upstream target is configured to http://127.0.0.1:${port}.`);
   console.log('LLM Switcher will act as the final edge gatekeeper to heal schemas, unlock 1M, and preserve thinking.');
 
   console.log(`\nDoctor summary: ${allHealthy ? 'ALL CHECKS PASSED (HEALTHY)' : 'ATTENTION RECOMMENDED (CHECK WARNINGS ABOVE)'}`);
 }
 
-const rawArg = (process.argv[2] || '').toLowerCase();
-const subArg = (process.argv[3] || '').toLowerCase();
+const [rawCmd = '', subArg = ''] = positionalArgs();
+const cmd = rawCmd.toLowerCase();
 
-if (rawArg === 'off' || rawArg === 'stop') {
-  await turnOff();
-} else if (rawArg === 'port' || rawArg === '-p') {
+if (cmd === 'off' || cmd === 'stop') {
+  await turnOff(subArg);
+} else if (cmd === 'port' || cmd === '-p') {
   await changePort(subArg);
-} else if (rawArg === 'doctor' || rawArg === 'audit') {
+} else if (cmd === 'doctor' || cmd === 'audit') {
   await runDoctor();
-} else if (rawArg === 'service' || rawArg === 'daemon') {
-  manageService(subArg || 'status');
-} else if (rawArg === 'claude' || rawArg === 'anthropic') {
-  await turnOn(subArg, 'anthropic');
-} else if (rawArg === 'codex' || rawArg === 'responses') {
-  await turnOn(subArg, 'responses');
-} else if (rawArg === 'openai' || rawArg === 'chat') {
-  await turnOn(subArg, 'openai-chat');
-} else if (rawArg === 'vertex') {
-  await turnOn(subArg, 'vertex');
-} else if (rawArg === 'ui' || rawArg === 'web' || rawArg === 'gui') {
+} else if (cmd === 'service' || cmd === 'daemon') {
+  await manageService(subArg.toLowerCase() || 'status');
+} else if (Object.hasOwn(TARGET_ALIASES, cmd)) {
+  await turnOn(subArg, TARGET_ALIASES[cmd]);
+} else if (cmd === 'ui' || cmd === 'web' || cmd === 'gui') {
   await openUI();
-} else if (rawArg === 'status' || rawArg === 'st') {
+} else if (cmd === 'status' || cmd === 'st') {
   await showStatus();
-} else if (rawArg === 'on' || rawArg === 'start') {
-  await turnOn(subArg || config.activeProfile || '9router');
-} else if (config.profiles[rawArg]) {
-  await turnOn(rawArg);
+} else if (cmd === 'on' || cmd === 'start') {
+  await turnOn(subArg);
+} else if (cmd && findProfileKey(config, rawCmd)) {
+  await turnOn(rawCmd);
 } else {
   console.log('Usage:');
   console.log('  switch ui                      # Open Web UI dashboard');
   console.log('  switch status                  # Show multi-CLI active status');
   console.log('  switch doctor                  # Audit environment, settings & routing');
-  console.log('  switch <profile>               # Switch active profile');
+  console.log('  switch on [profile]            # Start gateway & activate profile for all compatible targets');
+  console.log('  switch <profile>               # Activate profile for all compatible targets');
   console.log('  switch claude <profile>        # Set active profile for Claude Code');
   console.log('  switch codex <profile>         # Set active profile for Codex');
   console.log('  switch openai <profile>        # Set active profile for OpenAI Chat');
   console.log('  switch vertex <profile>        # Set active profile for Vertex');
+  console.log('  switch port <number>           # Change gateway port');
   console.log('  switch service install         # Install OS background autostart service');
   console.log('  switch service uninstall       # Uninstall background autostart service');
-  console.log('  switch off                     # Restore Official Subscription');
+  console.log('  switch off [target]            # Restore official endpoints (all, or one target)');
+  console.log('\nGlobal option: --port <n> (or env LLM_SWITCHER_PORT)');
 }

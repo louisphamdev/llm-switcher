@@ -70,11 +70,11 @@ LLM Switcher sits between the optimizer tool and the upstream LLM:
 
 ## Test Methodology & Verification Suite
 
-We created an automated verification suite in [`tests/test-optimizer-interop.mjs`](../tests/test-optimizer-interop.mjs) that systematically replicates the failure modes of each tool:
+We created an automated verification suite in [`tests/live-optimizer-interop.mjs`](../tests/live-optimizer-interop.mjs) that systematically replicates the failure modes of each tool:
 
 ### Running the Test Suite
 ```bash
-node tests/test-optimizer-interop.mjs
+node tests/live-optimizer-interop.mjs
 ```
 
 ### Live Test Results
