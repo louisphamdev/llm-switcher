@@ -26,6 +26,28 @@ test('anthropicToIR: explicit thinking disabled is not "restored" for reasoning 
   assert.equal(body.reasoning_effort, undefined);
 });
 
+test('anthropicToIR: Claude Code billing header is dropped from system (array and string forms)', () => {
+  const header = 'x-anthropic-billing-header: cc_version=2.1.275.f15; cc_entrypoint=cli;';
+  const fromArray = anthropicToIR({
+    model: 'x', messages: [{ role: 'user', content: 'hi' }],
+    system: [{ type: 'text', text: header }, { type: 'text', text: 'You are Claude Code.' }]
+  });
+  assert.equal(fromArray.system, 'You are Claude Code.');
+  const fromString = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], system: `${header}\n\nYou are Claude Code.` });
+  assert.equal(fromString.system, 'You are Claude Code.');
+  const body = irToChatBody(fromArray, 'ag/gemini-3.8-flash');
+  assert.ok(!JSON.stringify(body).includes('x-anthropic-billing-header'));
+});
+
+test('healAnthropicPayload: native Anthropic passthrough keeps the billing header', () => {
+  const header = 'x-anthropic-billing-header: cc_version=2.1.275.f15; cc_entrypoint=cli;';
+  const { payload } = healAnthropicPayload({
+    model: 'claude-opus-4-6', messages: [{ role: 'user', content: 'hi' }],
+    system: [{ type: 'text', text: header }, { type: 'text', text: 'You are Claude Code.' }]
+  });
+  assert.equal(payload.system[0].text, header);
+});
+
 test('chatToIR: reasoning_effort "none" disables thinking', () => {
   const ir = chatToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], reasoning_effort: 'none' });
   assert.equal(ir.thinking.type, 'disabled');
