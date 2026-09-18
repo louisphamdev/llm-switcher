@@ -40,7 +40,7 @@ Direct outbound calls from token compressors will break the developer environmen
    Many token compressors naively strip `thinking` parameters or reasoning budgets to reduce token count.
    - When routed through LLM Switcher, the gateway detects reasoning models (such as `ag/claude-opus-4-6-thinking` or `ag/gemini-3.8-flash`) and **automatically restores thinking parameters**, ensuring the model retains its full reasoning capabilities.
 3. **1M Context Window Unlocking:**
-   LLM Switcher dynamically injects `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` and calculates auto-compact thresholds (`900,000` tokens) without mutating permanent settings.
+   LLM Switcher dynamically injects `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` for every tier the profile marks 1M and calculates auto-compact thresholds (`900,000` tokens) without mutating permanent settings.
 4. **Centralized Gateway Connection (9Router):**
    LLM Switcher connects directly to server-side gateways like **9Router**, which manage multi-account pooling, quota tracking, load balancing, and rate-limit retries far better than any local tool.
 

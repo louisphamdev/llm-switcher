@@ -62,6 +62,22 @@ test('computeLaunchState derives flags per target profile, not from one global p
   assert.equal(computeLaunchState(off, 4000).active, false);
 });
 
+test('computeLaunchState tags [1m] per Claude tier from the profile model1M map, nothing hard-coded', () => {
+  const cfg = makeCfg();
+  cfg.profiles.router.model1M = { opus: true, sonnet: false, fable: true };
+  const env = Object.fromEntries(computeLaunchState(cfg, 4000).env);
+  assert.equal(env.ANTHROPIC_MODEL, 'opus[1m]');
+  assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'opus[1m]');
+  assert.equal(env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'fable[1m]');
+  assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
+  assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+  assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
+
+  cfg.profiles.router.model1M = {};
+  const none = Object.fromEntries(computeLaunchState(cfg, 4000).env);
+  assert.ok(!Object.keys(none).some(k => k.startsWith('ANTHROPIC_DEFAULT_') || k === 'ANTHROPIC_MODEL' || k === 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'));
+});
+
 test('helpers: case-insensitive lookup, key validation, port resolution, redaction', () => {
   const cfg = makeCfg();
   assert.equal(findProfileKey(cfg, 'CODEXONLY'), 'codexOnly');

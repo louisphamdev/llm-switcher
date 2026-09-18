@@ -184,7 +184,7 @@ flowchart LR
   - Khắc phục lỗi mồ côi `tool_result` do các công cụ nén token (RTK, Headroom, Ponytail) vô tình cắt mất turn `assistant` phía trước $\implies$ chống lỗi `HTTP 400 Bad Request`.
   - Tự động bù lại tham số `thinking` nếu tool ngoài cắt mất trên các reasoning model.
   - Gộp các turn cùng role liên tiếp để đáp ứng nghiêm ngặt luật xen kẽ lượt nói của Anthropic.
-- **Mở khoá Context 1,000,000 Tokens (1M):** Tự động thiết lập `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` và tính toán cửa sổ nén `CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000`, tích hợp badge cảnh báo trực quan cho model không hỗ trợ.
+- **Mở khoá Context 1,000,000 Tokens (1M):** Đi theo `model1M` của profile cho từng tier: tier nào bật 1M thì được `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (nên `/model sonnet`, đổi tier hay subagent vẫn giữ 1M; tier không bật thì ở 200K), kèm cửa sổ nén `CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000`, tích hợp badge cảnh báo trực quan cho model không hỗ trợ.
 - **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu endpoint hay key vào `~/.claude/settings.json` (chỉ gỡ các biến proxy cũ nếu có). Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
 - **Live Request / Response Inspector:** Bảng theo dõi thời gian thực ngay trên Web UI: xem độ trễ, token prompt/output, preview prompt câu hỏi và khối suy luận thinking.
 - **Cài đặt Daemon Service nền:** Cung cấp lệnh cài đặt gateway chạy ngầm tự khởi động cùng hệ điều hành trên Windows (Task Scheduler), macOS (launchd) và Linux (systemd).
@@ -258,11 +258,10 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
      SET /P M1M=<"path\to\llm-switcher\1m.flag"
      IF "!M1M!"=="" SET "M1M=opus[1m]"
      SET "ANTHROPIC_MODEL=!M1M!"
-     SET "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000"
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
-   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "path\to\llm-switcher\env.cmd"` rồi `claude %*`.
+   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "path\to\llm-switcher\env.cmd"` rồi `claude %*`. Chỉ `env.cmd` / `env.sh` mới có các biến `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` theo từng tier.
 
 ---
 

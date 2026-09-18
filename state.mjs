@@ -199,6 +199,8 @@ function writeOrRemove(file, content) {
   }
 }
 
+const CLAUDE_TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
+
 function claudeTier1M(profile) {
   const m = profile?.model1M || {};
   return m.opus ? 'opus[1m]' : m.sonnet ? 'sonnet[1m]' : m.fable ? 'fable[1m]' : null;
@@ -237,8 +239,14 @@ export function computeLaunchState(cfg, port) {
     state.env.push(['CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT', '1']);
     if (state.claude1M) {
       state.env.push(['ANTHROPIC_MODEL', state.claude1M]);
-      state.env.push(['CLAUDE_CODE_MAX_CONTEXT_TOKENS', '1000000']);
       state.env.push(['CLAUDE_CODE_AUTO_COMPACT_WINDOW', '900000']);
+    }
+    // Claude Code đọc `[1m]` theo từng biến: chỉ ANTHROPIC_MODEL mang hậu tố thì `/model sonnet`,
+    // đổi tier hay subagent gọi alias đều rơi về model Claude thật 200K. Gắn `<tier>[1m]` cho đúng
+    // các tier profile bật model1M; Claude Code khi đó gửi nguyên `opus`/`sonnet`/... nên proxy vẫn
+    // map theo profile đang active (đổi profile nóng không cần khởi động lại CLI).
+    for (const tier of CLAUDE_TIERS) {
+      if (claude.model1M?.[tier]) state.env.push([`ANTHROPIC_DEFAULT_${tier.toUpperCase()}_MODEL`, `${tier}[1m]`]);
     }
   }
   if (codex) {

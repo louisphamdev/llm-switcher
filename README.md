@@ -184,7 +184,7 @@ flowchart LR
   - Fixes orphaned `tool_result` blocks caused by aggressive prompt pruners (RTK, Headroom, Ponytail) before sending to Anthropic/OpenAI upstream.
   - Automatically restores thinking parameters if an intermediary tool stripped them.
   - Merges consecutive same-role turns to enforce strict alternating turn requirements.
-- **1M Context Window Unlocker:** Automatically sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` and calculates auto-compact thresholds (`900000`), with built-in visual risk warnings for unsupported models.
+- **1M Context Window Unlocker:** Follows the profile's `model1M` map per tier: every tier marked 1M gets `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (so `/model sonnet`, tier switches and subagents keep 1M, while unmarked tiers stay at 200K), plus auto-compact at `900000`, with built-in visual risk warnings for unsupported models.
 - **Zero Config Mutation:** Never writes endpoints or keys into `~/.claude/settings.json` (it only removes stale proxy variables, and only when present). Uses launcher flags and environment injection to prevent annoying provider warning banners.
 - **Live Request / Response Inspector:** Built-in dashboard tab displaying real-time requests, latency, token consumption, prompt previews, and thinking blocks.
 - **Native Background Service:** Install and run as an OS background daemon on Windows (Task Scheduler), macOS (launchd), or Linux (systemd).
@@ -258,11 +258,10 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
      SET /P M1M=<"path\to\llm-switcher\1m.flag"
      IF "!M1M!"=="" SET "M1M=opus[1m]"
      SET "ANTHROPIC_MODEL=!M1M!"
-     SET "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000"
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
-   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "path\to\llm-switcher\env.cmd"` and then `claude %*`.
+   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "path\to\llm-switcher\env.cmd"` and then `claude %*`. Only `env.cmd` / `env.sh` carry the per-tier `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` variables.
 
 ---
 
