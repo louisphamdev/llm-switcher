@@ -340,12 +340,6 @@ function baseIR() {
   };
 }
 
-const BILLING_HEADER_RE = /^x-anthropic-billing-header:[^\n]*(?:\r?\n)*/i;
-
-function stripBillingHeader(text) {
-  return typeof text === 'string' ? text.replace(BILLING_HEADER_RE, '') : '';
-}
-
 // Anthropic Messages API -> IR (logic port từ transformAnthropicToOpenAI cũ).
 function anthropicToIR(payload) {
   const ir = baseIR();
@@ -353,15 +347,11 @@ function anthropicToIR(payload) {
   // Anthropic API mặc định non-stream khi không có field `stream` (SDK bỏ trống field này cho messages.create).
   ir.stream = payload.stream === true;
 
-  // Claude Code chèn dòng `x-anthropic-billing-header: ...` vào đầu system — metadata cho Anthropic,
-  // không phải prompt. Khi dịch sang protocol khác phải bỏ (giống 9router), vì Google Antigravity
-  // gặp dòng này là trả 429 RESOURCE_EXHAUSTED giả dù quota còn. Nhánh anthropic->anthropic không
-  // đi qua IR nên header vẫn giữ nguyên cho upstream Anthropic thật.
   if (payload.system) {
-    if (typeof payload.system === 'string') ir.system = stripBillingHeader(payload.system);
+    if (typeof payload.system === 'string') ir.system = payload.system;
     else if (Array.isArray(payload.system)) {
       ir.system = payload.system
-        .map(s => stripBillingHeader(typeof s === 'string' ? s : s.text || s.content || ''))
+        .map(s => (typeof s === 'string' ? s : s.text || s.content || ''))
         .filter(Boolean)
         .join('\n\n');
     }
@@ -1238,9 +1228,19 @@ function toGeminiSchema(schema) {
   return out;
 }
 
+// Claude Code chèn dòng `x-anthropic-billing-header: ...` vào đầu system. Google Antigravity gặp
+// dòng này là trả 429 RESOURCE_EXHAUSTED giả dù quota còn, nên chỉ bỏ khi model đích là antigravity
+// (`ag/...`). Provider Claude của 9router vẫn cần header nên giữ nguyên cho mọi model khác.
+const BILLING_HEADER_RE = /^x-anthropic-billing-header:[^\n]*(?:\r?\n)*/i;
+
+function isAntigravityModel(model) {
+  return /^(ag|antigravity)\//i.test(String(model || ''));
+}
+
 function emitUpstreamBody(outFormat, ir, model, opts = {}) {
   // thinkingMode 'off' áp dụng cho mọi upstream: bỏ hẳn thinking của client.
-  const src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
+  let src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
+  if (isAntigravityModel(model) && src.system) src = { ...src, system: src.system.replace(BILLING_HEADER_RE, '') };
   switch (outFormat) {
     case 'anthropic': return irToAnthropicBody(src, model);
     case 'vertex': return irToVertexBody(src, model);

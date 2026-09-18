@@ -7,7 +7,7 @@ import {
   createUpstreamNormalizer, createCollector, createThinkTagSplitter,
   createAnthropicStream, createResponsesStream, createVertexStream,
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
-  buildResponsesMessage, createUpstreamNormalizer as makeNormalizer
+  buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -26,17 +26,20 @@ test('anthropicToIR: explicit thinking disabled is not "restored" for reasoning 
   assert.equal(body.reasoning_effort, undefined);
 });
 
-test('anthropicToIR: Claude Code billing header is dropped from system (array and string forms)', () => {
+test('emitUpstreamBody: billing header stripped only for antigravity (ag/) models', () => {
   const header = 'x-anthropic-billing-header: cc_version=2.1.275.f15; cc_entrypoint=cli;';
   const fromArray = anthropicToIR({
     model: 'x', messages: [{ role: 'user', content: 'hi' }],
     system: [{ type: 'text', text: header }, { type: 'text', text: 'You are Claude Code.' }]
   });
-  assert.equal(fromArray.system, 'You are Claude Code.');
   const fromString = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], system: `${header}\n\nYou are Claude Code.` });
-  assert.equal(fromString.system, 'You are Claude Code.');
-  const body = irToChatBody(fromArray, 'ag/gemini-3.8-flash');
-  assert.ok(!JSON.stringify(body).includes('x-anthropic-billing-header'));
+  for (const ir of [fromArray, fromString]) {
+    assert.equal(emitUpstreamBody('openai-chat', ir, 'ag/gemini-3.8-flash').messages[0].content, 'You are Claude Code.');
+    assert.equal(emitUpstreamBody('vertex', ir, 'antigravity/gemini-3.8-flash').systemInstruction.parts[0].text, 'You are Claude Code.');
+    for (const model of ['cc/claude-opus-4-7', 'claude-sonnet-4-6', 'openrouter/x-ai/grok']) {
+      assert.ok(emitUpstreamBody('openai-chat', ir, model).messages[0].content.startsWith(header), model);
+    }
+  }
 });
 
 test('healAnthropicPayload: native Anthropic passthrough keeps the billing header', () => {
