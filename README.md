@@ -373,8 +373,45 @@ switch vertex <profile>        # Set active profile specifically for Vertex / Ge
 switch port <number>           # Change the gateway port (restarts it if running)
 switch service install         # Install OS background autostart service (Windows / macOS / Linux)
 switch service uninstall       # Remove background autostart service
+switch shim install            # Auto-inject gateway env into resumed sessions (claude --resume)
+switch shim status             # Verify shims + detect running sessions that bypass the gateway
+switch shim uninstall          # Remove the launcher shims
 switch off [target]            # Deactivate gateway (or specific target) and restore official
 ```
+
+### Resumed sessions & the shim (important)
+
+`switch on` writes `env.sh` / `env.cmd` and deliberately **removes** proxy variables from
+`~/.claude/settings.json` — that keeps Claude Code from showing its "custom API" banner.
+The side effect: a CLI started from a shell that never sourced `env.sh` has **no**
+`ANTHROPIC_BASE_URL`, so it talks to the provider directly and skips the gateway
+(no Healer, no 1M unlock, no pooled quota). `claude --resume` in a fresh terminal is the
+classic case.
+
+The shim closes that hole. It installs tiny wrappers in `~/.llm-switcher/bin` that source
+`env.sh` and then `exec` the real binary:
+
+```bash
+switch shim install
+export PATH="$HOME/.llm-switcher/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
+switch shim status                            # verify
+```
+
+Behaviour:
+
+- **Gateway ON** → the wrapper injects the env, so every invocation (including `--resume`)
+  is routed through the gateway.
+- **Gateway OFF** (no `active.flag`) → the wrapper is fully transparent and runs the real
+  binary untouched; it never forces routing.
+- The real binary is located with the shim directory stripped from `PATH`, so it can never
+  call itself recursively. If no real binary is found it exits `127` with a clear message
+  instead of failing silently.
+- `settings.json` is left alone, so **no warning banner** appears.
+
+`switch on` installs the shims automatically and warns when `PATH` still needs the export
+line. `switch doctor` and `switch shim status` additionally scan running `claude`/`codex`
+processes and flag any that lack `ANTHROPIC_BASE_URL` — those sessions must be quit and
+re-opened from a shell where the shim is on `PATH`.
 
 ---
 
@@ -401,9 +438,9 @@ switch off [target]            # Deactivate gateway (or specific target) and res
       "apiKey": "sk-...",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
-        "sonnet": "ag/claude-sonnet-4-6",
-        "haiku": "ag/gemini-3.7-flash-high",
-        "fable": "ag/gemini-3.8-flash-high"
+        "sonnet": "ag/gemini-3.7-flash",
+        "haiku": "ag/gemini-3.6-flash-medium",
+        "fable": "ag/gemini-3.8-flash"
       },
       "model1M": {
         "opus": true,

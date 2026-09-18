@@ -8,6 +8,10 @@ import {
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState
 } from './state.mjs';
+import {
+  SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
+  suggestedRcFiles, auditRunningProcesses
+} from './shim.mjs';
 
 const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
 const proxyLogPath = path.join(ROOT_DIR, 'proxy.log');
@@ -224,6 +228,19 @@ async function turnOn(profileName, cliTarget) {
   await ensureProxyRunning(port);
   const st = applyLaunchState(config, port);
 
+  // Tự cài shim: nhờ nó, phiên `claude --resume` mở từ shell chưa source env.sh
+  // vẫn đi qua gateway. Không đụng settings.json nên Claude Code không hiện banner.
+  try {
+    const { installed } = installShims();
+    const sh = shimStatus();
+    if (installed.length) console.log(`\n[Shim] Installed launcher shims: ${installed.join(', ')}`);
+    if (!sh.onPath) {
+      console.log(`[Shim] NOT on PATH yet — resumed sessions will still bypass the gateway.`);
+      console.log(`       Add this line to ${suggestedRcFiles()[0]} and open a new terminal:`);
+      console.log(`           ${pathExportLine()}`);
+    }
+  } catch {}
+
   console.log(`\n[SUCCESS] Switched to profile "${profile.name || key}".`);
   printProfile(profile);
   console.log('\nActive targets:');
@@ -399,6 +416,61 @@ WantedBy=default.target
   console.log('Usage: switch service [install|uninstall]');
 }
 
+async function manageShim(action = 'status') {
+  const act = (action || 'status').toLowerCase();
+
+  if (act === 'install' || act === 'on') {
+    const { installed, skipped, error } = installShims();
+    if (error) { console.error(`[Error] ${error}`); process.exit(1); }
+    if (installed.length) console.log(`[OK] Installed shims: ${installed.join(', ')} → ${SHIM_DIR}`);
+    for (const s of skipped) console.log(`[SKIP] ${s.name}: ${s.reason}`);
+
+    const st = shimStatus();
+    if (!st.onPath) {
+      console.log(`\n[ACTION REQUIRED] Add the shim dir to PATH so it precedes the real binaries:`);
+      console.log(`    ${pathExportLine()}`);
+      console.log(`\nAppend that line to one of:`);
+      for (const rc of suggestedRcFiles()) console.log(`    ${rc}`);
+      console.log(`\nThen open a new terminal (or 'exec $SHELL') and verify:`);
+      console.log(`    switch shim status`);
+    } else {
+      console.log(`\n[PASS] ${SHIM_DIR} is already on PATH (position ${st.position}).`);
+      console.log(`Resumed sessions ('claude --resume') now route through the gateway automatically.`);
+    }
+    return;
+  }
+
+  if (act === 'uninstall' || act === 'off' || act === 'remove') {
+    const { removed } = uninstallShims();
+    console.log(removed.length ? `[OK] Removed shims: ${removed.join(', ')}` : '[INFO] No switcher shims found.');
+    console.log(`You may also remove the PATH line for ${SHIM_DIR} from your shell rc.`);
+    return;
+  }
+
+  // status
+  const st = shimStatus();
+  console.log('=== Shim status (auto-inject for resumed sessions) ===\n');
+  console.log(`Shim dir: ${st.dir}`);
+  console.log(`On PATH : ${st.onPath ? `YES (position ${st.position})` : 'NO'}`);
+  if (!st.onPath) console.log(`          Add: ${pathExportLine()}`);
+  console.log('');
+  for (const s of st.shims) {
+    if (!s.installed) { console.log(`[MISS] ${s.name}: shim not installed — run 'switch shim install'`); continue; }
+    if (s.active) console.log(`[PASS] ${s.name}: shim active → ${s.effective}`);
+    else console.log(`[WARN] ${s.name}: shim installed but '${s.name}' resolves to ${s.effective || '(not found)'} — PATH order wrong`);
+  }
+
+  const audit = auditRunningProcesses();
+  if (audit.supported && audit.procs.length) {
+    console.log('\n--- Running CLI processes ---');
+    for (const p of audit.procs) {
+      if (p.hasEnv === true) console.log(`[PASS] pid ${p.pid}: has ANTHROPIC_BASE_URL`);
+      else if (p.hasEnv === false) console.log(`[ALERT] pid ${p.pid}: NO gateway env — this session bypasses the gateway!\n        ${p.cmd}\n        Fix: quit it and re-run from a shell where the shim is on PATH.`);
+      else console.log(`[INFO] pid ${p.pid}: cannot read env (permission)`);
+    }
+  }
+}
+
 async function runDoctor() {
   const port = getTargetPort();
   console.log('=== LLM Switcher System Doctor ===\n');
@@ -461,6 +533,33 @@ async function runDoctor() {
   console.log(`[INFO] Universal environment loader: env.cmd=${fs.existsSync(paths.envCmd) ? 'READY' : 'PENDING'}`);
   if (fs.existsSync(proxyLogPath)) console.log(`[INFO] Background proxy log: ${proxyLogPath}`);
 
+  // 6. Shim — lớp bảo đảm cho phiên resume / shell chưa source env.sh
+  console.log('\n--- Launcher shims (resumed sessions) ---');
+  const sh = shimStatus();
+  if (!sh.onPath) {
+    warn(`[WARN] ${SHIM_DIR} is not on PATH — 'claude --resume' from a clean shell will BYPASS the gateway.`);
+    console.log(`       Fix: switch shim install   then add:  ${pathExportLine()}`);
+  } else {
+    console.log(`[PASS] Shim dir on PATH (position ${sh.position}).`);
+  }
+  for (const s of sh.shims) {
+    if (!s.installed) warn(`[WARN] No shim for '${s.name}' — run 'switch shim install'.`);
+    else if (!s.active) warn(`[WARN] '${s.name}' resolves to ${s.effective || '(not found)'} instead of the shim — PATH order wrong.`);
+    else console.log(`[PASS] '${s.name}' routed through shim.`);
+  }
+
+  // 7. Process đang chạy mà thiếu env => phiên đó đang gọi thẳng nhà cung cấp
+  const audit = auditRunningProcesses();
+  if (audit.supported && audit.procs.length) {
+    for (const p of audit.procs) {
+      if (p.hasEnv === false) {
+        warn(`[ALERT] pid ${p.pid} has NO gateway env — that session bypasses the gateway.`);
+        console.log(`        ${p.cmd}`);
+        console.log(`        Fix: quit it, then re-run from a shell where the shim is on PATH.`);
+      }
+    }
+  }
+
   console.log('\n--- Intermediary Token Optimizers (Headroom / RTK / Ponytail) ---');
   console.log(`If using a token compressor, ensure its upstream target is configured to http://127.0.0.1:${port}.`);
   console.log('LLM Switcher will act as the final edge gatekeeper to heal schemas, unlock 1M, and preserve thinking.');
@@ -479,6 +578,8 @@ if (cmd === 'off' || cmd === 'stop') {
   await runDoctor();
 } else if (cmd === 'service' || cmd === 'daemon') {
   await manageService(subArg.toLowerCase() || 'status');
+} else if (cmd === 'shim' || cmd === 'shims') {
+  await manageShim(subArg.toLowerCase() || 'status');
 } else if (Object.hasOwn(TARGET_ALIASES, cmd)) {
   await turnOn(subArg, TARGET_ALIASES[cmd]);
 } else if (cmd === 'ui' || cmd === 'web' || cmd === 'gui') {
@@ -503,6 +604,9 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch port <number>           # Change gateway port');
   console.log('  switch service install         # Install OS background autostart service');
   console.log('  switch service uninstall       # Uninstall background autostart service');
+  console.log('  switch shim install            # Auto-inject env into resumed sessions (claude --resume)');
+  console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');
+  console.log('  switch shim uninstall          # Remove launcher shims');
   console.log('  switch off [target]            # Restore official endpoints (all, or one target)');
   console.log('\nGlobal option: --port <n> (or env LLM_SWITCHER_PORT)');
 }

@@ -17,9 +17,9 @@
       "apiKey": "sk-REPLACE-ME",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
-        "sonnet": "ag/claude-sonnet-4-6",
-        "haiku": "ag/gemini-3.7-flash-high",
-        "fable": "ag/gemini-3.8-flash-high"
+        "sonnet": "ag/gemini-3.7-flash",
+        "haiku": "ag/gemini-3.6-flash-medium",
+        "fable": "ag/gemini-3.8-flash"
       },
       "model1M": {
         "opus": true,

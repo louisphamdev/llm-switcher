@@ -38,7 +38,7 @@ Direct outbound calls from token compressors will break the developer environmen
    - **LLM Switcher** intercepts these malformed requests and runs its **Healer Engine**, automatically converting orphaned results into safe context text blocks and merging consecutive same-role turns so upstream providers accept the payload cleanly.
 2. **Thinking / Reasoning Protection:**
    Many token compressors naively strip `thinking` parameters or reasoning budgets to reduce token count.
-   - When routed through LLM Switcher, the gateway detects reasoning models (such as `ag/claude-opus-4-6-thinking` or `ag/gemini-3.8-flash-high`) and **automatically restores thinking parameters**, ensuring the model retains its full reasoning capabilities.
+   - When routed through LLM Switcher, the gateway detects reasoning models (such as `ag/claude-opus-4-6-thinking` or `ag/gemini-3.8-flash`) and **automatically restores thinking parameters**, ensuring the model retains its full reasoning capabilities.
 3. **1M Context Window Unlocking:**
    LLM Switcher dynamically injects `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` and calculates auto-compact thresholds (`900,000` tokens) without mutating permanent settings.
 4. **Centralized Gateway Connection (9Router):**

@@ -373,8 +373,43 @@ switch vertex <profile>        # Đặt profile kích hoạt riêng cho Vertex /
 switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
 switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy
 switch service uninstall       # Gỡ bỏ service chạy ngầm
+switch shim install            # Tự nạp env gateway cho phiên mở lại (claude --resume)
+switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
+switch shim uninstall          # Gỡ shim khỏi launcher
 switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) và quay về gói Official
 ```
+
+### Phiên mở lại (`--resume`) và cơ chế shim — quan trọng
+
+`switch on` ghi `env.sh` / `env.cmd` và **chủ động xoá** các biến proxy khỏi
+`~/.claude/settings.json` để Claude Code không hiện banner "custom API". Hệ quả: một CLI
+khởi chạy từ shell **chưa** source `env.sh` sẽ không có `ANTHROPIC_BASE_URL`, nên gọi
+thẳng nhà cung cấp và bỏ qua gateway (mất Healer, mất 1M, mất quota gộp). Trường hợp kinh
+điển là `claude --resume` mở lại phiên cũ trong terminal sạch.
+
+Shim bịt đúng lỗ đó. Nó cài wrapper nhỏ vào `~/.llm-switcher/bin`, wrapper source `env.sh`
+rồi `exec` binary thật:
+
+```bash
+switch shim install
+export PATH="$HOME/.llm-switcher/bin:$PATH"   # thêm vào ~/.zshrc hoặc ~/.bashrc
+switch shim status                            # kiểm tra lại
+```
+
+Cách hoạt động:
+
+- **Gateway BẬT** → wrapper nạp env, nên mọi lần gọi (kể cả `--resume`) đều qua gateway.
+- **Gateway TẮT** (không có `active.flag`) → wrapper trong suốt hoàn toàn, chạy binary thật
+  nguyên trạng, không ép định tuyến.
+- Wrapper tìm binary thật sau khi **loại thư mục shim khỏi `PATH`**, nên không bao giờ tự
+  gọi đệ quy chính nó. Không tìm thấy binary thật thì thoát mã `127` kèm thông báo rõ ràng,
+  không im lặng.
+- Không đụng `settings.json`, nên **không hiện banner cảnh báo**.
+
+`switch on` tự cài shim và nhắc nếu `PATH` còn thiếu dòng export. Ngoài ra `switch doctor`
+và `switch shim status` còn quét các tiến trình `claude`/`codex` đang chạy và cảnh báo
+tiến trình nào thiếu `ANTHROPIC_BASE_URL` — phiên đó phải thoát và mở lại từ shell có shim
+trong `PATH`.
 
 ---
 
@@ -401,9 +436,9 @@ switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) v�
       "apiKey": "sk-...",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
-        "sonnet": "ag/claude-sonnet-4-6",
-        "haiku": "ag/gemini-3.7-flash-high",
-        "fable": "ag/gemini-3.8-flash-high"
+        "sonnet": "ag/gemini-3.7-flash",
+        "haiku": "ag/gemini-3.6-flash-medium",
+        "fable": "ag/gemini-3.8-flash"
       },
       "model1M": {
         "opus": true,
