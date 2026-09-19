@@ -278,16 +278,23 @@ function smartDelta(choice) {
 }
 
 function sanitizeJsonSchema(schema) {
-  if (!schema || typeof schema !== 'object') return schema;
+  if (!schema) return { type: 'object', properties: {} };
+  if (typeof schema === 'string') {
+    return schema;
+  }
+  if (typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeJsonSchema);
   const clean = {};
   for (const [k, v] of Object.entries(schema)) {
-    if (k === '$schema' || k === 'cache_control') continue;
+    if (k === '$schema' || k === 'cache_control' || k === 'encrypted') continue;
     if (k === 'format' && ['uri', 'uri-reference'].includes(v)) continue;
     clean[k] = sanitizeJsonSchema(v);
   }
   if (!clean.type && clean.properties) {
     clean.type = 'object';
+  }
+  if (clean.type === 'object' && !clean.properties) {
+    clean.properties = {};
   }
   return clean;
 }
@@ -1221,6 +1228,7 @@ function toGeminiSchema(schema) {
     }
   }
   if (!out.type && out.properties) out.type = 'object';
+  if (out.type === 'object' && !out.properties) out.properties = {};
   if (out.enum && !out.type) out.type = 'string';
   if (out.enum && out.type !== 'string') delete out.enum; // Gemini only supports enum for strings
   if (Array.isArray(out.required) && out.properties) {

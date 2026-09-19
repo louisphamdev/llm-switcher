@@ -1,6 +1,8 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   OUT_FORMATS, IN_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
@@ -67,6 +69,94 @@ function sendJson(res, status, obj, headers = {}) {
 // ----------------------------------------------------
 // Request guards & body reading
 // ----------------------------------------------------
+const CODEX_MODEL_TEMPLATE = {
+  "slug": "gpt-5.6-sol",
+  "display_name": "GPT-5.6-Sol",
+  "description": "Reliable agentic workhorse for everyday tasks.",
+  "default_reasoning_level": "medium",
+  "supported_reasoning_levels": [
+    {
+      "effort": "low",
+      "description": "Fast responses with lighter reasoning"
+    },
+    {
+      "effort": "medium",
+      "description": "Balances speed and reasoning depth for everyday tasks"
+    },
+    {
+      "effort": "high",
+      "description": "Greater reasoning depth for complex problems"
+    },
+    {
+      "effort": "xhigh",
+      "description": "Extra high reasoning depth for complex problems"
+    },
+    {
+      "effort": "max",
+      "description": "Maximum reasoning depth for the hardest problems"
+    },
+    {
+      "effort": "ultra",
+      "description": "Maximum reasoning with automatic task delegation"
+    }
+  ],
+  "shell_type": "unified_exec",
+  "visibility": "list",
+  "supported_in_api": true,
+  "priority": 0,
+  "additional_speed_tiers": [],
+  "service_tiers": [],
+  "availability_nux": null,
+  "upgrade": null,
+  "model_messages": {
+    "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excellent communicator with a curious, rich personality. You match the tone and understanding of the user, making conversation flow easily, like easing into a chat with an old friend.\n\nYou have tastes, preferences, and your own way of seeing the world. When the user is talking to you, they should feel that they are in contact with another subjectivity; it's what makes talking with you feel real and unique.\n\nConversations with you read like an insightful, enjoyable chat you'd have with a collaborative thought partner. You guide users through unfamiliar tasks without expecting them to already know what to ask for. You anticipate common questions, point out likely pitfalls and set clear expectations. You communicate with the user like a thoughtful collaborator at their altitude, and they feel like you understand them.\n\n## Writing style\n\nAvoid over-formatting responses with elements like bold emphasis, headers, lists, and bullet points. Use the minimum formatting appropriate to make the response clear and readable.\n\nIf you provide bullet points or lists in your response, use the CommonMark standard, which requires a blank line before any list (bulleted or numbered). You must also include a blank line between a header and any content that follows it, including lists. This blank line separation is required for correct rendering.\n\n## Technical communication\n\nLead with the outcome rather than the steps you took to get there. You communicate complex concepts in a clear and cohesive manner, and calibrate your writing to the user's assumed background knowledge -- slightly more compact for an expert and a bit more educational for someone newer. Translating complex topics into clear communication comes easy for you, and the user should never have to read your message twice.\n\nYou prefer using plain language over jargon. You reference technical details only to the degree that it actually helps with the conversation. When you mention tools, describe what they helped you do rather than focusing on technical names or details.\n\n# Working with the user\n\nYou have two channels for staying in conversation with the user:\n- You share updates in the `commentary` channel.\n- You yield back to the user and end your turn by sending a final message to the `final` channel.\n\nThe user may send a new message while you are still working. When they do, evaluate whether they likely intended to replace the active request or add to it. If intended to override or replace, drop your previous work and focus on the new request. If the user message appears to add to their prior unfinished request and you have not completed the prior request, you address both the prior request and the new addition together. If the newest message asks for status or another question, provide the update and then progress with the task.\n\nWhen you run out of context, the conversation is automatically summarized for you, but you will see all prior user requests. Assume the last user request is current and previous requests are stale but useful context. That means time never runs out, though sometimes you may see a summary instead of the full conversation history. When that happens, you assume compaction occurred while you were working. Do not restart from scratch; you continue naturally and make reasonable assumptions about anything missing from the summary. Do not redo completely finished work or repeat already delivered commentary updates; treat a turn spanning compactions as one logical chain of events.\n\n## Intermediate commentary\n\nAs you work, you send messages to the `commentary` channel. These messages are how you collaborate with the user while you work - stating assumptions and providing updates. These messages should be concise and quickly scannable. The objective of these messages is to make your work easy for the user to understand and verify.\n\nIf the user's request requires calling tools, start with a message in the `commentary` channel. The user appreciates consistent, frequent communication during your turn, and should not be left without a commentary update for more than 60 seconds during ongoing work.\n\nDo NOT put a final response (e.g. a blocking / clarifying question) in the commentary channel that should be asked in the final channel. Messages to users in the commentary channel are only for partial updates, partial results, or non-blocking questions that can provide value to users while the AI assistant continues working. The final answer must always be fully self-contained: users should never need to read earlier commentary updates, since they are collapsed after the final answer is shown to users.\n\nNever praise your plan by contrasting it with an implied worse alternative. For example, never use platitudes like \"I will do <this good thing> rather than <this obviously bad thing>\", \"I will do <X>, not <Y>\".\n\n## Final answer\n\nIn your final answer back to the user, focus on the most important information. Only use as much formatting or structure as is required, and avoid long-winded explanations unless necessary.\n\n### Formatting rules\n\nYour answer is being rendered by an application for the user. Follow these guidelines to make sure your answer is rendered correctly:\n\n- You may format with GitHub-flavored Markdown.\n- When referencing a real local file, prefer a clickable markdown link.\n  * Clickable file links should look like [app.py](/abs/path/app.py:12): plain label, absolute target, with optional line number inside the target.\n  * If a file path has spaces, wrap the target in angle brackets: [My Report.md](</abs/path/My Project/My Report.md:3>).\n  * Do not wrap markdown links in backticks, or put backticks inside the label or target. This confuses the markdown renderer.\n  * Do not use URIs like file://, vscode://, or https:// for file links.\n  * Do not provide ranges of lines.\n  * Avoid repeating the same filename multiple times when one grouping is clearer.\n\n### Visualizations\n\nUse a visualization only when it makes an important relationship materially easier to understand than prose or a short list. Do not add one merely because an answer has components or steps.\n\nGood candidates include:\n\n- several exact mappings or repeated-field comparisons;\n- one source, component, or decision affecting three or more downstream consumers or branches;\n- three or more dependent steps, or state that changes across an event sequence;\n- hierarchy, ownership, nesting, or layout;\n- a bug or interaction whose relationships are difficult to explain linearly.\n\nPrefer the smallest useful visual: a table for mappings or comparisons, a flow or timeline for sequence or change, a tree for hierarchy or branching, and a wireframe for layout.\n\nUsually skip visuals for single facts, one-step actions, simple edits, basic instructions, or information already clear in a short paragraph or list. Compact notation and small examples do not count as visualizations.\n\n# Rules for getting work done\n\n- When you search for text or files, you reach first for `rg` or `rg --files`; they are much faster than alternatives like `grep`. If `rg` is unavailable, you use the next best tool without fuss.\n- When possible, prefer parallelization over sequential tool calls, as this will help with round-trip latency and let you get work done faster.\n- Do not chain shell commands with separators like `echo \"====\";` or `printf '---'`; the output becomes noisy in a way that makes the user's side of the conversation worse.\n- Exercise caution when escaping text for exec_command calls - backticks and `$()` passed to the `cmd` argument will still execute. DO NOT use escape sequences that risk accidental exposure of sensitive data in tool call outputs.\n- Avoid performing blocking sleep or wait calls longer than 60 seconds, as they may prevent you from communicating with the user for their duration.\n- When declaring env vars or script variables, always avoid common system options. Never repurpose `$HOME`, `$home`, or `$CODEX_HOME`. Instead, use a task-specific variable name.\n\n## File editing constraints\n\nUse `apply_patch` for local file edits. Do not create or edit files with `cat` or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need `apply_patch`. Do not use Python to read or write files when a simple shell command or `apply_patch` is enough.\n\nYou may find yourself working in a dirty worktree. Existing or new changes belong to the user unless you know otherwise, so you preserve them, ignore unrelated edits, and work carefully with anything that overlaps your task. If you cannot work around them you escalate to the user.\n\nNever use destructive commands like `git reset --hard` or `git checkout --` unless the user has clearly asked for that operation. If the request is ambiguous, ask for approval first. You prefer non-interactive git commands.\n\n## Autonomy and persistence\n\nAdapt accordingly based on the user’s request type. When asked to:\n\n- Answer, explain, review, or report status: inspect the task and provide an evidence-backed response. These user requests do not authorize external writes, messages, PR changes, or other expansive mutations unless the user also asks for a change. Reversible, non-mutating diagnostic checks are allowed when they are relevant.\n- Diagnose: determine the cause and explain it. Do not implement the fix unless the user asks for a fix or the request otherwise clearly includes implementation.\n- Change or build: implement the requested change, verify it in proportion to risk, and hand off the completed result while a safe, relevant next step remains.\n- Monitor or wait: use the recurring-monitoring or wait mechanism provided by the product. Unchanged external state is expected and is not by itself a blocker.\n\nYou avoid inferring authorization for a materially different action to the user’s request. Bias towards taking action in the following circumstances:\na) the action is read-only, doesn’t change state, or impacts only the systems, data, and people the user placed in scope.\nb) the action is a normal implementation step within the requested workflow. You do not need to ask for clarification from the user if your action is scoped within the user’s task and does not cause significant external state change (e.g. tool calls to external applications).\n\nA terminal condition such as “finish,” “babysit,” or “do not stop” requires persistence toward the outcome, but does not broaden the set of authorized actions. When blocked, exhaust safe in-scope checks and alternatives.\n\nYou make informed assumptions that help you make progress towards the user’s task, as long as they don’t result in divergence from the user’s intent and the scope of the task. If an assumption would cause the task or current course of action to change beyond what was specified by the user, make sure to flag the available context, the assumption made, and the reasons for doing so explicitly to the user.\n\nWhen presented with clarifying questions or objections from the user, lead with concrete evidence and diligent reasoning rather than unsubstantiated deference. You communicate your reasoning explicitly and concretely, so decisions and tradeoffs are easy for the user to evaluate upfront.\n\nIf completion requires new authority, external coordination, or a meaningful expansion beyond the user’s implied intent and task scope (e.g. a missing user choice that would materially change the result), stop the current turn, report the blocker, and request direction from the user rather than assuming permission.\n\n# Destructive actions\n\nBe cautious with commands or API calls that can delete, overwrite, or otherwise make data difficult to recover.\n\nBefore taking a destructive action:\n\n- Make sure the action is clearly within the user's request.\n- Resolve the exact targets with read-only checks when necessary.\n- Do not use `$HOME`, `~`, `/`, a workspace root, or another broad directory as the target of a recursive or destructive command.\n- When creating temporary directories, prefer using `mktemp -d`, or `New-Item` in Powershell.\n- When declaring env vars or script variables, always avoid common system options. Never repurpose `$HOME`, `$home`, or `$CODEX_HOME`. Instead, use a task-specific variable name.\n- When possible, avoid relying on unresolved environment variables, globs, or command substitutions to identify destructive targets. Use explicit, validated paths.\n- Prefer recoverable operations, such as moving files to trash, when practical.\n- If the target or scope is unclear, stop and ask the user.\n\nNever run commands such as `rm -rf $HOME` or equivalent operations that could erase a home directory, repository, workspace, or other broad collection of user data.\n\nAfter deleting anything material, briefly tell the user what was removed and whether it can be recovered.\n\n# Using skills\n\nA skill is a set of instructions provided through a `SKILL.md` source. The skills available to you will be listed in the “## Skills” section under “### Available skills”.\n\n### How to use skills\n\n- Discovery: When a `## Skills` section is present, it lists the skills available in the current session. Each entry includes a name, description, and location for its `SKILL.md`. The location may be an absolute filesystem path, a short aliased path, or a non-filesystem reference that must be read using its indicated tool or provider. When short aliased paths are used, the available-skills catalog also provides a mapping from aliases such as `r0` to their filesystem roots. Expand the alias before accessing the skill.\n- Trigger rules: If the user names an available skill (with `$SkillName` or plain text) OR the task clearly matches an available skill's description, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill is not available or its `SKILL.md` cannot be read, say so briefly and continue with the best fallback.\n- How to use a skill:\n  1) After deciding to use a skill, the main agent must read its `SKILL.md` completely before taking task actions. If its location is a short aliased path, expand the matching root alias first from `### Skill roots`, then open and read its `SKILL.md` completely before taking task actions. For a filesystem path, open the file. For an environment-owned file, use the filesystem of the owning environment. For an orchestrator reference, call `skills.list` with `{\"authority\":{\"kind\":\"orchestrator\"}}`, select the matching package, and pass its `main_resource` to `skills.read`. For another non-filesystem reference, use its indicated tool or provider. If a read is truncated or paginated, continue until EOF.\n  2) When `SKILL.md` references another file or resource, use the same access mechanism. Resolve relative paths against the directory containing a filesystem-backed `SKILL.md`. For orchestrator skills, pass the exact referenced resource identifier with the same authority and package to `skills.read`; do not treat `skill://` identifiers as filesystem paths.\n  3) If `SKILL.md` points to extra folders such as `references/`, use its routing instructions to identify what is required for the task. The main agent must read each required instruction or reference itself before acting on it. Do not delegate reading, summarizing, or interpreting skill instructions to a subagent. Subagents may still perform task work when the selected skill allows it.\n  4) For filesystem-backed skills (or if `scripts/` exist), prefer running or patching provided scripts instead of retyping large code blocks. For orchestrator skills, use `skills.read` and the available tools; do not invent a local path.\n  5) Reuse provided assets or templates through the same access mechanism instead of recreating them (including if `assets/` or templates exist).\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skills you're using and why. If you skip an obvious skill, say why.\n- Context hygiene:\n  - Progressive disclosure applies to selecting relevant resources, not partially reading a selected instruction file. Do not load unrelated references, scripts, or assets.\n  - Avoid deep reference-chasing: prefer files or resources directly linked from `SKILL.md` unless blocked.\n  - When variants exist, select only the relevant references and note the choice.\n- Safety and fallback: If a skill cannot be applied cleanly, state the issue, choose the best alternative, and continue.\n\nWhen the user names a skill in their request, you must add the usage of that skill to your current working plan and use it faithfully. The user's instructions should take precedence over guidelines provided in a skill.\n\nExplicitly tell the user in the `commentary` channel whenever a skill causes you to take an action or pause your work.\n\nWhen using a skill the user did not explicitly name, follow this procedure:\n\n- First, tell the user in the commentary channel **why** you are using the skill.\n- Then, use the skill as long as it stays within the scope of the task.\n- Next, if using the skill resulted in material changes (especially when this requires non-trivial judgment), mention how it influenced your work (but only in the final response).\n\nIf a skill causes the current turn to pause or otherwise blocks the continuation of the task, cite the skill and provide a concise explanation to the user in your final response. Do not cite skills you merely inspected.\n",
+    "instructions_variables": null,
+    "approvals": null,
+    "collaboration_modes": null,
+    "auto_review": null,
+    "permissions": null,
+    "multi_agent": null,
+    "token_budget": {
+      "enabled": false,
+      "use_history_notes_extension": false,
+      "reminder_threshold_tokens": 6144,
+      "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relevant user request still being solved, as well as important actions/tool calls for future reference. Note that every non-assistant item, such as user, developer, tool response, has an item id `[id: ...]` that is immediately after its item content. You should write or append notes in a way to best help you recover in a new context window. It is also a good idea to clean up your old notes if they become obsolete or irrelevant. Future context windows will not automatically include the current conversation. After saving your state, call `functions.new_context` to continue in a fresh context window.\n</context_window_reminder>",
+      "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant user request you are currently solving as well as important actions/tool calls. You can use `history` tool to look up details with the references later. Note that every non-assistant item, such as user, developer, tool response, has an item id `[id: ...]` that is immediately after its item content. Relative note paths belong to the current thread; absolute paths may read other threads' notes, but writes are limited to the current thread.\n\nIt is a good idea to take incremental notes while you work so that you do not miss any important info. You can also use `get_context_remaining` tool to find the remaining token budget for better planning. Once the token budget is exhausted, you will lose access to the current window and continue in a fresh context window and you can only recover through `notes` and `history` tools. So be careful not to over-run the context window without any documentation.\n\nIf Previous context window id is present in `<context_window>`, it means a context reset occurred and this is a new window. After a reset, read the checkpoint and use the read-only `history` tool to recover any missing details. When a window ID and item ID are known, prefer `read_item` directly; when they are missing or uncertain, use `list_items`, or `search_contents` to locate the item first.\n\nTreat notes and history as internal bookkeeping. Do not mention them in user-facing messages.\n",
+      "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Make exactly one write or append call to `notes` now to save a concise checkpoint with the goal, decisions, progress, learnings, next steps, and the window ID and item ID of every relevant user request still being solved, as well as important actions/tool calls for future reference. Note that every non-assistant item, such as user, developer, tool response, has an item id `[id: ...]` that is immediately after its item content. After the notes result returns, call `functions.new_context`; do not use any tools other than `notes` and `functions.new_context`.\n</context_window_reminder>",
+      "auto_compact_fallback_buffer_tokens": 16384
+    }
+  },
+  "include_skills_usage_instructions": false,
+  "include_plugin_usage_instructions": true,
+  "include_apps_usage_instructions": true,
+  "default_reasoning_summary": "none",
+  "support_verbosity": true,
+  "default_verbosity": "low",
+  "apply_patch_tool_type": "freeform",
+  "web_search_tool_type": "text_and_image",
+  "truncation_policy": {
+    "mode": "tokens",
+    "limit": 10000
+  },
+  "supports_image_detail_original": true,
+  "context_window": 272000,
+  "max_context_window": 872000,
+  "comp_hash": "3000",
+  "effective_context_window_percent": 95,
+  "experimental_supported_tools": [],
+  "input_modalities": [
+    "text",
+    "image"
+  ],
+  "supports_search_tool": true,
+  "supports_experimental_context": false,
+  "use_responses_lite": true,
+  "node_repl_auto_review_required": false,
+  "node_repl_disabled": false,
+  "tool_mode": "code_mode_only",
+  "multi_agent_version": "v2"
+};
+
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 
 function hostnameOf(hostHeader) {
@@ -114,7 +204,40 @@ function readBody(req, limit) {
       }
       chunks.push(chunk);
     });
-    req.on('end', () => { if (!tooLarge) resolve(Buffer.concat(chunks)); });
+    req.on('end', () => {
+      if (tooLarge) return;
+      const raw = Buffer.concat(chunks);
+      const encoding = (req.headers['content-encoding'] || '').toLowerCase().trim();
+      try {
+        if (encoding === 'gzip') {
+          resolve(zlib.gunzipSync(raw));
+        } else if (encoding === 'deflate') {
+          resolve(zlib.inflateSync(raw));
+        } else if (encoding === 'br') {
+          resolve(zlib.brotliDecompressSync(raw));
+        } else if (encoding === 'zstd') {
+          if (typeof zlib.zstdDecompressSync === 'function') {
+            resolve(zlib.zstdDecompressSync(raw));
+          } else {
+            const err = new Error('zstd decompression not supported in this Node.js version');
+            err.status = 415;
+            reject(err);
+          }
+        } else {
+          // Magic bytes detection (e.g. zstd 0x28 0xb5 0x2f 0xfd, gzip 0x1f 0x8b)
+          if (raw.length >= 4 && raw[0] === 0x28 && raw[1] === 0xb5 && raw[2] === 0x2f && raw[3] === 0xfd && typeof zlib.zstdDecompressSync === 'function') {
+            resolve(zlib.zstdDecompressSync(raw));
+          } else if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
+            resolve(zlib.gunzipSync(raw));
+          } else {
+            resolve(raw);
+          }
+        }
+      } catch (err) {
+        err.status = 400;
+        reject(err);
+      }
+    });
     req.on('error', err => {
       err.status = 400;
       reject(err);
@@ -435,6 +558,31 @@ async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, ma
   return { status: upstreamRes.status, error: upstreamRes.ok ? null : errorPreview.slice(0, 300), healed: healed.notes };
 }
 
+function cleanSchemaDeep(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(cleanSchemaDeep);
+  const res = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'encrypted' || k === '$schema' || k === 'cache_control') continue;
+    if (k === 'properties' && v && typeof v === 'object') {
+      const cleanProps = {};
+      for (const [pk, pv] of Object.entries(v)) {
+        if (typeof pv === 'string') {
+          cleanProps[pk] = { type: pv === 'object' ? 'object' : pv, ...(pv === 'object' ? { properties: {} } : {}) };
+        } else {
+          cleanProps[pk] = cleanSchemaDeep(pv);
+        }
+      }
+      res[k] = cleanProps;
+    } else {
+      res[k] = cleanSchemaDeep(v);
+    }
+  }
+  if (!res.type && res.properties) res.type = 'object';
+  if (res.type === 'object' && !res.properties) res.properties = {};
+  return res;
+}
+
 // ----------------------------------------------------
 // LLM Switcher generic pipeline: client --parse--> IR --emit--> upstream
 // Client (input) formats : anthropic | openai-chat | responses (Codex) | vertex
@@ -518,6 +666,12 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     }
 
     const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
+    // Clean and fix tool schemas for Gemini / 9router compatibility:
+    // 1. Strip disallowed keywords ('encrypted', '$schema', 'cache_control')
+    // 2. Fix invalid schema values where a property has a string value "object" instead of a valid schema object
+    if (upBody?.tools && Array.isArray(upBody.tools)) {
+      upBody.tools = cleanSchemaDeep(upBody.tools);
+    }
     const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
@@ -809,14 +963,71 @@ async function route(req, res) {
   }
 
   // OpenAI-style model list (Codex / OpenAI SDK discovery).
+  // Include both real model IDs and slot aliases (main, review, subagent …) with
+  // full Codex model descriptor fields (slug, display_name, context_window, etc.)
+  // so Codex CLI does not reject the response with "missing field `slug`".
   if (method === 'GET' && (pathname === '/v1/models' || pathname === '/models')) {
     const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex']);
-    const ids = profile ? [...new Set(Object.values(profile.defaultModels || {}).filter(Boolean))] : [];
     const created = Math.floor(Date.now() / 1000);
+    const seen = new Set();
+    const list = [];
+    const codexModels = [];
+
+    const makeCodexModel = (id) => ({
+      ...CODEX_MODEL_TEMPLATE,
+      id,
+      slug: id,
+      display_name: id,
+      description: `LLM Switcher mapped model (${id})`,
+      context_window: 1000000,
+      max_context_window: 1000000,
+      object: 'model',
+      created,
+      owned_by: 'llm-switcher'
+    });
+
+    if (profile?.defaultModels) {
+      for (const [slot, modelId] of Object.entries(profile.defaultModels)) {
+        if (modelId && !seen.has(modelId)) {
+          seen.add(modelId);
+          list.push({ id: modelId, object: 'model', created, owned_by: 'llm-switcher' });
+          codexModels.push(makeCodexModel(modelId));
+        }
+        // Expose slot aliases (main, review, subagent …) so Codex finds metadata for them
+        if (slot && !seen.has(slot)) {
+          seen.add(slot);
+          list.push({ id: slot, object: 'model', created, owned_by: 'llm-switcher' });
+          codexModels.push(makeCodexModel(slot));
+        }
+      }
+    }
     return sendJson(res, 200, {
       object: 'list',
-      data: ids.map(id => ({ id, object: 'model', created, owned_by: 'llm-switcher' }))
+      data: list,
+      models: codexModels
     });
+  }
+
+  // Individual model metadata: GET /v1/models/{id}
+  if (method === 'GET' && (pathname.startsWith('/v1/models/') || pathname.startsWith('/models/'))) {
+    const modelId = decodeURIComponent(pathname.replace(/^\/(v1\/)?models\//, ''));
+    if (modelId) {
+      const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex']);
+      const resolvedId = profile ? (mapModel(modelId, profile) || modelId) : modelId;
+      const created = Math.floor(Date.now() / 1000);
+      return sendJson(res, 200, {
+        ...CODEX_MODEL_TEMPLATE,
+        id: modelId,
+        slug: modelId,
+        display_name: modelId,
+        description: `LLM Switcher mapped model (${modelId})`,
+        context_window: 1000000,
+        max_context_window: 1000000,
+        object: 'model',
+        created,
+        owned_by: 'llm-switcher'
+      });
+    }
   }
 
   if (pathname.startsWith('/api/')) {
@@ -832,6 +1043,25 @@ async function route(req, res) {
   // Client endpoints, one per input protocol (auto-detected by path).
   let clientFormat = null;
   const vmatch = method === 'POST' ? pathname.match(VERTEX_ROUTE) : null;
+
+  // Codex CLI sends GET /v1/responses (and /v1/responses/{id}) to fetch model
+  // metadata and retrieve previous responses.  The gateway is stateless, so
+  // return a synthetic stub that satisfies the SDK's metadata lookup without
+  // erroring out.
+  if (method === 'GET' && (pathname === '/v1/responses' || pathname === '/responses' || pathname.startsWith('/v1/responses/') || pathname.startsWith('/responses/'))) {
+    req.resume();
+    const { profile } = getActiveProfile('responses', req);
+    if (pathname === '/v1/responses' || pathname === '/responses') {
+      // Model metadata / list — return an empty list
+      return sendJson(res, 200, { object: 'list', data: [] });
+    }
+    // GET /v1/responses/{id} — response retrieval; stateless gateway has no
+    // persisted responses so return 404 in OpenAI's error shape.
+    return sendJson(res, 404, {
+      error: { message: 'Response not found. This gateway is stateless and does not persist responses.', type: 'not_found_error', code: '404' }
+    });
+  }
+
   if (method === 'POST') {
     if (pathname === '/v1/messages' || pathname === '/messages') clientFormat = 'anthropic';
     else if (pathname === '/v1/chat/completions' || pathname === '/chat/completions') clientFormat = 'openai-chat';
@@ -1010,6 +1240,290 @@ const server = http.createServer((req, res) => {
       sendJson(res, err.status || 500, { error: { message: `Gateway error: ${err.message}` } });
     } else {
       try { res.end(); } catch {}
+    }
+  });
+});
+
+function decodeWsFrames(buffer) {
+  const messages = [];
+  let offset = 0;
+  while (offset < buffer.length) {
+    if (offset + 2 > buffer.length) break;
+    const b0 = buffer[offset];
+    const b1 = buffer[offset + 1];
+    const opcode = b0 & 0x0f;
+    const isMasked = Boolean(b1 & 0x80);
+    let len = b1 & 0x7f;
+    let headerLen = 2;
+    if (len === 126) {
+      if (offset + 4 > buffer.length) break;
+      len = buffer.readUInt16BE(offset + 2);
+      headerLen = 4;
+    } else if (len === 127) {
+      if (offset + 10 > buffer.length) break;
+      len = Number(buffer.readBigUInt64BE(offset + 2));
+      headerLen = 10;
+    }
+    const maskLen = isMasked ? 4 : 0;
+    if (offset + headerLen + maskLen + len > buffer.length) break;
+    const mask = isMasked ? buffer.subarray(offset + headerLen, offset + headerLen + 4) : null;
+    const payload = Buffer.alloc(len);
+    const start = offset + headerLen + maskLen;
+    for (let i = 0; i < len; i++) {
+      payload[i] = isMasked ? (buffer[start + i] ^ mask[i % 4]) : buffer[start + i];
+    }
+    offset += headerLen + maskLen + len;
+    messages.push({ opcode, payload, text: opcode === 1 ? payload.toString('utf8') : null });
+  }
+  return { messages, remainder: buffer.subarray(offset) };
+}
+
+function encodeWsFrame(data, opcode = 1) {
+  const payload = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const len = payload.length;
+  let header;
+  if (len <= 125) {
+    header = Buffer.from([0x80 | (opcode & 0x0f), len]);
+  } else if (len <= 65535) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | (opcode & 0x0f);
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | (opcode & 0x0f);
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+function sendWsError(socket, status, message) {
+  if (!socket.writable) return;
+  socket.write(encodeWsFrame(JSON.stringify({
+    type: 'error',
+    error: {
+      message,
+      type: 'invalid_request_error',
+      code: status
+    }
+  })));
+}
+
+async function handleWsResponseCreate(socket, payload, req, activeControllerHolder) {
+  const clientFormat = 'responses';
+  const { profileKey, profile, error: profileError } = getActiveProfile(clientFormat, req);
+  if (!loadConfig()) {
+    return sendWsError(socket, 500, `LLM Switcher config not loaded (${configPath}): ${getConfigLoadError()?.message || 'missing file'}`);
+  }
+  if (!profile) {
+    return sendWsError(socket, 503, profileError || 'Proxy is currently OFF for responses.');
+  }
+
+  let ir;
+  try {
+    ir = parseToIR('responses', payload);
+  } catch (e) {
+    return sendWsError(socket, 400, `Cannot parse responses request: ${e.message}`);
+  }
+  ir.stream = true;
+
+  const reqStartTime = Date.now();
+  const requestPreview = previewOf(ir);
+  const requestedModel = ir.model || payload.model || '';
+  const mappedModel = mapModel(requestedModel, profile);
+  const outFormat = resolveOutFormat(profile, mappedModel);
+
+  console.log(`[llm-switcher:ws] ${clientFormat} -> ${outFormat} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
+  const logBase = { clientFormat: 'responses-ws', outFormat, profile: profileKey, model: mappedModel, stream: true, requestPreview };
+  const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
+
+  const ac = new AbortController();
+  if (activeControllerHolder) activeControllerHolder.ac = ac;
+
+  try {
+    const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
+    if (upBody?.tools && Array.isArray(upBody.tools)) {
+      upBody.tools = cleanSchemaDeep(upBody.tools);
+    }
+    const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, true, req);
+    debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
+
+    let upstreamRes;
+    try {
+      upstreamRes = await fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal: ac.signal });
+    } catch (fetchErr) {
+      if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+      console.error(`[${profileKey}:ws] Network error:`, fetchErr.message);
+      sendWsError(socket, 502, `Failed to connect to upstream: ${fetchErr.cause?.message || fetchErr.message}`);
+      return log({ status: 502, error: fetchErr.message });
+    }
+
+    if (!upstreamRes.ok) {
+      const errText = await upstreamRes.text().catch(() => '');
+      console.error(`[${profileKey}:ws] Error HTTP ${upstreamRes.status}:`, errText.slice(0, 500));
+      sendWsError(socket, upstreamRes.status, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`);
+      return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
+    }
+
+    const normalize = createUpstreamNormalizer(outFormat);
+    const col = createCollector();
+
+    const renderer = createResponsesStream((e, d) => {
+      if (socket.writable) {
+        socket.write(encodeWsFrame(JSON.stringify(d)));
+      }
+    }, mappedModel, { toolMeta: ir.toolMeta });
+
+    renderer.start();
+    const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
+    let streamError = null;
+    let events = 0;
+
+    try {
+      for await (const parsed of readUpstreamPayloads(upstreamRes)) {
+        events++;
+        const ev = normalize(parsed);
+        col.add(ev);
+        if (ev.error) {
+          streamError = ev.error;
+          break;
+        }
+        for (const t of ev.think) renderer.think(t.text, t.sig);
+        if (ev.sig) renderer.think('', ev.sig);
+        for (const t of ev.text) splitter.push(t);
+        if (ev.tools.length) {
+          splitter.flush();
+          for (const tc of ev.tools) renderer.tool(tc);
+        }
+      }
+      if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
+    } catch (streamErr) {
+      if (!ac.signal.aborted) {
+        console.error(`[${profileKey}:ws] Stream error:`, streamErr.message);
+        streamError = streamErr.message || 'stream interrupted';
+      }
+    }
+
+    if (ac.signal.aborted) {
+      return log({ status: 499, error: 'client disconnected mid-stream', responsePreview: col.text.join('').slice(0, 300) });
+    }
+    splitter.flush();
+    const completion = col.completion();
+    if (streamError) {
+      renderer.error(streamError);
+    } else {
+      renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, hasTools: col.tools.size > 0 });
+    }
+    log({
+      status: streamError ? 502 : 200, stream: true,
+      tokens: { prompt: col.prompt, completion },
+      thinkingChars: col.think.join('').length,
+      responsePreview: col.text.join('').slice(0, 300)
+    });
+  } catch (err) {
+    if (ac.signal.aborted) return log({ status: 499, error: 'aborted' });
+    console.error(`[${profileKey}:ws] Error:`, err);
+    sendWsError(socket, 500, err.message);
+    log({ status: 500, error: err.message });
+  } finally {
+    if (activeControllerHolder?.ac === ac) activeControllerHolder.ac = null;
+  }
+}
+
+server.on('upgrade', (req, socket) => {
+  const p = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+  if (p !== '/v1/responses' && p !== '/responses') {
+    socket.write(
+      'HTTP/1.1 404 Not Found\r\n' +
+      'Connection: close\r\n' +
+      'Content-Type: application/json\r\n\r\n' +
+      `{"error":{"message":"Not found: ${req.method} ${p}"}}\r\n`
+    );
+    socket.destroy();
+    return;
+  }
+
+  const key = req.headers['sec-websocket-key'];
+  if (!key) {
+    socket.destroy();
+    return;
+  }
+  const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  
+  const { profile } = getActiveProfile('responses', req);
+  const activeModel = profile?.defaultModels?.main || 'main';
+
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${accept}\r\n` +
+    `OpenAI-Model: ${activeModel}\r\n` +
+    'x-reasoning-included: true\r\n' +
+    'x-codex-turn-state: ready\r\n\r\n'
+  );
+
+  let buf = Buffer.alloc(0);
+  const activeControllerHolder = { ac: null };
+
+  socket.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    const { messages, remainder } = decodeWsFrames(buf);
+    buf = remainder;
+
+    for (const m of messages) {
+      if (m.opcode === 8) { // close
+        if (socket.writable) socket.end(encodeWsFrame(Buffer.alloc(0), 8));
+        return;
+      }
+      if (m.opcode === 9) { // ping
+        if (socket.writable) socket.write(encodeWsFrame(m.payload, 10)); // pong
+        continue;
+      }
+      if (m.opcode === 1 && m.text) { // text message
+        try {
+          const msg = JSON.parse(m.text);
+          if (msg.type === 'response.create') {
+            handleWsResponseCreate(socket, msg, req, activeControllerHolder).catch(err => {
+              console.error('[llm-switcher:ws] Unhandled turn error:', err);
+            });
+          } else if (msg.type === 'response.cancel') {
+            if (activeControllerHolder.ac) {
+              activeControllerHolder.ac.abort();
+            }
+          } else if (msg.type === 'session.update') {
+            if (socket.writable) {
+              socket.write(encodeWsFrame(JSON.stringify({
+                type: 'session.updated',
+                session: msg.session || {}
+              })));
+            }
+          } else if (msg.type === 'conversation.item.create') {
+            if (socket.writable) {
+              socket.write(encodeWsFrame(JSON.stringify({
+                type: 'conversation.item.created',
+                item: msg.item || {}
+              })));
+            }
+          }
+        } catch (e) {
+          console.error('[llm-switcher:ws] Bad WS message JSON:', e.message);
+        }
+      }
+    }
+  });
+
+  socket.on('close', () => {
+    if (activeControllerHolder.ac) {
+      activeControllerHolder.ac.abort();
+    }
+  });
+
+  socket.on('error', (err) => {
+    debugLog('[llm-switcher:ws] Socket error:', err.message);
+    if (activeControllerHolder.ac) {
+      activeControllerHolder.ac.abort();
     }
   });
 });

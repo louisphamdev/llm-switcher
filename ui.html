@@ -1308,7 +1308,13 @@
         state = data;
         document.querySelectorAll('.gateway-port').forEach(el => { el.textContent = state.port; });
         if (!creatingNew && (!currentlyEditingKey || !state.config.profiles[currentlyEditingKey])) {
-          currentlyEditingKey = state.config.profiles[state.activeProfile] ? state.activeProfile : (Object.keys(state.config.profiles)[0] || '');
+          // Pick the first profile that is actually active for any CLI target,
+          // falling back to the legacy activeProfile or the first profile key.
+          const activeMap = state.activeProfiles || {};
+          const firstActiveKey = Object.values(activeMap).find(k => k && state.config.profiles[k]);
+          currentlyEditingKey = firstActiveKey
+            || (state.config.profiles[state.activeProfile] ? state.activeProfile : null)
+            || (Object.keys(state.config.profiles)[0] || '');
           formDirty = false;
         }
         render();
@@ -1411,6 +1417,12 @@
         const card = document.createElement('div');
         card.className = `profile-card ${isEditing ? 'editing' : ''} ${isActiveAny ? 'active' : ''}`;
         card.setAttribute('aria-label', `${p.name} provider profile`);
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', (ev) => {
+          // Don't trigger if clicked on toggle switch or interactive buttons
+          if (ev.target.closest('.card-toggle') || ev.target.closest('input') || ev.target.closest('button')) return;
+          selectProfileForEdit(key);
+        });
 
         const pCfg = getActiveSlotConfig(p.inFormat || 'auto');
         const modelsSummaryHtml = pCfg.slots.map(s => {
