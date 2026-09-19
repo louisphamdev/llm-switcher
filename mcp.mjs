@@ -110,7 +110,7 @@ async function handleToolCall(name, args) {
       `Active Profiles by CLI:`,
       `  - Claude Code (/v1/messages)       : [${activeMap.anthropic || 'OFF'}] ${live?.is1MActive ? '• 1M Context ACTIVE' : ''}`,
       `  - Codex CLI   (/v1/responses)      : [${activeMap.responses || 'OFF'}] ${live?.isCodex1MActive ? '• 1M Context ACTIVE' : ''}`,
-      `  - OpenAI Chat (/v1/chat/completions: [${activeMap['openai-chat'] || 'OFF'}]`,
+      `  - OpenAI Chat (/v1/chat/completions): [${activeMap['openai-chat'] || 'OFF'}]`,
       `  - Vertex      (/v1beta/models/*)   : [${activeMap.vertex || 'OFF'}]`,
       '',
       `Available Profiles in config: ${Object.keys(cfg.profiles || {}).join(', ')}`,
@@ -124,7 +124,7 @@ async function handleToolCall(name, args) {
     const findings = [];
     let isClean = true;
 
-    // 1. Kiểm tra cổng proxy
+    // 1. Check the proxy port
     if (!live) {
       findings.push(`[CRITICAL] LLM Switcher service is NOT running on port ${port}. Run 'node switch.mjs on' to start it.`);
       isClean = false;
@@ -132,7 +132,7 @@ async function handleToolCall(name, args) {
       findings.push(`[PASS] LLM Switcher edge gateway is running on http://127.0.0.1:${port}.`);
     }
 
-    // 2. Kiểm tra settings.json của Claude Code có bị tool nào ghi bẩn không
+    // 2. Check whether Claude Code's settings.json was dirtied by another tool
     if (fs.existsSync(claudeSettingsPath)) {
       try {
         const s = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
@@ -145,7 +145,7 @@ async function handleToolCall(name, args) {
       } catch {}
     }
 
-    // 3. Kiểm tra các biến môi trường
+    // 3. Check environment variables
     const anthBase = process.env.ANTHROPIC_BASE_URL;
     const oaiBase = process.env.OPENAI_BASE_URL;
     const cdxBase = process.env.CODEX_BASE_URL;
@@ -159,7 +159,7 @@ async function handleToolCall(name, args) {
       }
     }
 
-    // 4. Hướng dẫn phân tầng cho tool nén
+    // 4. Layering guidance for compression tools
     findings.push('');
     findings.push('--- Guideline for Token Optimizers (Headroom, RTK, Ponytail) ---');
     findings.push(`If a token compressor is used, ensure its upstream target is configured to http://127.0.0.1:${port}.`);
@@ -171,7 +171,7 @@ async function handleToolCall(name, args) {
 
   if (name === 'switcher_switch_profile') {
     const { target, profile } = args || {};
-    // Không có target và không có profile = tắt TOÀN BỘ gateway; bắt agent phải nói rõ ý định.
+    // No target and no profile means deactivating the WHOLE gateway; require the agent to state its intent explicitly.
     if (!target && !profile) {
       return { content: [{ type: 'text', text: 'Refusing to deactivate all targets implicitly: pass a "target" to turn off one CLI, or a "profile" to activate.' }], isError: true };
     }
@@ -229,7 +229,7 @@ process.stdin.on('data', async (chunk) => {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    // Bỏ qua Content-Length header nếu host gửi kiểu LSP
+    // Skip the Content-Length header if the host sends LSP-style framing
     if (trimmed.startsWith('Content-Length:')) continue;
     let req;
     try {

@@ -1,8 +1,8 @@
-// Test cho shim.mjs — cơ chế auto-inject env vào phiên resume.
+// Tests for shim.mjs — auto-inject env mechanism for resume sessions.
 //
-// Ca hỏng thật ngoài đời (2026-09-18): một phiên `claude` mở từ shell chưa
-// source env.sh không có ANTHROPIC_BASE_URL nên gọi thẳng api.anthropic.com,
-// bỏ qua gateway. Shim phải bịt đúng lỗ đó mà không phá trường hợp bình thường.
+// Real-world failure (2026-09-18): a `claude` session launched from a shell
+// that never sourced env.sh had no ANTHROPIC_BASE_URL, so it called api.anthropic.com directly,
+// bypassing the gateway. The shim must plug exactly that hole without breaking the normal case.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,15 +10,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-const { SHIM_DIR, SHIMMED, pathExportLine, suggestedRcFiles, shimStatus } =
-  await import(path.join(ROOT, 'shim.mjs'));
+const { SHIM_DIR, SHIMMED, pathExportLine, suggestedRcFiles, shimStatus, renderShim } =
+  await import(pathToFileURL(path.join(ROOT, 'shim.mjs')).href);
 
-// Chạy shim trong PATH giả: fakeDir chứa binary "thật" giả lập.
+// Run the shim with a fake PATH: fakeDir holds a mocked "real" binary.
 function runShim(name, args, { active, fakeDir, extraPath = '' }) {
   const flag = path.join(ROOT, 'active.flag');
   const envSh = path.join(ROOT, 'env.sh');
@@ -59,8 +59,8 @@ test('shim injects gateway env when the gateway is ON (the --resume fix)', (t) =
   if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
   const out = runShim('claude', ['--resume', 'abc'], { active: true, fakeDir: fake });
-  assert.match(out, /BASE=http:\/\/127\.0\.0\.1:3456/, 'env phải được inject');
-  assert.match(out, /ARGS=--resume abc/, 'tham số phải giữ nguyên');
+  assert.match(out, /BASE=http:\/\/127\.0\.0\.1:3456/, 'env must be injected');
+  assert.match(out, /ARGS=--resume abc/, 'arguments must be preserved');
 });
 
 test('shim stays transparent when the gateway is OFF', (t) => {
@@ -68,7 +68,7 @@ test('shim stays transparent when the gateway is OFF', (t) => {
   if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
   const out = runShim('claude', ['--resume'], { active: false, fakeDir: fake });
-  assert.match(out, /BASE=NONE/, 'gateway tắt thì không được ép route');
+  assert.match(out, /BASE=NONE/, 'gateway off must not force route');
   assert.match(out, /ARGS=--resume/);
 });
 
@@ -76,7 +76,7 @@ test('shim never recurses into itself', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
   if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
-  // Nếu shim tự gọi chính nó, lệnh sẽ treo tới timeout và ném lỗi.
+  // If the shim called itself, the command would hang until timeout and throw.
   const out = runShim('claude', ['x'], { active: true, fakeDir: fake });
   assert.match(out, /ARGS=x/);
 });
@@ -88,7 +88,7 @@ test('shim fails loudly (127) when the real binary is missing', (t) => {
   assert.throws(
     () => runShim('claude', [], { active: true, fakeDir: empty }),
     (err) => err.status === 127,
-    'thiếu binary thật phải báo lỗi rõ, không im lặng'
+    'missing real binary must report clear error, not fail silently'
   );
 });
 
@@ -98,4 +98,21 @@ test('helpers report PATH guidance and shim wiring', () => {
   const st = shimStatus();
   assert.equal(st.dir, SHIM_DIR);
   assert.deepEqual(st.shims.map(s => s.name), SHIMMED);
+});
+
+test('Codex shim injects documented config overrides on POSIX and Windows', () => {
+  for (const platform of ['linux', 'win32']) {
+    const body = renderShim('codex', platform);
+    assert.match(body, /openai_base_url/);
+    assert.match(body, /model=.+main|model=main/);
+    assert.match(body, /review_model/);
+    assert.match(body, /agents\.default_subagent_model/);
+    assert.match(body, /model_context_window/);
+    assert.match(body, /model_auto_compact_token_limit/);
+  }
+});
+
+test('Claude shim does not receive Codex config overrides', () => {
+  assert.doesNotMatch(renderShim('claude', 'linux'), /agents\.default_subagent_model/);
+  assert.doesNotMatch(renderShim('claude', 'win32'), /CODEX_SWITCHER_ARGS/);
 });

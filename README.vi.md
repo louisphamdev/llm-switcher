@@ -191,6 +191,18 @@ flowchart LR
 
 ---
 
+## Thay đổi trong lần cập nhật này
+
+- Dashboard cho máy tính nay có bố cục gọn như một công cụ dành cho lập trình viên. Các điều khiển route rõ hơn, tab dùng được bằng bàn phím, trường model có nhãn đầy đủ và không còn emoji trang trí.
+- Profile Codex dùng ba vai trò theo tài liệu chính thức: `main`, `review` và `subagent`.
+- Shim Codex truyền các khóa cấu hình chính thức: `model`, `review_model`, `agents.default_subagent_model`, `model_context_window` và `model_auto_compact_token_limit`.
+- Profile cũ vẫn đọc được. Giá trị rỗng ở khóa mới sẽ xóa fallback từ khóa cũ.
+- Model Claude Opus được nhận diện khả năng reasoning mà không phụ thuộc số phiên bản.
+
+Shim Codex không còn dựa vào `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS` hoặc `CODEX_AUTO_COMPACT_WINDOW`. Codex không tài liệu hóa các biến môi trường này. Xem [bảng tham chiếu cấu hình](https://developers.openai.com/codex/config-reference/) và [hướng dẫn cấu hình nâng cao](https://developers.openai.com/codex/config-advanced/) chính thức.
+
+---
+
 ## Hướng dẫn Bắt đầu Nhanh
 
 ### 1. Yêu cầu hệ thống
@@ -265,22 +277,29 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
 
 ---
 
-### Cấu hình cho Codex CLI (Windows)
+### Cấu hình ưu tiên Codex
 
-Trong file wrapper của Codex (`codex.cmd`):
-```cmd
-SETLOCAL EnableDelayedExpansion
-IF EXIST "path\to\llm-switcher\active.flag" (
-  SET "CODEX_BASE_URL=http://127.0.0.1:3456/v1"
-  SET "OPENAI_BASE_URL=http://127.0.0.1:3456/v1"
-)
-IF EXIST "path\to\llm-switcher\codex-1m.flag" (
-  SET /P CMODEL=<"path\to\llm-switcher\codex-1m.flag"
-  SET "CODEX_MODEL=!CMODEL!"
-  SET "CODEX_MAX_CONTEXT_TOKENS=1000000"
-  SET "CODEX_AUTO_COMPACT_WINDOW=900000"
-)
+Cài shim, đặt thư mục shim lên đầu `PATH`, rồi kích hoạt một profile tương thích với Codex:
+
+```bash
+switch shim install
+export PATH="$HOME/.llm-switcher/bin:$PATH"   # Bash hoặc Zsh
+switch codex <profile>
+switch shim status
+codex
 ```
+
+Trên Windows, đặt `%USERPROFILE%\.llm-switcher\bin` trước thư mục Codex thật trong `PATH`. Sau đó, mở terminal mới.
+
+Shim không sửa `~/.codex/config.toml`. Khi gateway hoạt động, shim truyền các override chính thức sau vào binary Codex thật:
+
+| Vai trò trong profile | Khóa cấu hình Codex | Alias tại gateway |
+|---|---|---|
+| `main` | `model` | `main` |
+| `review` | `review_model` | `review` |
+| `subagent` | `agents.default_subagent_model` | `subagent` |
+
+Shim cũng truyền `openai_base_url` để route qua gateway cục bộ. Nếu `main` bật context 1M, shim truyền `model_context_window=1000000` và `model_auto_compact_token_limit=900000`. Override dòng lệnh có độ ưu tiên cao hơn cấu hình người dùng và dự án. Hãy chạy lại `switch shim install` sau khi nâng cấp từ bản cũ.
 
 ---
 
@@ -372,7 +391,7 @@ switch vertex <profile>        # Đặt profile kích hoạt riêng cho Vertex /
 switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
 switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy
 switch service uninstall       # Gỡ bỏ service chạy ngầm
-switch shim install            # Tự nạp env gateway cho phiên mở lại (claude --resume)
+switch shim install            # Route phiên Claude và Codex mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
 switch shim uninstall          # Gỡ shim khỏi launcher
 switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) và quay về gói Official
@@ -398,6 +417,8 @@ switch shim status                            # kiểm tra lại
 Cách hoạt động:
 
 - **Gateway BẬT** → wrapper nạp env, nên mọi lần gọi (kể cả `--resume`) đều qua gateway.
+- Với Codex, wrapper truyền các khóa vai trò model và context chính thức bằng `--config`.
+  Wrapper không phụ thuộc vào các biến `CODEX_*` không được hỗ trợ.
 - **Gateway TẮT** (không có `active.flag`) → wrapper trong suốt hoàn toàn, chạy binary thật
   nguyên trạng, không ép định tuyến.
 - Wrapper tìm binary thật sau khi **loại thư mục shim khỏi `PATH`**, nên không bao giờ tự

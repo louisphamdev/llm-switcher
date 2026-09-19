@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-// Kiểm tra chuỗi event Anthropic hợp lệ: index tăng dần theo thứ tự start, delta chỉ vào block đang mở.
+// Validate an Anthropic event sequence: indexes increase in start order, deltas only target an open block.
 export function assertValidAnthropicEvents(events) {
   const open = new Set();
   const seen = new Set();

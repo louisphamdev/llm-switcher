@@ -3,157 +3,775 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LLM Switcher — Multi-Protocol Gateway</title>
+  <title>LLM Switcher | Local gateway</title>
+  <link rel="icon" href="data:,">
+  <script>
+    try {
+      const savedTheme = localStorage.getItem('lsw-theme');
+      if (savedTheme === 'light' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)) {
+        document.documentElement.dataset.theme = 'light';
+      }
+    } catch (e) {}
+  </script>
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: #111827;
-      --card-hover: #172033;
-      --card-border: #1f293d;
-      --card-border-active: #3b82f6;
-      --text: #f3f4f6;
-      --text-muted: #9ca3af;
-      --text-dim: #6b7280;
-      --primary: #38bdf8;
-      --primary-hover: #0284c7;
-      --accent: #6366f1;
+      /* Dark Theme (Default) - Carbon / Zinc Developer Aesthetic */
+      --bg: #090a0f;
+      --surface: #11131a;
+      --surface-card: #141722;
+      --surface-elevated: #1a1e2d;
+      --surface-well: #0a0c12;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --border-active: #38bdf8;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --primary-bg: #f8fafc;
+      --primary-fg: #090a0f;
+      --primary-hover: #e2e8f0;
+      --accent: #38bdf8;
+      --accent-muted: rgba(56, 189, 248, 0.1);
       --success: #10b981;
-      --success-glow: rgba(16, 185, 129, 0.25);
+      --success-muted: rgba(16, 185, 129, 0.12);
       --warning: #f59e0b;
+      --warning-muted: rgba(245, 158, 11, 0.12);
       --danger: #ef4444;
-      --radius: 12px;
-      --radius-sm: 8px;
+      --danger-muted: rgba(239, 68, 68, 0.12);
+      --radius-sm: 6px;
+      --radius: 8px;
+      --radius-lg: 10px;
+      --font-sans: "Segoe UI Variable", "Aptos", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
-    body { background: var(--bg); color: var(--text); padding: 28px 20px; min-height: 100vh; line-height: 1.5; }
-    .container { max-width: 980px; margin: 0 auto; }
+
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-card: #ffffff;
+      --surface-elevated: #f1f5f9;
+      --surface-well: #f8fafc;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --border-active: #0284c7;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --text-dim: #94a3b8;
+      --primary-bg: #0f172a;
+      --primary-fg: #ffffff;
+      --primary-hover: #1e293b;
+      --accent: #0284c7;
+      --accent-muted: rgba(2, 132, 199, 0.08);
+      --success: #059669;
+      --success-muted: rgba(5, 150, 105, 0.1);
+      --warning: #d97706;
+      --warning-muted: rgba(217, 119, 6, 0.1);
+      --danger: #dc2626;
+      --danger-muted: rgba(220, 38, 38, 0.1);
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-sans); }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px 16px 48px;
+      min-height: 100dvh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    .container { max-width: 1180px; margin: 0 auto; }
 
     /* Header */
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--card-border); }
-    .title-group { display: flex; align-items: center; gap: 14px; }
-    .logo-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #6366f1); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3); }
-    .title-group h1 { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
-    .title-group p { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .title-group { display: flex; align-items: center; gap: 12px; }
+    .logo-badge {
+      width: 34px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+    }
+    .title-group h1 {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.025em;
+    }
+    .title-group p {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+    .header-actions { display: flex; gap: 8px; align-items: center; }
 
     /* Buttons */
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: var(--radius-sm); border: none; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
-    .btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
-    .btn-primary { background: var(--primary); color: #0f172a; }
-    .btn-primary:hover { background: var(--primary-hover); color: #fff; }
-    .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .btn-danger:hover { background: rgba(239, 68, 68, 0.25); color: #fff; }
-    .btn-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .btn-success:hover { background: rgba(16, 185, 129, 0.25); color: #fff; }
-    .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--card-border); }
-    .btn-outline:hover { background: rgba(255, 255, 255, 0.05); border-color: #475569; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      white-space: nowrap;
+      text-decoration: none;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 5px; }
 
-    /* Status Banner */
-    .status-banner { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 26px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); }
-    .status-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-    .status-dot-wrapper { position: relative; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); transition: all 0.3s; }
-    .status-dot.active { background: var(--success); box-shadow: 0 0 12px var(--success); }
-    .status-title { font-size: 15px; font-weight: 700; color: #fff; }
-    .status-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; word-break: break-all; }
+    .btn:focus-visible,
+    .tab-btn:focus-visible,
+    .switch input:focus-visible + .slider,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .btn-primary {
+      background: var(--primary-bg);
+      color: var(--primary-fg);
+      border-color: var(--primary-bg);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+
+    .btn-outline {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+    .btn-outline:hover:not(:disabled) {
+      background: var(--surface-elevated);
+      border-color: var(--border-strong);
+    }
+
+    .btn-danger {
+      background: var(--danger-muted);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-success {
+      background: var(--success-muted);
+      color: var(--success);
+      border-color: rgba(16, 185, 129, 0.25);
+    }
+    .btn-success:hover:not(:disabled) {
+      background: rgba(16, 185, 129, 0.2);
+    }
+
+    /* Telemetry Status Banner */
+    .status-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      margin-bottom: 24px;
+    }
+    .status-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .status-dot-wrapper {
+      position: relative;
+      width: 12px;
+      height: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      box-shadow: 0 0 0 2px rgba(100, 116, 139, 0.2);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .status-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+    }
+    .status-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .status-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 1px;
+      font-family: var(--font-mono);
+      word-break: break-all;
+    }
 
     /* Section Headers */
-    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-    .section-title { font-size: 15px; font-weight: 700; color: #e2e8f0; letter-spacing: -0.01em; }
-    .section-subtitle { font-size: 12px; color: var(--text-muted); }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+    .section-subtitle {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    /* Active Multi-CLI Slots (Rackmount Grid) */
+    .cli-slots-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .cli-slot-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .cli-slot-card.active {
+      border-color: rgba(56, 189, 248, 0.35);
+      background: var(--surface);
+    }
+    .cli-slot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .cli-slot-title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .cli-slot-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      color: var(--text-muted);
+      background: var(--surface-well);
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .cli-slot-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .cli-slot-route {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+    .cli-slot-select {
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      color: var(--text);
+      font-size: 12px;
+      width: 100%;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .cli-slot-select:focus {
+      border-color: var(--border-active);
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
 
     /* Profile Cards Grid */
-    .profiles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; margin-bottom: 28px; }
-    .profile-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 16px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
-    .profile-card:hover { border-color: #3b82f6; background: var(--card-hover); transform: translateY(-2px); }
-    .profile-card.editing { border-color: var(--primary); box-shadow: 0 0 16px rgba(56, 189, 248, 0.15); }
-    .profile-card.active { border-left: 4px solid var(--success); }
+    .profiles-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .profile-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+    }
+    .profile-card:hover {
+      border-color: var(--border-strong);
+      background: var(--surface);
+    }
+    .profile-card.editing {
+      border-color: var(--border-active);
+      box-shadow: 0 0 0 1px var(--border-active);
+    }
+    .profile-card.active {
+      border-left: 3px solid var(--success);
+    }
 
-    .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .card-name-group { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
-    .card-name { font-size: 14px; font-weight: 700; color: #fff; }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .card-name-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .card-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
 
-    .badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
-    .badge-hybrid { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
-    .badge-direct { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-convert { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-outline { background: transparent; color: var(--text-muted); border: 1px solid var(--card-border); }
-    .badge-route {background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); font-family: monospace; }
-    .badge-1m { background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
-    .badge-1m-warn { background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-left: 4px; white-space: nowrap; cursor: help; }
-    .warning-callout { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fbbf24; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 14px; line-height: 1.5; display: flex; gap: 8px; align-items: flex-start; }
+    /* Badges */
+    .badge {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+    .badge-hybrid {
+      background: rgba(99, 102, 241, 0.12);
+      color: #818cf8;
+      border-color: rgba(99, 102, 241, 0.25);
+    }
+    .badge-direct {
+      background: var(--success-muted);
+      color: var(--success);
+      border-color: rgba(16, 185, 129, 0.25);
+    }
+    .badge-convert {
+      background: var(--warning-muted);
+      color: var(--warning);
+      border-color: rgba(245, 158, 11, 0.25);
+    }
+    .badge-outline {
+      background: transparent;
+      color: var(--text-dim);
+      border-color: var(--border);
+    }
+    .badge-route {
+      background: var(--surface-well);
+      color: var(--text-muted);
+      border-color: var(--border);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+    .badge-1m {
+      background: var(--success-muted);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 3px;
+      margin-left: 4px;
+    }
+    .badge-1m-warn {
+      background: var(--warning-muted);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 4px;
+      white-space: nowrap;
+      cursor: help;
+    }
 
-    .card-url { font-size: 11px; color: var(--text-muted); word-break: break-all; margin-bottom: 10px; font-family: monospace; }
-    .card-models { font-size: 11px; color: #cbd5e1; display: flex; flex-direction: column; gap: 4px; background: rgba(0, 0, 0, 0.25); padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; }
-    .card-footer { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-top: 6px; }
+    .warning-callout {
+      background: var(--warning-muted);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      color: var(--warning);
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      margin-bottom: 14px;
+      line-height: 1.5;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
 
-    /* Switch Slider */
-    .switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .25s; border-radius: 20px; }
-    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .25s; border-radius: 50%; }
-    input:checked + .slider { background-color: var(--success); }
-    input:checked + .slider:before { transform: translateX(18px); }
+    .card-url {
+      font-size: 11px;
+      color: var(--text-dim);
+      word-break: break-all;
+      margin-bottom: 8px;
+      font-family: var(--font-mono);
+    }
+    .card-models {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      font-family: var(--font-mono);
+    }
+    .card-models strong { color: var(--text); font-weight: 500; }
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      margin-top: 6px;
+    }
+
+    /* Minimalist Switch Toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--surface-elevated);
+      border: 1px solid var(--border-strong);
+      transition: 0.2s;
+      border-radius: 18px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 2px;
+      bottom: 2px;
+      background-color: var(--text-dim);
+      transition: 0.2s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: var(--success);
+      border-color: var(--success);
+    }
+    input:checked + .slider:before {
+      transform: translateX(14px);
+      background-color: #ffffff;
+    }
 
     /* Editor Form Panel */
-    .form-panel { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 22px; margin-bottom: 30px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); }
-    
-    /* Tabs */
-    .tab-bar { display: flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--card-border); padding-bottom: 10px; flex-wrap: wrap; }
-    .tab-btn { background: transparent; border: none; color: var(--text-muted); padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
-    .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
-    .tab-btn.active { color: #fff; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); }
+    .form-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 30px;
+    }
+
+    /* Segmented Tab Bar */
+    .tab-bar {
+      display: inline-flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 3px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--text);
+      background: var(--surface-elevated);
+      font-weight: 600;
+      border: 1px solid var(--border-strong);
+    }
 
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
-    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
     .form-group.full { grid-column: span 2; }
-    label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
-    input, select { background: #0b1120; border: 1px solid var(--card-border); border-radius: 6px; padding: 9px 12px; color: #fff; font-size: 13px; outline: none; transition: border-color 0.2s; width: 100%; max-width: 100%; min-width: 0; }
-    input:focus, select:focus { border-color: var(--primary); }
+    label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    input, select {
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 11px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+    }
+    input:focus, select:focus {
+      border-color: var(--border-active);
+    }
+    input:disabled, select:disabled {
+      color: var(--text-dim);
+      cursor: not-allowed;
+    }
 
-    .preset-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-    .preset-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .preset-bar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .preset-label {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-right: 4px;
+    }
 
-    .form-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--card-border); gap: 12px; flex-wrap: wrap; }
+    .form-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
 
     /* Test Results Card */
-    .test-result-box { margin-top: 14px; border-radius: var(--radius-sm); padding: 12px 14px; font-size: 12px; display: none; }
-    .test-result-box.success { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; }
-    .test-result-box.error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; }
-    .test-meta { display: flex; gap: 12px; font-weight: 700; margin-bottom: 6px; }
-    .test-sample { background: rgba(0, 0, 0, 0.4); padding: 8px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; color: #e2e8f0; }
+    .test-result-box {
+      margin-top: 14px;
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      font-size: 12px;
+      display: none;
+      border: 1px solid transparent;
+    }
+    .test-result-box.success {
+      background: var(--success-muted);
+      border-color: rgba(16, 185, 129, 0.25);
+      color: var(--success);
+    }
+    .test-result-box.error {
+      background: var(--danger-muted);
+      border-color: rgba(239, 68, 68, 0.25);
+      color: var(--danger);
+    }
+    .test-meta { display: flex; gap: 12px; font-weight: 600; margin-bottom: 6px; font-family: var(--font-mono); }
+    .test-sample {
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 120px;
+      overflow-y: auto;
+      color: var(--text-muted);
+    }
 
-    /* Interactive Model Explorer */
-    .model-browser { margin-top: 10px; background: #070c16; border: 1px solid var(--card-border); border-radius: var(--radius-sm); padding: 14px; }
-    .model-browser-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
-    .model-list-scroll { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
-    .model-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; gap: 10px; }
-    .model-row:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(56, 189, 248, 0.3); }
-    .model-id { font-family: monospace; color: #e2e8f0; word-break: break-all; }
+    /* Model Explorer */
+    .model-browser {
+      margin-top: 10px;
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+    }
+    .model-browser-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .model-list-scroll {
+      max-height: 220px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-right: 4px;
+    }
+    .model-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-size: 12px;
+      gap: 10px;
+    }
+    .model-row:hover {
+      border-color: var(--border-strong);
+      background: var(--surface-elevated);
+    }
+    .model-id { font-family: var(--font-mono); color: var(--text); font-size: 11px; word-break: break-all; }
     .model-btn-group { display: flex; gap: 4px; flex-shrink: 0; }
 
-    /* Active CLI Targets Grid */
-    .cli-slots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 24px; }
-    .cli-slot-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s; }
-    .cli-slot-card.active { border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.04); }
-    .cli-slot-header { display: flex; justify-content: space-between; align-items: center; }
-    .cli-slot-title-group { display: flex; align-items: center; gap: 8px; }
-    .cli-slot-icon { font-size: 16px; }
-    .cli-slot-name { font-size: 13px; font-weight: 700; color: #fff; }
-    .cli-slot-route { font-size: 10px; color: var(--text-muted); font-family: monospace; }
-    .cli-slot-select { background: #0b1120; border: 1px solid var(--card-border); border-radius: 6px; padding: 7px 10px; color: #fff; font-size: 12px; width: 100%; outline: none; cursor: pointer; }
-    .cli-slot-select:focus { border-color: var(--primary); }
-
     /* Inspector Logs */
-    .log-item { background: #070c16; border: 1px solid var(--card-border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
-    .log-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .log-item {
+      background: var(--surface-well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .log-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-    .log-body { background: rgba(0,0,0,0.35); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 11px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; max-height: 110px; overflow-y: auto; }
+    .log-body {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 120px;
+      overflow-y: auto;
+    }
 
     /* Toast Notification */
-    .toast { position: fixed; bottom: 24px; right: 24px; background: #1e293b; border: 1px solid #334155; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: none; z-index: 1000; transition: all 0.3s; }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
+      padding: 9px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      display: none;
+      z-index: 1000;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
 
     @media (max-width: 640px) {
       body { padding: 16px 12px; }
@@ -172,38 +790,39 @@
     <!-- Header -->
     <header>
       <div class="title-group">
-        <div class="logo-icon">⇄</div>
+        <div class="logo-badge" aria-hidden="true">LS</div>
         <div>
           <h1>LLM Switcher</h1>
-          <p>Multi-Protocol Gateway • Multi-Active CLI Routing • Zero Config Mutation</p>
+          <p>Local gateway on <span class="gateway-port">3456</span>. Route each coding CLI independently.</p>
         </div>
       </div>
-      <div>
-        <button class="btn btn-outline btn-sm" onclick="loadStatus()">🔄 Refresh</button>
+      <div class="header-actions">
+        <button id="btn-theme" class="btn btn-outline btn-sm" onclick="toggleTheme()" type="button">Theme</button>
+        <button class="btn btn-outline btn-sm" onclick="loadStatus()" type="button">Refresh</button>
       </div>
     </header>
 
     <!-- Status Banner -->
-    <div class="status-banner">
+    <div class="status-banner" role="status" aria-live="polite">
       <div class="status-left">
         <div class="status-dot-wrapper">
           <div id="status-dot" class="status-dot"></div>
         </div>
         <div>
           <div id="status-title" class="status-title">Checking status...</div>
-          <div id="status-sub" class="status-sub">Detecting current configuration</div>
+          <div id="status-sub" class="status-sub">Detecting active configuration</div>
         </div>
       </div>
       <div id="status-action">
-        <button id="btn-toggle" class="btn btn-primary" onclick="toggleProxy()">Toggle All</button>
+        <button id="btn-toggle" class="btn btn-primary" onclick="toggleProxy()" type="button">Toggle all</button>
       </div>
     </div>
 
     <!-- Active Multi-CLI Slots -->
     <div class="section-header" style="margin-bottom: 8px;">
       <div>
-        <span class="section-title">Active CLI Routing (Multi-Active)</span>
-        <span class="section-subtitle" style="margin-left: 8px;">Mỗi CLI mở độc lập 1 profile, cùng lúc nhiều CLI</span>
+        <span class="section-title">CLI routes</span>
+        <span class="section-subtitle" style="margin-left: 8px;">Profiles apply independently and at the same time</span>
       </div>
     </div>
     <div class="cli-slots-grid">
@@ -211,7 +830,7 @@
       <div id="card-slot-anthropic" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
-            <span class="cli-slot-icon">🤖</span>
+            <span class="cli-slot-icon" aria-hidden="true">CC</span>
             <div>
               <div class="cli-slot-name">Claude Code</div>
               <div class="cli-slot-route">/v1/messages</div>
@@ -219,8 +838,9 @@
           </div>
           <span id="badge-slot-anthropic" class="badge">OFF</span>
         </div>
+        <label class="sr-only" for="select-slot-anthropic">Profile for Claude Code</label>
         <select id="select-slot-anthropic" class="cli-slot-select" onchange="switchCliTarget('anthropic', this.value)">
-          <option value="">(Off / Official Subscription)</option>
+          <option value="">Official endpoint</option>
         </select>
       </div>
 
@@ -228,7 +848,7 @@
       <div id="card-slot-responses" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
-            <span class="cli-slot-icon">⚡</span>
+            <span class="cli-slot-icon" aria-hidden="true">CX</span>
             <div>
               <div class="cli-slot-name">Codex</div>
               <div class="cli-slot-route">/v1/responses</div>
@@ -236,8 +856,9 @@
           </div>
           <span id="badge-slot-responses" class="badge">OFF</span>
         </div>
+        <label class="sr-only" for="select-slot-responses">Profile for Codex</label>
         <select id="select-slot-responses" class="cli-slot-select" onchange="switchCliTarget('responses', this.value)">
-          <option value="">(Off / Official)</option>
+          <option value="">Official endpoint</option>
         </select>
       </div>
 
@@ -245,7 +866,7 @@
       <div id="card-slot-openai-chat" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
-            <span class="cli-slot-icon">💬</span>
+            <span class="cli-slot-icon" aria-hidden="true">OA</span>
             <div>
               <div class="cli-slot-name">OpenAI Chat</div>
               <div class="cli-slot-route">/v1/chat/completions</div>
@@ -253,8 +874,9 @@
           </div>
           <span id="badge-slot-openai-chat" class="badge">OFF</span>
         </div>
+        <label class="sr-only" for="select-slot-openai-chat">Profile for OpenAI Chat</label>
         <select id="select-slot-openai-chat" class="cli-slot-select" onchange="switchCliTarget('openai-chat', this.value)">
-          <option value="">(Off / Official)</option>
+          <option value="">Official endpoint</option>
         </select>
       </div>
 
@@ -262,7 +884,7 @@
       <div id="card-slot-vertex" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
-            <span class="cli-slot-icon">🔮</span>
+            <span class="cli-slot-icon" aria-hidden="true">VX</span>
             <div>
               <div class="cli-slot-name">Vertex / Gemini</div>
               <div class="cli-slot-route">/v1beta/models/*</div>
@@ -270,8 +892,9 @@
           </div>
           <span id="badge-slot-vertex" class="badge">OFF</span>
         </div>
+        <label class="sr-only" for="select-slot-vertex">Profile for Vertex or Gemini</label>
         <select id="select-slot-vertex" class="cli-slot-select" onchange="switchCliTarget('vertex', this.value)">
-          <option value="">(Off / Official)</option>
+          <option value="">Official endpoint</option>
         </select>
       </div>
     </div>
@@ -279,66 +902,67 @@
     <!-- Providers & Profiles List -->
     <div class="section-header">
       <div>
-        <span class="section-title">Providers & Profiles</span>
-        <span class="section-subtitle" style="margin-left: 8px;">(Click card to edit)</span>
+        <span class="section-title">Provider profiles</span>
+        <span class="section-subtitle" style="margin-left: 8px;">Select a profile to edit it</span>
       </div>
-      <button class="btn btn-outline btn-sm" onclick="initNewProfile()">+ Add Provider</button>
+      <button class="btn btn-outline btn-sm" onclick="initNewProfile()" type="button">Add provider</button>
     </div>
     <div id="profiles-grid" class="profiles-grid"></div>
 
     <!-- Edit Profile Form Panel -->
     <div class="form-panel">
       <div class="section-header">
-        <div id="form-title" class="section-title">Edit Provider</div>
-        <span id="active-tag" style="font-size: 12px; color: var(--success); font-weight: 700;"></span>
+        <div id="form-title" class="section-title" style="color: var(--text);">Edit Provider</div>
+        <span id="active-tag" style="font-size: 11px; color: var(--success); font-weight: 600; font-family: var(--font-mono);"></span>
       </div>
 
       <!-- Quick Presets -->
       <div class="preset-bar">
-        <span class="preset-label">Presets:</span>
+        <span class="preset-label">Presets</span>
         <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('9router')">9Router</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('openrouter')">OpenRouter</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('codex-vtx')">Codex Vertex</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('momo')">Selfhost Hybrid</button>
         <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('custom')">Local OpenAI</button>
       </div>
 
       <!-- Tabs Bar -->
-      <div class="tab-bar">
-        <button type="button" class="tab-btn active" onclick="switchTab('tab-general')">1. General & Endpoint</button>
-        <button type="button" class="tab-btn" onclick="switchTab('tab-routing')">2. Protocols & Routing</button>
-        <button type="button" class="tab-btn" onclick="switchTab('tab-models')">3. Models & 1M Context</button>
-        <button type="button" class="tab-btn" onclick="switchTab('tab-inspector'); loadInspectorLogs();">4. Live Inspector</button>
+      <div class="tab-bar" role="tablist" aria-label="Provider settings">
+        <button id="tab-button-general" type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-general" tabindex="0" onclick="switchTab('tab-general')">General</button>
+        <button id="tab-button-routing" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-routing" tabindex="-1" onclick="switchTab('tab-routing')">Routing</button>
+        <button id="tab-button-models" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-models" tabindex="-1" onclick="switchTab('tab-models')">Models</button>
+        <button id="tab-button-inspector" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-inspector" tabindex="-1" onclick="switchTab('tab-inspector'); loadInspectorLogs();">Request log</button>
       </div>
 
       <form id="profile-form" onsubmit="saveProfile(event)">
         <!-- Tab 1: General & Endpoint -->
-        <div id="tab-general" class="tab-pane active">
+        <div id="tab-general" class="tab-pane active" role="tabpanel" aria-labelledby="tab-button-general">
           <div class="form-grid">
             <div class="form-group">
-              <label>Provider Key (Unique ID)</label>
+              <label for="p-key">Provider key</label>
               <input type="text" id="p-key" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" title="Letters, digits, '.', '_' or '-' (max 64 chars)" placeholder="e.g. 9router, openrouter, my-llm">
             </div>
             <div class="form-group">
-              <label>Display Name</label>
+              <label for="p-name">Display name</label>
               <input type="text" id="p-name" required placeholder="e.g. 9Router Cloud, OpenRouter Pro">
             </div>
             <div class="form-group full">
-              <label>Base URL</label>
+              <label for="p-url">Base URL</label>
               <input type="url" id="p-url" required placeholder="https://api.your-provider.com/v1">
             </div>
             <div class="form-group full">
-              <label>API Key / Bearer Token</label>
+              <label for="p-key-val">API key or bearer token</label>
               <input type="password" id="p-key-val" placeholder="sk-...">
             </div>
           </div>
         </div>
 
         <!-- Tab 2: Protocols & Routing -->
-        <div id="tab-routing" class="tab-pane">
+        <div id="tab-routing" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-routing" hidden>
           <div class="form-grid">
             <div class="form-group">
-              <label>Client Format (Input)</label>
-              <select id="p-informat">
+              <label for="p-informat">Client protocol</label>
+              <select id="p-informat" onchange="onInFormatChange(this.value)">
                 <option value="auto">AUTO (Accepts Claude / OpenAI / Codex / Vertex)</option>
                 <option value="anthropic">Anthropic Messages (/v1/messages)</option>
                 <option value="openai-chat">OpenAI Chat (/v1/chat/completions)</option>
@@ -347,7 +971,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Upstream Format (Output)</label>
+              <label for="p-outformat">Upstream protocol</label>
               <select id="p-outformat">
                 <option value="">AUTO (Determined by Routing Mode)</option>
                 <option value="openai-chat">OpenAI Chat Completions</option>
@@ -356,7 +980,7 @@
               </select>
             </div>
             <div class="form-group full">
-              <label>Thinking Mode (OpenAI Chat upstream)</label>
+              <label for="p-thinking-mode">Reasoning mode for Chat upstreams</label>
               <select id="p-thinking-mode">
                 <option value="auto">AUTO — gateway (9Router): restore thinking, inject &lt;think&gt; guide, send thinking + reasoning_effort</option>
                 <option value="native">NATIVE — strict OpenAI API: only reasoning_effort when client asks, no prompt changes</option>
@@ -364,117 +988,76 @@
               </select>
             </div>
             <div class="form-group full">
-              <label>Routing Mode (Legacy)</label>
+              <label for="p-mode">Routing mode</label>
               <select id="p-mode">
                 <option value="hybrid">HYBRID (Claude models -> Direct Native | Other models -> Convert)</option>
                 <option value="convert">CONVERT (Always convert protocols via gateway)</option>
                 <option value="direct">DIRECT (Always forward directly via native Anthropic API)</option>
               </select>
             </div>
-            <div class="form-group full" style="border-top: 1px solid var(--card-border); padding-top: 12px; margin-top: 4px;">
+            <div class="form-group full" style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px;">
               <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
                 <label>Token Optimizers</label>
-                <span style="font-size: 11px; color: var(--primary);">Headroom • Ponytail • RTK</span>
+                <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">Headroom • Ponytail • RTK</span>
               </div>
               <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-                💡 <strong>Phân tầng:</strong> trỏ CLI vào tool nén, và cấu hình upstream của tool nén về <code>http://127.0.0.1:<span class="gateway-port">3456</span></code>. Switcher là cửa ngõ cuối cùng ra internet (tự chữa lành tin nhắn mồ côi, giữ 1M và thinking trace).
+                <strong>Optimizer chain:</strong> Point the CLI at the optimizer. Point the optimizer upstream to <code>http://127.0.0.1:<span class="gateway-port">3456</span></code>.
               </span>
             </div>
           </div>
         </div>
 
         <!-- Tab 3: Models & 1M Context -->
-        <div id="tab-models" class="tab-pane">
-          <div class="warning-callout">
-            <span style="font-size: 16px; flex-shrink: 0;">⚠️</span>
-            <div>
-              <strong>Cảnh báo về 1M Context:</strong> Khi bật <code>[1M Context]</code> cho một tier, gateway sẽ thiết lập <code>ANTHROPIC_DEFAULT_&lt;TIER&gt;_MODEL=&lt;tier&gt;[1m]</code> cho đúng tier đó. Nếu model phía upstream <strong>không thực sự hỗ trợ</strong> 1M token (ví dụ các model chỉ giới hạn 128k hoặc 200k như <code>ag/claude-opus-4-6-thinking</code>), khi đoạn hội thoại dài vượt quá ngưỡng hỗ trợ của model sẽ bị upstream báo lỗi <code>HTTP 400 (Bad Request / Context Exceeded)</code>.
+        <div id="tab-models" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-models" hidden>
+          <div class="warning-callout" id="warn-1m-callout">
+            <span class="badge badge-convert" id="warn-1m-icon">NOTE</span>
+            <div id="warn-1m-text">
+              <strong>1M Context Warning:</strong> Enabling <code>[1M Context]</code> for a tier sets <code>ANTHROPIC_DEFAULT_&lt;TIER&gt;_MODEL=&lt;tier&gt;[1m]</code> for that tier. If the upstream model lacks native 1M token support, long conversations will fail with <code>HTTP 400 (Context Exceeded)</code>.
             </div>
           </div>
 
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-            <span style="font-size: 13px; font-weight: 600; color: #cbd5e1;">Tier Mapping (Claude Code / Switcher)</span>
+            <span id="model-slot-heading" style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Tier Mapping (Claude Code / Switcher)</span>
             <button type="button" id="btn-fetch-models" class="btn btn-outline btn-sm" onclick="fetchModelList()">
-              🔄 Fetch Upstream Models
+              Fetch models
             </button>
           </div>
 
-          <div class="form-grid">
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Opus Model</label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
-                  <input type="checkbox" id="p-opus-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
-                  <span id="warn-opus-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
-                </label>
-              </div>
-              <input type="text" id="p-opus" list="model-options" placeholder="e.g. ag/claude-opus-4-6-thinking">
-            </div>
+          <div class="form-grid" id="slot-fields">
+            <!-- Dynamically populated via renderModelSlots -->
+          </div>
 
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Sonnet Model</label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
-                  <input type="checkbox" id="p-sonnet-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
-                  <span id="warn-sonnet-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
-                </label>
+          <!-- Model Explorer Box -->
+          <div class="form-group full" id="model-browser" style="display: none; margin-top: 14px;">
+            <div class="model-browser">
+              <div class="model-browser-header">
+                <span id="model-count-label" style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Available Upstream Models</span>
+                <label class="sr-only" for="model-filter">Filter upstream models</label>
+                <input type="search" id="model-filter" placeholder="Filter models" style="padding: 5px 9px; font-size: 11px; width: 200px;" oninput="filterModels()">
               </div>
-              <input type="text" id="p-sonnet" list="model-options" placeholder="e.g. ag/claude-sonnet-4-6">
-            </div>
-
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Haiku Model</label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
-                  <input type="checkbox" id="p-haiku-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
-                  <span id="warn-haiku-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
-                </label>
-              </div>
-              <input type="text" id="p-haiku" list="model-options" placeholder="e.g. ag/gemini-3.7-flash-high">
-            </div>
-
-            <div class="form-group">
-              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Fable Model</label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--primary);">
-                  <input type="checkbox" id="p-fable-1m" style="width: 14px; height: 14px;" onchange="update1mWarnings()"> [1M Context]
-                  <span id="warn-fable-1m" class="badge-1m-warn" style="display: none;" title="Nguy cơ lỗi HTTP 400 nếu model không hỗ trợ 1M context">⚠ Nguy cơ lỗi nếu k hỗ trợ</span>
-                </label>
-              </div>
-              <input type="text" id="p-fable" list="model-options" placeholder="e.g. ag/gemini-3.8-flash-high">
-            </div>
-
-            <!-- Model Explorer Box -->
-            <div class="form-group full" id="model-browser" style="display: none;">
-              <div class="model-browser">
-                <div class="model-browser-header">
-                  <span id="model-count-label" style="font-size: 12px; font-weight: 700; color: var(--primary);">Available Upstream Models</span>
-                  <input type="text" id="model-filter" placeholder="Filter models..." style="padding: 5px 10px; font-size: 12px; width: 220px;" oninput="filterModels()">
-                </div>
-                <div id="model-items" class="model-list-scroll"></div>
-              </div>
+              <div id="model-items" class="model-list-scroll"></div>
             </div>
           </div>
         </div>
 
         <!-- Tab 4: Live Inspector -->
-        <div id="tab-inspector" class="tab-pane">
+        <div id="tab-inspector" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-inspector" hidden>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <div>
-              <span style="font-size: 13px; font-weight: 700; color: #fff;">Real-time Request Inspector</span>
-              <span style="font-size: 11px; color: var(--text-muted); margin-left: 8px;">Soi prompt, token, latency & thinking block</span>
+              <span style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Real-time Request Inspector</span>
+              <span style="font-size: 11px; color: var(--text-dim); margin-left: 8px;">Inspect prompt, tokens, latency & reasoning traces</span>
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
-              <label style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer;">
+              <label style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer; text-transform: none;">
                 <input type="checkbox" id="chk-auto-refresh-logs" checked onchange="toggleLogAutoRefresh(this.checked)"> Auto-refresh
               </label>
-              <button type="button" class="btn btn-outline btn-sm" onclick="loadInspectorLogs()">🔄 Refresh</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadInspectorLogs()">Refresh</button>
               <button type="button" class="btn btn-danger btn-sm" onclick="clearInspectorLogs()">Clear</button>
             </div>
           </div>
 
           <div id="inspector-logs-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 440px; overflow-y: auto;">
-            <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 24px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+            <div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 24px; background: var(--surface-well); border-radius: var(--radius-sm); border: 1px solid var(--border);">
               No requests recorded yet. Make a request via Claude Code, Codex, or curl.
             </div>
           </div>
@@ -492,7 +1075,7 @@
         </div>
 
         <div class="form-actions">
-          <button type="button" id="btn-test-conn" class="btn btn-outline" onclick="testConnection()">⚡ Test Connection</button>
+          <button type="button" id="btn-test-conn" class="btn btn-outline" onclick="testConnection()">Test connection</button>
           <div style="display: flex; gap: 8px;">
             <button type="button" id="btn-delete" class="btn btn-danger" onclick="deleteProfile()" style="display: none;">Delete</button>
             <button type="submit" class="btn btn-primary">Save Provider</button>
@@ -502,7 +1085,7 @@
     </div>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
     let state = {
@@ -512,12 +1095,61 @@
       claudeBaseURL: ''
     };
     let currentlyEditingKey = '';
-    let creatingNew = false;   // đang tạo provider mới -> không để loadStatus() ghi đè form
-    let formLoadedKey = null;  // profile đang hiển thị trong form
-    let formDirty = false;     // có chỉnh sửa chưa lưu -> không reset form khi refresh trạng thái
+    let creatingNew = false;
+    let formLoadedKey = null;
+    let formDirty = false;
     let loadedModels = [];
+    let currentProfileBuffer = null;
+    let renderedSlotFormat = 'auto';
     const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
     const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
+    const LEGACY_SLOT_KEYS = {
+      main: ['opus'],
+      review: ['sonnet'],
+      subagent: ['fast', 'fallback', 'haiku', 'fable'],
+      default: ['sonnet', 'opus', 'haiku', 'fable']
+    };
+
+    const SLOT_CONFIG = {
+      anthropic: {
+        heading: 'Claude Code tier mapping',
+        slots: [
+          { id: 'opus', label: 'Opus Model', placeholder: 'e.g. ag/claude-opus-4-6-thinking', allow1M: true },
+          { id: 'sonnet', label: 'Sonnet Model', placeholder: 'e.g. ag/claude-sonnet-4-6', allow1M: true },
+          { id: 'haiku', label: 'Haiku Model', placeholder: 'e.g. ag/gemini-3.7-flash-high', allow1M: true },
+          { id: 'fable', label: 'Fable Model', placeholder: 'e.g. ag/gemini-3.8-flash-high', allow1M: true }
+        ],
+        warning: '<strong>1M Context Warning:</strong> Enabling <code>[1M Context]</code> for a tier sets <code>ANTHROPIC_DEFAULT_&lt;TIER&gt;_MODEL=&lt;tier&gt;[1m]</code> for that tier. If the upstream model lacks native 1M token support, long conversations will fail with <code>HTTP 400 (Context Exceeded)</code>.',
+        icon: 'NOTE'
+      },
+      responses: {
+        heading: 'Codex model roles',
+        slots: [
+          { id: 'main', label: 'Main model', placeholder: 'e.g. ag/gemini-3.8-flash or gpt-4o', allow1M: true },
+          { id: 'review', label: 'Review model', placeholder: 'e.g. ag/gemini-3.7-flash-medium', allow1M: false },
+          { id: 'subagent', label: 'Subagent model', placeholder: 'e.g. ag/gemini-3.6-flash-low', allow1M: false }
+        ],
+        warning: '<strong>Context notice:</strong> The launcher applies <code>model</code>, <code>review_model</code>, and <code>agents.default_subagent_model</code> through Codex config overrides. The 1M option also sets <code>model_context_window</code> and the auto-compact limit.',
+        icon: 'NOTE'
+      },
+      'openai-chat': {
+        heading: 'Default Model (OpenAI Chat)',
+        slots: [
+          { id: 'default', label: 'Default Chat Model', placeholder: 'e.g. gpt-4o or ag/gemini-3.8-flash', allow1M: true }
+        ],
+        warning: '<strong>1M Context Notice:</strong> When enabled, sets <code>OPENAI_MAX_CONTEXT_TOKENS=1000000</code>. Verify that upstream model supports 1M context before enabling.',
+        icon: 'NOTE'
+      },
+      vertex: {
+        heading: 'Default Model (Vertex / Gemini)',
+        slots: [
+          { id: 'default', label: 'Default Model (Vertex/Gemini)', placeholder: 'e.g. gemini-2.5-pro or gemini-2.5-flash', allow1M: false }
+        ],
+        warning: '<strong>Context Window Notice:</strong> Vertex/Gemini SDK context window is managed directly by upstream Google models. No client-side 1M flag is needed.',
+        icon: 'INFO'
+      }
+    };
+    SLOT_CONFIG.auto = SLOT_CONFIG.anthropic;
 
     // Helper: Anti-XSS Sanitizer
     function escapeHtml(str) {
@@ -530,24 +1162,139 @@
         .replace(/'/g, '&#039;');
     }
 
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      const btn = document.getElementById('btn-theme');
+      if (btn) {
+        const nextTheme = theme === 'light' ? 'dark' : 'light';
+        btn.textContent = `${nextTheme[0].toUpperCase()}${nextTheme.slice(1)} theme`;
+        btn.setAttribute('aria-label', `Use ${nextTheme} theme`);
+      }
+      try { localStorage.setItem('lsw-theme', theme); } catch (e) {}
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.dataset.theme || 'dark';
+      applyTheme(current === 'light' ? 'dark' : 'light');
+    }
+
     function showToast(msg, isError = false) {
       const t = document.getElementById('toast');
       t.innerText = msg;
-      t.style.borderColor = isError ? 'var(--danger)' : '#334155';
-      t.style.background = isError ? 'rgba(239, 68, 68, 0.95)' : '#1e293b';
+      t.style.borderColor = isError ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-strong)';
+      t.style.background = isError ? 'var(--danger-muted)' : 'var(--surface-elevated)';
+      t.style.color = isError ? 'var(--danger)' : 'var(--text)';
       t.style.display = 'block';
       setTimeout(() => t.style.display = 'none', 3500);
     }
 
     function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
-      
-      const targetPane = document.getElementById(tabId);
-      if (targetPane) targetPane.classList.add('active');
-      
-      const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick')?.includes(tabId));
-      if (activeBtn) activeBtn.classList.add('active');
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        const selected = btn.getAttribute('aria-controls') === tabId;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-selected', String(selected));
+        btn.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll('.tab-pane').forEach(pane => {
+        const selected = pane.id === tabId;
+        pane.classList.toggle('active', selected);
+        pane.hidden = !selected;
+      });
+    }
+
+    function getActiveSlotConfig(format) {
+      return SLOT_CONFIG[format] || SLOT_CONFIG.auto;
+    }
+
+    function valueForSlot(values, slot) {
+      const source = values || {};
+      if (Object.hasOwn(source, slot)) return source[slot] || '';
+      for (const legacyKey of LEGACY_SLOT_KEYS[slot] || []) {
+        if (source[legacyKey]) return source[legacyKey];
+      }
+      return '';
+    }
+
+    function flagForSlot(values, slot) {
+      const source = values || {};
+      if (Object.hasOwn(source, slot)) return Boolean(source[slot]);
+      for (const legacyKey of LEGACY_SLOT_KEYS[slot] || []) {
+        if (Object.hasOwn(source, legacyKey)) return Boolean(source[legacyKey]);
+      }
+      return false;
+    }
+
+    function renderModelSlots(format) {
+      const cfg = getActiveSlotConfig(format);
+      const heading = document.getElementById('model-slot-heading');
+      const warnText = document.getElementById('warn-1m-text');
+      const warnIcon = document.getElementById('warn-1m-icon');
+      const container = document.getElementById('slot-fields');
+
+      if (heading) heading.textContent = cfg.heading;
+      if (warnText) warnText.innerHTML = cfg.warning;
+      if (warnIcon) warnIcon.textContent = cfg.icon;
+      if (!container) return;
+
+      const p = currentProfileBuffer || {};
+      const defs = p.defaultModels || {};
+      const m1m = p.model1M || {};
+
+      container.innerHTML = cfg.slots.map(s => {
+        const val = valueForSlot(defs, s.id);
+        const checked = flagForSlot(m1m, s.id);
+
+        return `
+          <div class="form-group ${cfg.slots.length === 1 ? 'full' : ''}">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+              <label for="p-${s.id}">${escapeHtml(s.label)}</label>
+              ${s.allow1M ? `
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--accent); text-transform: none;">
+                  <input type="checkbox" id="p-${s.id}-1m" style="width: 13px; height: 13px;" onchange="update1mWarnings()" ${checked ? 'checked' : ''}> 1M context
+                  <span id="warn-${s.id}-1m" class="badge-1m-warn" style="display: ${checked ? 'inline-block' : 'none'};" title="Risk of HTTP 400 if model does not support 1M context">Check support</span>
+                </label>
+              ` : ''}
+            </div>
+            <input type="text" id="p-${s.id}" list="model-options" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
+          </div>
+        `;
+      }).join('');
+
+      renderedSlotFormat = format;
+      update1mWarnings();
+    }
+
+    function onInFormatChange(newFmt) {
+      collectCurrentSlotValues(renderedSlotFormat);
+      renderModelSlots(newFmt);
+      if (loadedModels.length > 0) renderModelBrowser(loadedModels);
+      formDirty = true;
+    }
+
+    function collectCurrentSlotValues(format = renderedSlotFormat) {
+      if (!currentProfileBuffer) currentProfileBuffer = {};
+      if (!currentProfileBuffer.defaultModels) currentProfileBuffer.defaultModels = {};
+      if (!currentProfileBuffer.model1M) currentProfileBuffer.model1M = {};
+
+      const cfg = getActiveSlotConfig(format);
+      cfg.slots.forEach(s => {
+        const inp = document.getElementById(`p-${s.id}`);
+        if (inp) currentProfileBuffer.defaultModels[s.id] = inp.value.trim();
+        const chk = document.getElementById(`p-${s.id}-1m`);
+        if (chk) currentProfileBuffer.model1M[s.id] = chk.checked;
+      });
+    }
+
+    function update1mWarnings() {
+      const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+      const cfg = getActiveSlotConfig(currentFmt);
+      cfg.slots.forEach(s => {
+        const chk = document.getElementById(`p-${s.id}-1m`);
+        const badge = document.getElementById(`warn-${s.id}-1m`);
+        if (chk && badge) {
+          badge.style.display = chk.checked ? 'inline-block' : 'none';
+        }
+      });
     }
 
     async function loadStatus() {
@@ -586,24 +1333,24 @@
 
       if (isAnyActive) {
         dot.className = 'status-dot active';
-        title.innerText = `Gateway Active (${activeTargets.length} Client Target${activeTargets.length > 1 ? 's' : ''} Online)`;
+        title.innerText = `Gateway active for ${activeTargets.length} client${activeTargets.length > 1 ? 's' : ''}`;
         const parts = [];
         if (activeMap.anthropic) parts.push(`Claude: ${activeMap.anthropic}`);
         if (activeMap.responses) parts.push(`Codex: ${activeMap.responses}`);
         if (activeMap['openai-chat']) parts.push(`OpenAI: ${activeMap['openai-chat']}`);
         if (activeMap.vertex) parts.push(`Vertex: ${activeMap.vertex}`);
-        sub.innerText = `Port ${state.port} • [${parts.join(' | ')}]`;
+        sub.innerText = `Port ${state.port} | ${parts.join(' | ')}`;
         toggleBtn.className = 'btn btn-danger';
-        toggleBtn.innerText = 'Switch All to Official';
+        toggleBtn.innerText = 'Use official endpoints';
       } else {
         dot.className = 'status-dot';
-        title.innerText = 'Official Subscription (All Clients)';
+        title.innerText = 'Official endpoints in use';
         sub.innerText = 'Gateway is idle. Clients connect directly to official endpoints.';
         toggleBtn.className = 'btn btn-success';
-        toggleBtn.innerText = 'Activate All';
+        toggleBtn.innerText = 'Activate compatible routes';
       }
 
-      // Update 4 CLI Slots (Mỗi CLI chỉ được 1 active profile)
+      // Update 4 CLI Slots
       const slots = [
         { id: 'anthropic', name: 'Claude Code', key: 'anthropic' },
         { id: 'responses', name: 'Codex', key: 'responses' },
@@ -618,7 +1365,7 @@
         const currentActive = activeMap[slot.key];
 
         if (select) {
-          select.innerHTML = '<option value="">(Off / Official Subscription)</option>';
+          select.innerHTML = '<option value="">Official endpoint</option>';
           for (const [key, p] of Object.entries(state.config.profiles)) {
             const inFmt = p.inFormat || 'auto';
             if (inFmt === 'auto' || inFmt === slot.key) {
@@ -663,7 +1410,15 @@
 
         const card = document.createElement('div');
         card.className = `profile-card ${isEditing ? 'editing' : ''} ${isActiveAny ? 'active' : ''}`;
-        card.onclick = () => selectProfileForEdit(key);
+        card.setAttribute('aria-label', `${p.name} provider profile`);
+
+        const pCfg = getActiveSlotConfig(p.inFormat || 'auto');
+        const modelsSummaryHtml = pCfg.slots.map(s => {
+          const val = valueForSlot(p.defaultModels, s.id) || '-';
+          const has1m = flagForSlot(p.model1M, s.id);
+          const label = s.id.charAt(0).toUpperCase() + s.id.slice(1);
+          return `<div><strong>${label}:</strong> ${escapeHtml(val)} ${has1m ? '<span class="badge-1m">1M</span>' : ''}</div>`;
+        }).join('');
 
         card.innerHTML = `
           <div class="card-top">
@@ -673,38 +1428,33 @@
               <span class="badge badge-route" title="Client input -> Upstream output">${escapeHtml(routeBadge)}</span>
             </div>
             <div class="card-toggle" style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-              <span style="font-size: 11px; font-weight: 700; color: ${isActiveAny ? 'var(--success)' : 'var(--text-muted)'};">${isActiveAny ? 'ACTIVE' : 'OFF'}</span>
+              <span style="font-size: 11px; font-weight: 600; color: ${isActiveAny ? 'var(--success)' : 'var(--text-dim)'};">${isActiveAny ? 'ACTIVE' : 'OFF'}</span>
               <label class="switch">
-                <input type="checkbox" ${isActiveAny ? 'checked' : ''}>
+                <input type="checkbox" aria-label="Activate ${escapeHtml(p.name)} for compatible clients" ${isActiveAny ? 'checked' : ''}>
                 <span class="slider"></span>
               </label>
             </div>
           </div>
           <div class="card-url">${escapeHtml(p.baseURL)}</div>
           <div class="card-models">
-            <div><strong>Opus:</strong> ${escapeHtml(p.defaultModels?.opus || '-')} ${p.model1M?.opus ? '<span class="badge-1m">1M</span>' : ''}</div>
-            <div><strong>Sonnet:</strong> ${escapeHtml(p.defaultModels?.sonnet || '-')} ${p.model1M?.sonnet ? '<span class="badge-1m">1M</span>' : ''}</div>
-            <div><strong>Haiku:</strong> ${escapeHtml(p.defaultModels?.haiku || '-')} ${p.model1M?.haiku ? '<span class="badge-1m">1M</span>' : ''}</div>
-            <div><strong>Fable:</strong> ${escapeHtml(p.defaultModels?.fable || '-')} ${p.model1M?.fable ? '<span class="badge-1m">1M</span>' : ''}</div>
+            ${modelsSummaryHtml}
           </div>
           <div class="card-footer">
-            <span style="color: ${isEditing ? 'var(--primary)' : 'var(--text-muted)'}; font-weight: 600;">
-              ${isEditing ? '● Currently Editing' : 'Click to edit'}
-            </span>
+            <button type="button" class="btn btn-outline btn-sm profile-edit" aria-pressed="${isEditing}" onclick="selectProfileForEdit('${escapeHtml(key)}')">
+              ${isEditing ? 'Editing' : 'Edit profile'}
+            </button>
             <div>
-              ${activeCLIs.map(c => `<span class="badge badge-direct" style="font-size: 9px; margin-left: 3px;">✓ ${escapeHtml(c)}</span>`).join('')}
+              ${activeCLIs.map(c => `<span class="badge badge-direct" style="font-size: 9px; margin-left: 3px;">${escapeHtml(c)}</span>`).join('')}
             </div>
           </div>
         `;
-        // Gắn handler bằng JS thay vì inline onchange="...('${key}')": escapeHtml không chống được
-        // JS injection bên trong attribute (trình duyệt decode &#039; lại thành ' trước khi chạy).
+
         const toggleWrap = card.querySelector('.card-toggle');
         toggleWrap.addEventListener('click', ev => ev.stopPropagation());
         toggleWrap.querySelector('input').addEventListener('change', ev => toggleProfileAllCli(key, ev.target.checked));
         grid.appendChild(card);
       }
 
-      // Chỉ nạp lại form khi đổi profile hoặc form chưa bị sửa, tránh mất dữ liệu đang nhập mỗi lần refresh.
       if (!creatingNew && (formLoadedKey !== currentlyEditingKey || !formDirty)) {
         loadProfileToForm(currentlyEditingKey);
       }
@@ -762,7 +1512,6 @@
       } else {
         showToast(`Deactivating provider "${key}"...`);
         try {
-          // Chỉ tắt các target đang dùng profile này, không tắt toàn bộ gateway.
           const res = await fetch('/api/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -779,19 +1528,11 @@
       }
     }
 
-    function update1mWarnings() {
-      ['opus', 'sonnet', 'haiku', 'fable'].forEach(tier => {
-        const chk = document.getElementById('p-' + tier + '-1m');
-        const badge = document.getElementById('warn-' + tier + '-1m');
-        if (chk && badge) {
-          badge.style.display = chk.checked ? 'inline-block' : 'none';
-        }
-      });
-    }
-
     function loadProfileToForm(key) {
       const p = state.config?.profiles?.[key];
       if (!p) return;
+      currentProfileBuffer = JSON.parse(JSON.stringify(p));
+
       document.getElementById('form-title').innerText = `Edit Provider: ${p.name}`;
       document.getElementById('p-key').value = key;
       document.getElementById('p-key').disabled = true;
@@ -801,17 +1542,10 @@
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
       document.getElementById('p-outformat').value = p.outFormat || '';
       document.getElementById('p-url').value = p.baseURL;
-      // API key thật không bao giờ được gửi xuống trình duyệt; giá trị che sẽ được server giữ nguyên khi lưu.
       document.getElementById('p-key-val').value = p.apiKey || '';
-      document.getElementById('p-opus').value = p.defaultModels?.opus || '';
-      document.getElementById('p-sonnet').value = p.defaultModels?.sonnet || '';
-      document.getElementById('p-haiku').value = p.defaultModels?.haiku || '';
-      document.getElementById('p-fable').value = p.defaultModels?.fable || '';
-      document.getElementById('p-opus-1m').checked = Boolean(p.model1M?.opus);
-      document.getElementById('p-sonnet-1m').checked = Boolean(p.model1M?.sonnet);
-      document.getElementById('p-haiku-1m').checked = Boolean(p.model1M?.haiku);
-      document.getElementById('p-fable-1m').checked = Boolean(p.model1M?.fable);
-      update1mWarnings();
+
+      renderModelSlots(p.inFormat || 'auto');
+
       document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
       const usedBy = Object.entries(state.activeProfiles || {}).filter(([, v]) => v === key).map(([t]) => t);
       document.getElementById('active-tag').innerText = usedBy.length ? `(Active: ${usedBy.join(', ')})` : '';
@@ -829,6 +1563,18 @@
       creatingNew = true;
       formLoadedKey = null;
       formDirty = false;
+      currentProfileBuffer = {
+        name: '',
+        mode: 'hybrid',
+        inFormat: 'auto',
+        outFormat: '',
+        thinkingMode: 'auto',
+        baseURL: 'https://',
+        apiKey: '',
+        defaultModels: {},
+        model1M: {}
+      };
+
       render();
       document.getElementById('form-title').innerText = 'Create New Provider';
       document.getElementById('p-key').value = '';
@@ -840,15 +1586,9 @@
       document.getElementById('p-thinking-mode').value = 'auto';
       document.getElementById('p-url').value = 'https://';
       document.getElementById('p-key-val').value = '';
-      document.getElementById('p-opus').value = '';
-      document.getElementById('p-sonnet').value = '';
-      document.getElementById('p-haiku').value = '';
-      document.getElementById('p-fable').value = '';
-      document.getElementById('p-opus-1m').checked = false;
-      document.getElementById('p-sonnet-1m').checked = false;
-      document.getElementById('p-haiku-1m').checked = false;
-      document.getElementById('p-fable-1m').checked = false;
-      update1mWarnings();
+
+      renderModelSlots('auto');
+
       document.getElementById('btn-delete').style.display = 'none';
       document.getElementById('active-tag').innerText = '';
       document.getElementById('model-browser').style.display = 'none';
@@ -857,7 +1597,6 @@
       switchTab('tab-general');
     }
 
-    // Preset chỉ gợi ý key khi tạo mới; đang sửa profile có sẵn thì giữ nguyên key (tránh ghi đè profile khác).
     function setKeyIfNew(k) {
       const input = document.getElementById('p-key');
       if (!input.disabled) input.value = k;
@@ -872,14 +1611,16 @@
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'https://api.9router.com/v1';
         document.getElementById('p-thinking-mode').value = 'auto';
-        document.getElementById('p-opus').value = 'ag/claude-opus-4-6-thinking';
-        document.getElementById('p-sonnet').value = 'ag/claude-sonnet-4-6';
-        document.getElementById('p-haiku').value = 'ag/gemini-3.7-flash-high';
-        document.getElementById('p-fable').value = 'ag/gemini-3.8-flash-high';
-        document.getElementById('p-opus-1m').checked = true;
-        document.getElementById('p-sonnet-1m').checked = true;
-        document.getElementById('p-haiku-1m').checked = false;
-        document.getElementById('p-fable-1m').checked = true;
+        currentProfileBuffer = {
+          defaultModels: {
+            opus: 'ag/claude-opus-4-6-thinking',
+            sonnet: 'ag/claude-sonnet-4-6',
+            haiku: 'ag/gemini-3.7-flash-high',
+            fable: 'ag/gemini-3.8-flash-high'
+          },
+          model1M: { opus: true, sonnet: true, haiku: false, fable: true }
+        };
+        renderModelSlots('auto');
       } else if (type === 'openrouter') {
         setKeyIfNew('openrouter');
         document.getElementById('p-name').value = 'OpenRouter';
@@ -887,14 +1628,33 @@
         document.getElementById('p-informat').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'https://openrouter.ai/api/v1';
-        document.getElementById('p-opus').value = 'anthropic/claude-3.7-sonnet:thinking';
-        document.getElementById('p-sonnet').value = 'anthropic/claude-3.7-sonnet';
-        document.getElementById('p-haiku').value = 'google/gemini-2.0-flash-001';
-        document.getElementById('p-fable').value = 'qwen/qwq-32b';
-        document.getElementById('p-opus-1m').checked = true;
-        document.getElementById('p-sonnet-1m').checked = true;
-        document.getElementById('p-haiku-1m').checked = false;
-        document.getElementById('p-fable-1m').checked = false;
+        currentProfileBuffer = {
+          defaultModels: {
+            opus: 'anthropic/claude-3.7-sonnet:thinking',
+            sonnet: 'anthropic/claude-3.7-sonnet',
+            haiku: 'google/gemini-2.0-flash-001',
+            fable: 'qwen/qwq-32b'
+          },
+          model1M: { opus: true, sonnet: true, haiku: false, fable: false }
+        };
+        renderModelSlots('auto');
+      } else if (type === 'codex-vtx') {
+        setKeyIfNew('codex-vertex');
+        document.getElementById('p-name').value = 'Codex to Vertex';
+        document.getElementById('p-mode').value = 'convert';
+        document.getElementById('p-informat').value = 'responses';
+        document.getElementById('p-outformat').value = 'vertex';
+        document.getElementById('p-url').value = 'https://api.9router.com/v1';
+        document.getElementById('p-thinking-mode').value = 'auto';
+        currentProfileBuffer = {
+          defaultModels: {
+            main: 'gemini-3.8-flash',
+            review: 'gemini-3.7-flash-medium',
+            subagent: 'gemini-3.6-flash-low'
+          },
+          model1M: { main: true, review: false, subagent: false }
+        };
+        renderModelSlots('responses');
       } else if (type === 'momo') {
         setKeyIfNew('selfhost');
         document.getElementById('p-name').value = 'Selfhost Hybrid';
@@ -902,32 +1662,30 @@
         document.getElementById('p-informat').value = 'auto';
         document.getElementById('p-outformat').value = '';
         document.getElementById('p-url').value = 'https://llm.example.com/v1';
-        document.getElementById('p-opus').value = 'claude-opus-4-7';
-        document.getElementById('p-sonnet').value = 'claude-sonnet-4-6';
-        document.getElementById('p-haiku').value = 'claude-haiku-4-5-20251001';
-        document.getElementById('p-fable').value = 'claude-haiku-4-5-20251001';
-        document.getElementById('p-opus-1m').checked = true;
-        document.getElementById('p-sonnet-1m').checked = true;
-        document.getElementById('p-haiku-1m').checked = false;
-        document.getElementById('p-fable-1m').checked = false;
+        currentProfileBuffer = {
+          defaultModels: {
+            opus: 'claude-opus-4-7',
+            sonnet: 'claude-sonnet-4-6',
+            haiku: 'claude-haiku-4-5-20251001',
+            fable: 'claude-haiku-4-5-20251001'
+          },
+          model1M: { opus: true, sonnet: true, haiku: false, fable: false }
+        };
+        renderModelSlots('auto');
       } else if (type === 'custom') {
         setKeyIfNew('local-openai');
         document.getElementById('p-name').value = 'Local OpenAI Server';
         document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-informat').value = 'openai-chat';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'http://127.0.0.1:8000/v1';
         document.getElementById('p-thinking-mode').value = 'native';
-        document.getElementById('p-opus').value = 'gpt-4o';
-        document.getElementById('p-sonnet').value = 'gpt-4o-mini';
-        document.getElementById('p-haiku').value = 'gpt-3.5-turbo';
-        document.getElementById('p-fable').value = 'gpt-4o-mini';
-        document.getElementById('p-opus-1m').checked = false;
-        document.getElementById('p-sonnet-1m').checked = false;
-        document.getElementById('p-haiku-1m').checked = false;
-        document.getElementById('p-fable-1m').checked = false;
+        currentProfileBuffer = {
+          defaultModels: { default: 'gpt-4o' },
+          model1M: { default: false }
+        };
+        renderModelSlots('openai-chat');
       }
-      update1mWarnings();
       formDirty = true;
       showToast(`Applied ${type} template!`);
     }
@@ -988,9 +1746,12 @@
       items.innerHTML = '';
 
       if (models.length === 0) {
-        items.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 6px;">No matching models found.</div>';
+        items.innerHTML = '<div style="color: var(--text-dim); font-size: 12px; padding: 6px;">No matching models found.</div>';
         return;
       }
+
+      const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+      const cfg = getActiveSlotConfig(currentFmt);
 
       for (const m of models) {
         const row = document.createElement('div');
@@ -1003,12 +1764,12 @@
         const btnGroup = document.createElement('div');
         btnGroup.className = 'model-btn-group';
 
-        ['opus', 'sonnet', 'haiku', 'fable'].forEach(tier => {
+        cfg.slots.forEach(s => {
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'btn btn-outline btn-sm';
-          btn.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
-          btn.onclick = () => selectModel(tier, m);
+          btn.textContent = s.id.charAt(0).toUpperCase() + s.id.slice(1);
+          btn.onclick = () => selectModel(s.id, m);
           btnGroup.appendChild(btn);
         });
 
@@ -1024,21 +1785,22 @@
       renderModelBrowser(filtered);
     }
 
-    function selectModel(tier, modelId) {
-      const targetInput = document.getElementById('p-' + tier);
+    function selectModel(slotId, modelId) {
+      const targetInput = document.getElementById('p-' + slotId);
       if (targetInput) targetInput.value = modelId;
       const is1M = /1m|gemini-3|glm-5|kimi|nemotron-3-ultra/i.test(modelId);
-      if (is1M) {
-        document.getElementById('p-' + tier + '-1m').checked = true;
+      const chk1M = document.getElementById(`p-${slotId}-1m`);
+      if (chk1M && is1M) {
+        chk1M.checked = true;
       }
       update1mWarnings();
       formDirty = true;
-      showToast(`Assigned "${modelId}" to ${tier.toUpperCase()}`);
+      showToast(`Assigned "${modelId}" to ${slotId.toUpperCase()}`);
     }
 
     async function toggleProxy() {
       const nextState = !isAnyTargetActive();
-      showToast(nextState ? 'Activating gateway...' : 'Restoring official subscription...');
+      showToast(nextState ? 'Activating compatible routes...' : 'Restoring official endpoints...');
       try {
         const res = await fetch('/api/toggle', {
           method: 'POST',
@@ -1047,7 +1809,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          showToast(nextState ? 'Gateway Activated!' : 'Restored to Official Subscription!');
+          showToast(nextState ? 'Compatible routes are active.' : 'Official endpoints restored.');
         } else {
           showToast(data.error || 'Failed to toggle gateway state', true);
         }
@@ -1062,6 +1824,12 @@
       const key = document.getElementById('p-key').value.trim();
       const outFormat = document.getElementById('p-outformat').value;
       if (creatingNew && state.config?.profiles?.[key] && !confirm(`Provider "${key}" already exists. Overwrite it?`)) return;
+
+      collectCurrentSlotValues();
+      const existing = state.config?.profiles?.[key] || {};
+      const mergedModels = { ...(existing.defaultModels || {}), ...(currentProfileBuffer?.defaultModels || {}) };
+      const merged1M = { ...(existing.model1M || {}), ...(currentProfileBuffer?.model1M || {}) };
+
       const profile = {
         name: document.getElementById('p-name').value.trim(),
         mode: document.getElementById('p-mode').value,
@@ -1069,20 +1837,10 @@
         thinkingMode: document.getElementById('p-thinking-mode').value || 'auto',
         baseURL: document.getElementById('p-url').value.trim(),
         apiKey: document.getElementById('p-key-val').value.trim(),
-        defaultModels: {
-          opus: document.getElementById('p-opus').value.trim(),
-          sonnet: document.getElementById('p-sonnet').value.trim(),
-          haiku: document.getElementById('p-haiku').value.trim(),
-          fable: document.getElementById('p-fable').value.trim()
-        },
-        model1M: {
-          opus: document.getElementById('p-opus-1m').checked,
-          sonnet: document.getElementById('p-sonnet-1m').checked,
-          haiku: document.getElementById('p-haiku-1m').checked,
-          fable: document.getElementById('p-fable-1m').checked
-        }
+        defaultModels: mergedModels,
+        model1M: merged1M
       };
-      profile.outFormat = outFormat; // '' = xoá outFormat, dùng Routing Mode
+      profile.outFormat = outFormat;
 
       try {
         const res = await fetch('/api/save-profile', {
@@ -1092,7 +1850,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          showToast('Provider profile saved!');
+          showToast('Provider profile saved.');
           currentlyEditingKey = key;
           creatingNew = false;
           formDirty = false;
@@ -1131,7 +1889,7 @@
       }
     }
 
-    // Modern Non-blocking Connection Tester (Replaces alert)
+    // Modern Non-blocking Connection Tester
     async function testConnection() {
       const btn = document.getElementById('btn-test-conn');
       const box = document.getElementById('test-result');
@@ -1144,6 +1902,12 @@
       box.style.display = 'none';
 
       try {
+        const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+        const cfg = getActiveSlotConfig(currentFmt);
+        const primarySlotId = cfg.slots[0]?.id || 'default';
+        const modelInput = document.getElementById(`p-${primarySlotId}`) || document.getElementById('p-sonnet') || document.getElementById('p-opus');
+        const testModel = (modelInput?.value || '').trim() || 'default';
+
         const res = await fetch('/api/test-upstream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1153,7 +1917,7 @@
             mode: document.getElementById('p-mode').value,
             outFormat: document.getElementById('p-outformat').value,
             key: formLoadedKey,
-            model: document.getElementById('p-sonnet').value.trim() || 'default'
+            model: testModel
           })
         });
         const data = await res.json();
@@ -1210,7 +1974,7 @@
         if (!container) return;
 
         if (!data.logs || data.logs.length === 0) {
-          container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 24px; background: rgba(0,0,0,0.2); border-radius: 8px;">No requests recorded yet. Make a request via Claude Code, Codex, or curl.</div>';
+          container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 24px; background: var(--surface-well); border-radius: var(--radius-sm); border: 1px solid var(--border);">No requests recorded yet. Make a request via Claude Code, Codex, or curl.</div>';
           return;
         }
 
@@ -1223,7 +1987,7 @@
 
           let details = '';
           if (l.requestPreview) {
-            details += `<div><strong style="color: var(--primary);">Prompt:</strong> ${escapeHtml(l.requestPreview)}</div>`;
+            details += `<div><strong style="color: var(--accent);">Prompt:</strong> ${escapeHtml(l.requestPreview)}</div>`;
           }
           if (l.thinkingChars > 0) {
             details += `<div><strong style="color: #fbbf24;">Thinking:</strong> ${l.thinkingChars} chars extracted</div>`;
@@ -1239,14 +2003,14 @@
             <div class="log-header">
               <div class="log-badges">
                 <span class="badge ${statusClass}">${l.status}</span>
-                <span style="font-family: monospace; font-size: 11px; color: #fff;">${escapeHtml(l.clientFormat)} ➔ ${escapeHtml(l.outFormat)}</span>
-                <span style="font-size: 11px; color: var(--text-muted);">[${escapeHtml(l.model)}]</span>
+                <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text);">${escapeHtml(l.clientFormat)} ➔ ${escapeHtml(l.outFormat)}</span>
+                <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">[${escapeHtml(l.model)}]</span>
                 <span style="font-size: 10px; color: var(--text-dim);">${escapeHtml(l.timestamp)}</span>
               </div>
-              <div style="display: flex; gap: 8px; font-size: 11px; color: var(--text-muted);">
-                <span>⏱ ${l.duration}ms</span>
-                <span>▲ ${l.tokens?.prompt || 0} tks</span>
-                <span>▼ ${l.tokens?.completion || 0} tks</span>
+              <div style="display: flex; gap: 8px; font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
+                <span>${l.duration} ms</span>
+                <span>in ${l.tokens?.prompt || 0} tokens</span>
+                <span>out ${l.tokens?.completion || 0} tokens</span>
               </div>
             </div>
             ${details ? `<div class="log-body">${details}</div>` : ''}
@@ -1268,7 +2032,7 @@
       }
     }
 
-    // Theo dõi chỉnh sửa form để không bị refresh trạng thái ghi đè.
+    // Track form edits so status refreshes don't overwrite them.
     const markDirty = (ev) => {
       if (ev.target.id !== 'chk-auto-refresh-logs' && ev.target.id !== 'model-filter') formDirty = true;
     };
@@ -1276,6 +2040,11 @@
     document.getElementById('profile-form').addEventListener('change', markDirty);
 
     toggleLogAutoRefresh(true);
+    try {
+      applyTheme(localStorage.getItem('lsw-theme') || document.documentElement.dataset.theme || 'dark');
+    } catch (e) {
+      applyTheme(document.documentElement.dataset.theme || 'dark');
+    }
     loadStatus();
   </script>
 </body>

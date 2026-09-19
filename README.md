@@ -191,6 +191,18 @@ flowchart LR
 
 ---
 
+## Changes in this update
+
+- The desktop dashboard now uses a compact developer-tool layout. It has clearer route controls, keyboard-accessible tabs, labeled model fields, and no decorative emoji.
+- Codex profiles now use three documented roles: `main`, `review`, and `subagent`.
+- The Codex shim passes official configuration overrides for `model`, `review_model`, `agents.default_subagent_model`, `model_context_window`, and `model_auto_compact_token_limit`.
+- Legacy profile keys remain readable. An explicit empty role now clears its legacy fallback.
+- Claude Opus model IDs use version-independent reasoning detection.
+
+The Codex shim no longer relies on `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS`, or `CODEX_AUTO_COMPACT_WINDOW`. Codex does not document these environment variables. See the official [configuration reference](https://developers.openai.com/codex/config-reference/) and [advanced configuration guide](https://developers.openai.com/codex/config-advanced/).
+
+---
+
 ## Quick Start
 
 ### 1. Requirements
@@ -265,22 +277,29 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
 
 ---
 
-### Codex CLI Setup (Windows)
+### Codex-first setup
 
-In your Codex launcher wrapper (`codex.cmd`):
-```cmd
-SETLOCAL EnableDelayedExpansion
-IF EXIST "path\to\llm-switcher\active.flag" (
-  SET "CODEX_BASE_URL=http://127.0.0.1:3456/v1"
-  SET "OPENAI_BASE_URL=http://127.0.0.1:3456/v1"
-)
-IF EXIST "path\to\llm-switcher\codex-1m.flag" (
-  SET /P CMODEL=<"path\to\llm-switcher\codex-1m.flag"
-  SET "CODEX_MODEL=!CMODEL!"
-  SET "CODEX_MAX_CONTEXT_TOKENS=1000000"
-  SET "CODEX_AUTO_COMPACT_WINDOW=900000"
-)
+Install the generated shim, put its directory first in `PATH`, and activate a Codex-compatible profile:
+
+```bash
+switch shim install
+export PATH="$HOME/.llm-switcher/bin:$PATH"   # Bash or Zsh
+switch codex <profile>
+switch shim status
+codex
 ```
+
+On Windows, add `%USERPROFILE%\.llm-switcher\bin` before the real Codex directory in `PATH`. Open a new terminal after the change.
+
+The shim does not edit `~/.codex/config.toml`. When the gateway is active, it passes these official command-line overrides to the real Codex binary:
+
+| Profile role | Codex configuration key | Gateway alias |
+|---|---|---|
+| `main` | `model` | `main` |
+| `review` | `review_model` | `review` |
+| `subagent` | `agents.default_subagent_model` | `subagent` |
+
+It also passes `openai_base_url` for local routing. If 1M context is enabled for `main`, it passes `model_context_window=1000000` and `model_auto_compact_token_limit=900000`. Command-line overrides have higher precedence than user and project configuration. Re-run `switch shim install` after upgrading an older checkout.
 
 ---
 
@@ -372,7 +391,7 @@ switch vertex <profile>        # Set active profile specifically for Vertex / Ge
 switch port <number>           # Change the gateway port (restarts it if running)
 switch service install         # Install OS background autostart service (Windows / macOS / Linux)
 switch service uninstall       # Remove background autostart service
-switch shim install            # Auto-inject gateway env into resumed sessions (claude --resume)
+switch shim install            # Route new Claude and Codex sessions through the gateway
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
 switch shim uninstall          # Remove the launcher shims
 switch off [target]            # Deactivate gateway (or specific target) and restore official
@@ -400,6 +419,8 @@ Behaviour:
 
 - **Gateway ON** → the wrapper injects the env, so every invocation (including `--resume`)
   is routed through the gateway.
+- For Codex, the wrapper also passes the documented model-role and context settings with
+  `--config`. It does not depend on unsupported `CODEX_*` variables.
 - **Gateway OFF** (no `active.flag`) → the wrapper is fully transparent and runs the real
   binary untouched; it never forces routing.
 - The real binary is located with the shim directory stripped from `PATH`, so it can never

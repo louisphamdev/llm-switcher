@@ -1,5 +1,5 @@
-// LIVE test: cần gateway đang chạy (switch on) và upstream thật (tốn token).
-// Test offline không cần mạng: npm test
+// LIVE test: requires a running gateway (switch on) and a real upstream (costs tokens).
+// Offline test, no network needed: npm test
 const GATEWAY_PORT = Number(process.env.LLM_SWITCHER_PORT) || 3456;
 const BASE_URL = `http://127.0.0.1:${GATEWAY_PORT}`;
 

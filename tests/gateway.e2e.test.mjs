@@ -1,5 +1,5 @@
-// End-to-end tests: spawn proxy.mjs against a mock upstream (offline, không cần API key thật).
-// Chạy: node --test tests/
+// End-to-end tests: spawn proxy.mjs against a mock upstream (offline, no real API key needed).
+// Run: node --test tests/
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';

@@ -1,8 +1,8 @@
 // ============================================================
 // state.mjs — shared config / launcher-flag state for LLM Switcher
 //
-// Dùng chung cho proxy.mjs, switch.mjs, mcp.mjs để tránh 3 bản copy
-// logic bật/tắt profile bị lệch nhau.
+// Shared by proxy.mjs, switch.mjs, mcp.mjs to avoid 3 copies of the
+// profile on/off logic drifting out of sync.
 // ============================================================
 
 import fs from 'node:fs';
@@ -15,6 +15,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = __dirname;
 export const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
 export const DEFAULT_PORT = 3456;
+export const CLAUDE_MODEL_SLOTS = ['opus', 'sonnet', 'haiku', 'fable'];
+// Codex CLI model roles per OpenAI docs (config-reference):
+// - main     <-> `model` (session model)
+// - review   <-> `review_model` (override for /review)
+// - subagent <-> `agents.default_subagent_model` (spawned agents)
+// No fast/fallback in the docs — those are custom keys, read only for backward compatibility.
+export const CODEX_MODEL_SLOTS = ['main', 'review', 'subagent'];
+export const CHAT_MODEL_SLOTS = ['default'];
+export const VERTEX_MODEL_SLOTS = ['default'];
+
+export const MODEL_SLOTS_BY_FORMAT = {
+  anthropic: CLAUDE_MODEL_SLOTS,
+  responses: CODEX_MODEL_SLOTS,
+  'openai-chat': CHAT_MODEL_SLOTS,
+  vertex: VERTEX_MODEL_SLOTS,
+  auto: CLAUDE_MODEL_SLOTS
+};
+
+// Fallback key chain when reading old profiles (preserves values, no config loss).
+const SLOT_LEGACY_KEYS = {
+  main: ['opus'],
+  review: ['sonnet'],
+  subagent: ['fast', 'fallback', 'haiku', 'fable'],
+  default: ['sonnet', 'opus', 'haiku', 'fable']
+};
 
 export const configPath = process.env.LLM_SWITCHER_CONFIG
   ? path.resolve(process.env.LLM_SWITCHER_CONFIG)
@@ -39,7 +64,7 @@ let cachedConfig = null;
 let lastMtime = 0;
 let lastLoadError = null;
 
-// Đọc config có cache theo mtime. Nếu file đang bị sửa dở (JSON lỗi) thì giữ bản cache cũ.
+// Cached config read keyed by mtime. If the file is half-written (invalid JSON), keep the old cached copy.
 export function loadConfig() {
   try {
     const stat = fs.statSync(configPath);
@@ -61,7 +86,7 @@ export function getConfigLoadError() {
   return lastLoadError;
 }
 
-// Ghi atomic (tmp + rename) để proxy đang chạy không bao giờ đọc phải file ghi dở.
+// Atomic write (tmp + rename) so a running proxy never reads a half-written file.
 export function saveConfig(cfg) {
   const tmp = `${configPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
@@ -84,7 +109,7 @@ export function isValidTarget(target) {
   return TARGETS.includes(target);
 }
 
-// Tìm profile không phân biệt hoa thường (CLI gõ `switch MyProfile` hay `switch myprofile` đều được).
+// Case-insensitive profile lookup (CLI accepts `switch MyProfile` or `switch myprofile`).
 export function findProfileKey(cfg, name) {
   if (!name || !cfg?.profiles) return null;
   if (hasProfile(cfg, name)) return name;
@@ -97,12 +122,41 @@ export function profileAcceptsTarget(profile, target) {
   return inFmt === 'auto' || inFmt === target;
 }
 
+export function modelSlotsForProfile(profile) {
+  return MODEL_SLOTS_BY_FORMAT[profile?.inFormat] || MODEL_SLOTS_BY_FORMAT.auto;
+}
+
+function legacyKeysForSlot(slot) {
+  return SLOT_LEGACY_KEYS[slot] || [];
+}
+
+// UI saves using the new slot keys; on read, try the new key first, legacy keys after.
+export function modelForSlot(profile, slot) {
+  const models = profile?.defaultModels || {};
+  // An explicit empty canonical value clears any legacy value. This matters
+  // during migration because the UI keeps old keys until the profile is saved.
+  if (Object.hasOwn(models, slot)) return models[slot] || '';
+  for (const k of legacyKeysForSlot(slot)) {
+    if (models[k]) return models[k];
+  }
+  return '';
+}
+
+export function model1MForSlot(profile, slot) {
+  const flags = profile?.model1M || {};
+  if (Object.hasOwn(flags, slot)) return Boolean(flags[slot]);
+  for (const k of legacyKeysForSlot(slot)) {
+    if (Object.hasOwn(flags, k)) return Boolean(flags[k]);
+  }
+  return false;
+}
+
 export function parsePort(value) {
   const p = parseInt(value, 10);
   return Number.isInteger(p) && p > 0 && p <= 65535 ? p : null;
 }
 
-// Thứ tự ưu tiên: --port / -p  >  PORT / LLM_SWITCHER_PORT  >  config.port  >  3456
+// Precedence: --port / -p > PORT / LLM_SWITCHER_PORT > config.port > 3456
 export function resolvePort(argv = process.argv.slice(2), cfg = loadConfig()) {
   for (let i = 0; i < argv.length; i++) {
     if ((argv[i] === '--port' || argv[i] === '-p') && argv[i + 1]) {
@@ -115,7 +169,7 @@ export function resolvePort(argv = process.argv.slice(2), cfg = loadConfig()) {
   return parsePort(cfg?.port) || DEFAULT_PORT;
 }
 
-// Config cũ chỉ có `activeProfile` -> suy ra map theo từng CLI target.
+// Legacy config only has `activeProfile` -> derive the per-CLI-target map from it.
 export function getActiveMap(cfg) {
   const out = {};
   const legacy = cfg?.activeProfile || null;
@@ -131,9 +185,9 @@ function ensureActiveMap(cfg) {
   return cfg.activeProfiles;
 }
 
-// ---------------- mutations (không tự lưu) ----------------
+// ---------------- mutations (do not persist by themselves) ----------------
 
-// Gán profile cho 1 target. Trả về chuỗi lỗi hoặc null.
+// Assign a profile to one target. Returns an error string or null.
 export function setTargetProfile(cfg, target, profileKey) {
   if (!isValidTarget(target)) return `Unknown target "${target}". Valid: ${TARGETS.join(', ')}`;
   const map = ensureActiveMap(cfg);
@@ -151,7 +205,7 @@ export function setTargetProfile(cfg, target, profileKey) {
   return null;
 }
 
-// Bật profile cho mọi target mà nó hỗ trợ (inFormat auto -> tất cả).
+// Enable a profile for every target it supports (inFormat auto -> all).
 export function activateProfile(cfg, profileKey) {
   if (!hasProfile(cfg, profileKey)) return `Profile "${profileKey}" does not exist`;
   const map = ensureActiveMap(cfg);
@@ -163,7 +217,7 @@ export function activateProfile(cfg, profileKey) {
   return null;
 }
 
-// Tắt đúng các target đang dùng profile này (không đụng target khác).
+// Disable exactly the targets using this profile (leaves other targets untouched).
 export function deactivateProfile(cfg, profileKey) {
   const map = ensureActiveMap(cfg);
   for (const t of TARGETS) {
@@ -199,24 +253,25 @@ function writeOrRemove(file, content) {
   }
 }
 
-const CLAUDE_TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
-
 function claudeTier1M(profile) {
   const m = profile?.model1M || {};
   return m.opus ? 'opus[1m]' : m.sonnet ? 'sonnet[1m]' : m.fable ? 'fable[1m]' : null;
 }
 
 function anyTier1M(profile) {
-  const m = profile?.model1M || {};
-  return Boolean(m.opus || m.sonnet || m.haiku || m.fable);
+  return modelSlotsForProfile(profile).some(slot => model1MForSlot(profile, slot));
 }
 
-function primaryModel(profile) {
-  const d = profile?.defaultModels || {};
-  return d.opus || d.sonnet || d.haiku || '';
+export function primaryModel(profile) {
+  const slots = modelSlotsForProfile(profile);
+  for (const slot of slots) {
+    const model = modelForSlot(profile, slot);
+    if (model) return model;
+  }
+  return '';
 }
 
-// Tính trạng thái launcher từ activeProfiles (nguồn sự thật duy nhất).
+// Derive launcher state from activeProfiles (single source of truth).
 export function computeLaunchState(cfg, port) {
   const map = getActiveMap(cfg);
   const pick = (t) => (hasProfile(cfg, map[t]) ? cfg.profiles[map[t]] : null);
@@ -229,7 +284,7 @@ export function computeLaunchState(cfg, port) {
   const state = {
     active: Boolean(claude || codex || openai || vertex),
     claude1M: claude ? claudeTier1M(claude) : null,
-    codex1M: codex && anyTier1M(codex) ? (primaryModel(codex) || '1000000') : null,
+    codex1M: codex && model1MForSlot(codex, 'main') ? (primaryModel(codex) || '1000000') : null,
     openai1M: openai && anyTier1M(openai) ? (primaryModel(openai) || '1000000') : null,
     env: []
   };
@@ -241,32 +296,34 @@ export function computeLaunchState(cfg, port) {
       state.env.push(['ANTHROPIC_MODEL', state.claude1M]);
       state.env.push(['CLAUDE_CODE_AUTO_COMPACT_WINDOW', '900000']);
     }
-    // Claude Code đọc `[1m]` theo từng biến: chỉ ANTHROPIC_MODEL mang hậu tố thì `/model sonnet`,
-    // đổi tier hay subagent gọi alias đều rơi về model Claude thật 200K. Gắn `<tier>[1m]` cho đúng
-    // các tier profile bật model1M; Claude Code khi đó gửi nguyên `opus`/`sonnet`/... nên proxy vẫn
-    // map theo profile đang active (đổi profile nóng không cần khởi động lại CLI).
-    for (const tier of CLAUDE_TIERS) {
+    // Claude Code reads `[1m]` per variable: if only ANTHROPIC_MODEL carries the suffix, `/model sonnet`,
+    // tier switches or subagent alias calls fall back to the real 200K Claude model. Set `<tier>[1m]` for
+    // each tier the profile enables model1M on; Claude Code then sends plain `opus`/`sonnet`/... so the proxy
+    // still maps by the active profile (hot profile switches need no CLI restart).
+    for (const tier of CLAUDE_MODEL_SLOTS) {
       if (claude.model1M?.[tier]) state.env.push([`ANTHROPIC_DEFAULT_${tier.toUpperCase()}_MODEL`, `${tier}[1m]`]);
     }
   }
   if (codex) {
-    state.env.push(['CODEX_BASE_URL', `${base}/v1`]);
-    state.env.push(['OPENAI_BASE_URL', `${base}/v1`]);
+    // These are internal shim inputs, not Codex configuration variables.
+    // The installed Codex shim converts them to documented `--config` keys.
+    state.env.push(['LLM_SWITCHER_CODEX_BASE_URL', `${base}/v1`]);
+    if (modelForSlot(codex, 'main')) state.env.push(['LLM_SWITCHER_CODEX_MAIN_MODEL', modelForSlot(codex, 'main')]);
+    if (modelForSlot(codex, 'review')) state.env.push(['LLM_SWITCHER_CODEX_REVIEW_MODEL', modelForSlot(codex, 'review')]);
+    if (modelForSlot(codex, 'subagent')) state.env.push(['LLM_SWITCHER_CODEX_SUBAGENT_MODEL', modelForSlot(codex, 'subagent')]);
     if (state.codex1M) {
-      state.env.push(['CODEX_MAX_CONTEXT_TOKENS', '1000000']);
-      state.env.push(['CODEX_AUTO_COMPACT_WINDOW', '900000']);
-      const pm = primaryModel(codex);
-      if (pm) state.env.push(['CODEX_MODEL', pm]);
+      state.env.push(['LLM_SWITCHER_CODEX_CONTEXT_WINDOW', '1000000']);
+      state.env.push(['LLM_SWITCHER_CODEX_AUTO_COMPACT_LIMIT', '900000']);
     }
   }
   if (openai) {
-    if (!codex) state.env.push(['OPENAI_BASE_URL', `${base}/v1`]);
+    state.env.push(['OPENAI_BASE_URL', `${base}/v1`]);
     if (state.openai1M) state.env.push(['OPENAI_MAX_CONTEXT_TOKENS', '1000000']);
   }
   return state;
 }
 
-// Ghi flag + env.cmd/env.sh đúng theo activeProfiles, và dọn settings.json của Claude Code.
+// Write flags + env.cmd/env.sh from activeProfiles, and clean up Claude Code settings.json.
 export function applyLaunchState(cfg, port) {
   const st = computeLaunchState(cfg, port);
   writeOrRemove(paths.activeFlag, st.active ? 'active' : null);
@@ -319,8 +376,8 @@ const MANAGED_CLAUDE_ENV = [
   'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL_NAME'
 ];
 
-// Gỡ các biến proxy cũ khỏi ~/.claude/settings.json. Chỉ ghi file khi thực sự có thay đổi,
-// và không bao giờ ném lỗi (settings.json lỗi cú pháp thì để nguyên cho user tự sửa).
+// Remove stale proxy vars from ~/.claude/settings.json. Only writes when something actually changed,
+// and never throws (leaves malformed settings.json untouched for the user to fix).
 export function cleanClaudeSettings() {
   try {
     if (!fs.existsSync(claudeSettingsPath)) return { changed: false };
@@ -336,7 +393,7 @@ export function cleanClaudeSettings() {
   }
 }
 
-// Ẩn API key khi trả config ra UI / API.
+// Hide API keys when returning config to the UI / API.
 export const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
 
 export function redactConfig(cfg) {

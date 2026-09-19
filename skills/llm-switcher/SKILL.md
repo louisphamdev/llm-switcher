@@ -7,7 +7,7 @@ description: Mandatory guidance for AI coding agents and token compression tools
 
 This skill governs how AI coding agents (Claude Code, Codex, Cursor, Windsurf, Opencode) and prompt optimization/compression tools (Headroom, RTK, Ponytail, Repomix) must interact with LLM providers on this workstation.
 
-## 1. The Core Directive (Mệnh lệnh Cốt lõi)
+## 1. The Core Directive
 
 > **ALL OUTBOUND LLM REQUESTS MUST ROUTE THROUGH LLM SWITCHER (`http://127.0.0.1:3456`).**
 > 
@@ -28,7 +28,7 @@ This skill governs how AI coding agents (Claude Code, Codex, Cursor, Windsurf, O
 [Internet / 9Router / Upstream LLM]
 ```
 
-## 2. Why This is Mandatory (Lý do Kỹ thuật)
+## 2. Why This is Mandatory
 
 Direct outbound calls from token compressors will break the developer environment for several reasons:
 

@@ -1,7 +1,7 @@
 // ============================================================
 // formats.mjs — LLM Switcher protocol adapters (zero dependency)
 //
-// Luồng convert 2 chiều qua IR (Intermediate Representation):
+// Two-way conversion flow through IR (Intermediate Representation):
 //
 //   client --parse--> IR --emit--> upstream --events--> client
 //
@@ -57,7 +57,7 @@ function mapStopReason(finishReason) {
   }
 }
 
-// Canonical finish dùng nội bộ cho event stream.
+// Canonical finish used internally for the event stream.
 function canonFinish(raw) {
   const r = String(raw || '').toLowerCase();
   if (!r) return null;
@@ -111,7 +111,7 @@ function splitParts(parts) {
     } else if (t) {
       out.text.push(t);
     }
-    // Gemini 3 có thể gắn chữ ký vào part text rỗng ở chunk cuối -> vẫn phải lấy.
+    // Gemini 3 may attach the signature to an empty text part in the last chunk -> still must pick it up.
     if (!out.signature && partSig && !fc) out.signature = partSig;
     if (fc && typeof fc === 'object') {
       const args = fc.args !== undefined ? fc.args : fc.arguments;
@@ -200,8 +200,8 @@ function smartToolCalls(node) {
     const fn = (tc.function && typeof tc.function === 'object') ? tc.function : {};
     const name = fn.name || tc.name || '';
     const rawArgs = fn.arguments ?? fn.args ?? tc.args ?? tc.arguments ?? tc.input;
-    // Chunk stream tiếp theo của OpenAI chỉ có {index, function:{arguments}} (không có name/id):
-    // vẫn phải giữ lại, nếu không toàn bộ args sau chunk đầu bị mất.
+    // Follow-up OpenAI stream chunks only carry {index, function:{arguments}} (no name/id):
+    // they must still be kept, otherwise all args after the first chunk are lost.
     if (!name && (rawArgs === undefined || rawArgs === null || rawArgs === '')) return null;
     return {
       index: (typeof tc.index === 'number' ? tc.index : idx),
@@ -340,11 +340,11 @@ function baseIR() {
   };
 }
 
-// Anthropic Messages API -> IR (logic port từ transformAnthropicToOpenAI cũ).
+// Anthropic Messages API -> IR (logic ported from the old transformAnthropicToOpenAI).
 function anthropicToIR(payload) {
   const ir = baseIR();
   ir.model = payload.model || '';
-  // Anthropic API mặc định non-stream khi không có field `stream` (SDK bỏ trống field này cho messages.create).
+  // Anthropic API defaults to non-stream when the `stream` field is absent (the SDK leaves it empty for messages.create).
   ir.stream = payload.stream === true;
 
   if (payload.system) {
@@ -382,7 +382,7 @@ function anthropicToIR(payload) {
             let resultText = '';
             if (typeof part.content === 'string') resultText = part.content;
             else if (Array.isArray(part.content)) {
-              // Không nhét base64 của ảnh vào text (nổ token); chỉ để placeholder.
+              // Don't stuff image base64 into text (token blowup); keep only a placeholder.
               resultText = part.content.map(c => {
                 if (typeof c === 'string') return c;
                 if (c?.type === 'text') return c.text || '';
@@ -403,7 +403,7 @@ function anthropicToIR(payload) {
         if (toolCalls.length) out.toolCalls = toolCalls;
         if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
       } else if (msg.content) {
-        // Fallback cho payload bị các tool tiền xử lý nén/biến dạng thành object
+        // Fallback for payloads that preprocessing/compression tools mangled into an object
         ir.messages.push({ role: msg.role, content: asText(msg.content) });
       }
     }
@@ -438,7 +438,7 @@ function anthropicToIR(payload) {
 // Anthropic `thinking` param ({type, budget_tokens}) -> IR thinking ({type, budget, effort}).
 function thinkingFromAnthropicParam(th, effort) {
   if (!th || typeof th !== 'object') return null;
-  // Client tắt thinking một cách tường minh -> giữ nguyên ý định, không "phục hồi" thinking.
+  // Client explicitly disabled thinking -> honor that intent, don't "restore" thinking.
   if (th.type === 'disabled') return { type: 'disabled' };
   const out = { type: th.type === 'adaptive' ? 'adaptive' : 'enabled' };
   const budget = Number(th.budget_tokens ?? th.budget);
@@ -452,7 +452,7 @@ function isNoReasoningEffort(e) {
   return String(e || '').toLowerCase() === 'none';
 }
 
-// OpenAI Chat Completions -> IR (chuẩn hoá nhẹ).
+// OpenAI Chat Completions -> IR (light normalization).
 function chatToIR(payload) {
   const ir = baseIR();
   ir.model = payload.model || '';
@@ -532,13 +532,13 @@ function thinkingFromReasoningParam(r) {
 }
 
 // ---- Codex tool kinds ----
-// Codex khai báo tool dạng: function | custom (freeform, VD apply_patch với Lark grammar) | namespace
-// (bọc function/custom) | local_shell (bản cũ) | hosted (web_search, tool_search...).
-// Upstream không phải OpenAI chỉ hiểu function tool, nên:
-//  - custom      -> function có 1 tham số chuỗi `input` (grammar đưa vào description), trả về custom_tool_call;
-//  - namespace   -> tên phẳng "<namespace>__<name>", trả về function_call kèm `namespace`;
-//  - local_shell -> function {command[], workdir, timeout_ms}, trả về local_shell_call;
-//  - hosted tools do OpenAI chạy phía server -> không chuyển được, bỏ qua.
+// Codex declares tools as: function | custom (freeform, e.g. apply_patch with Lark grammar) | namespace
+// (wrapping function/custom) | local_shell (legacy) | hosted (web_search, tool_search...).
+// Non-OpenAI upstreams only understand function tools, so:
+//  - custom      -> function with a single string `input` param (grammar goes into the description), returns custom_tool_call;
+//  - namespace   -> flat name "<namespace>__<name>", returns function_call with `namespace`;
+//  - local_shell -> function {command[], workdir, timeout_ms}, returns local_shell_call;
+//  - hosted tools run server-side by OpenAI -> can't be forwarded, skipped.
 const CUSTOM_TOOL_PARAMS = {
   type: 'object',
   properties: { input: { type: 'string', description: 'The raw freeform tool input (not JSON-encoded).' } },
@@ -569,7 +569,7 @@ function customToolDescription(t) {
   return d;
 }
 
-// function_call_output / custom_tool_call_output: `output` là chuỗi hoặc mảng content item.
+// function_call_output / custom_tool_call_output: `output` is a string or an array of content items.
 function responsesOutputToText(out) {
   if (typeof out === 'string') return out;
   if (Array.isArray(out)) {
@@ -604,8 +604,8 @@ function responsesToIR(payload) {
     if (text) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
   };
 
-  // Parallel tool calls đến thành nhiều item liên tiếp -> gộp vào 1 assistant turn,
-  // nếu không OpenAI Chat/Anthropic sẽ báo lỗi tool_calls không được trả lời liền kề.
+  // Parallel tool calls arrive as consecutive items -> merge into 1 assistant turn,
+  // otherwise OpenAI Chat/Anthropic will error that tool_calls aren't answered adjacently.
   const pushCall = (call) => {
     const last = ir.messages[ir.messages.length - 1];
     if (last && last.role === 'assistant') last.toolCalls = [...(last.toolCalls || []), call];
@@ -619,7 +619,7 @@ function responsesToIR(payload) {
     for (const item of input) {
       if (typeof item === 'string') { pushText('user', item); continue; }
       if (!item || typeof item !== 'object') continue;
-      // EasyInputMessage ({role, content}) không bắt buộc có `type`.
+      // EasyInputMessage ({role, content}) doesn't require `type`.
       if (item.type === 'message' || (!item.type && item.role)) {
         const c = item.content;
         const parts = [];
@@ -679,7 +679,7 @@ function responsesToIR(payload) {
         ir.tools.push({ name: 'local_shell', description: 'Run a shell command on the user\'s machine and return its output.', parameters: LOCAL_SHELL_PARAMS });
         ir.toolMeta.local_shell = { kind: 'local_shell', name: 'local_shell', namespace: null };
       }
-      // web_search / file_search / tool_search / image_generation...: hosted tool, bỏ qua.
+      // web_search / file_search / tool_search / image_generation...: hosted tools, skipped.
     };
     for (const t of payload.tools) addTool(t, null);
   }
@@ -704,7 +704,7 @@ function responsesToIR(payload) {
 function vertexToIR(payload) {
   const ir = baseIR();
   ir.model = payload.model || '';
-  ir.stream = false; // proxy override theo endpoint :streamGenerateContent
+  ir.stream = false; // proxy overrides per the :streamGenerateContent endpoint
 
   const sys = payload.systemInstruction?.parts;
   if (Array.isArray(sys)) {
@@ -713,8 +713,8 @@ function vertexToIR(payload) {
     ir.system = payload.system_instruction;
   }
 
-  // Vertex không có tool call id: tự sinh id cho functionCall rồi ghép functionResponse theo tên (FIFO),
-  // để upstream OpenAI/Anthropic nhận đúng cặp tool_call <-> tool result thay vì bị "heal" thành text.
+  // Vertex has no tool call ids: auto-generate ids for functionCalls then match functionResponses by name (FIFO),
+  // so upstream OpenAI/Anthropic gets the correct tool_call <-> tool result pairs instead of "healing" them into text.
   const pendingByName = new Map();
   let callSeq = 0;
 
@@ -752,7 +752,7 @@ function vertexToIR(payload) {
         if (toolCalls.length) out.toolCalls = toolCalls;
         if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
       } else if (c.role === 'function') {
-        // đã push functionResponse ở trên
+        // functionResponse already pushed above
       } else {
         if (texts.length) ir.messages.push({ role: 'user', content: texts.join('') });
       }
@@ -795,29 +795,30 @@ function parseToIR(clientFormat, payload) {
 // ---------------- emitters: IR -> upstream body ----------------
 
 function hasNativeReasoning(model) {
+  // Detect capability families instead of pinning exact versions. Claude Opus
+  // model IDs change often, but all current Opus variants support reasoning.
   const m = String(model || '').toLowerCase();
-  return m.includes('thinking') || m.includes('reasoning')
-    || m.includes('opus-4-6') || m.includes('opus-4-7') || m.includes('opus-5');
+  return m.includes('thinking') || m.includes('reasoning') || m.includes('opus');
 }
 
-// Healer Engine: chuẩn hoá cặp tool call <-> tool result trước khi emit cho mọi upstream.
+// Healer Engine: normalize tool call <-> tool result pairs before emitting to any upstream.
 //
-// Các tool nén token (RTK, Headroom, Ponytail) hay cắt lịch sử làm gãy cặp tool:
-//  - tool result "mồ côi" (turn assistant chứa tool call đã bị xoá)
+// Token-compressing tools (RTK, Headroom, Ponytail) or history trimming break tool pairs:
+//  - orphaned tool result (assistant turn holding the tool call was deleted)
 //    -> Anthropic: "tool_use_id does not correspond to any tool_use"
 //    -> OpenAI: "messages with role 'tool' must be a response to a preceding message with 'tool_calls'"
-//  - tool call không có result liền sau (result bị xoá hoặc bị chèn message khác vào giữa)
+//  - tool call with no immediately following result (result deleted or another message inserted in between)
 //    -> Anthropic: "tool_use ids were found without tool_result blocks immediately after"
 //    -> OpenAI: "assistant message with 'tool_calls' must be followed by tool messages"
 //
-// Quy tắc: tool result chỉ hợp lệ khi nằm ngay sau assistant turn khai báo nó. Result mồ côi được
-// chuyển thành user text (giữ ngữ cảnh); tool call thiếu result được bù một result placeholder.
+// Rule: a tool result is only valid when placed right after the assistant turn that declared it. Orphaned results are
+// converted to user text (preserving context); tool calls missing a result get a placeholder result.
 const MISSING_TOOL_RESULT = '[Tool result unavailable: it was removed from the conversation history]';
 
 function healToolPairs(messages) {
   const out = [];
-  let pending = null;   // Map<callId, name> của assistant turn gần nhất
-  let deferred = [];    // result mồ côi gặp khi đang chờ result -> đẩy ra sau để không phá tính liền kề
+  let pending = null;   // Map<callId, name> of the most recent assistant turn
+  let deferred = [];    // orphaned results seen while awaiting results -> flushed later to preserve adjacency
   let seq = 0;
 
   const orphanText = (m) => ({
@@ -874,13 +875,13 @@ function normThinkingMode(mode) {
 
 // IR -> OpenAI Chat Completions body.
 //
-// opts.thinkingMode (theo profile):
-//  - 'auto'   (mặc định, dành cho gateway như 9Router): phục hồi thinking cho reasoning model khi tool nén
-//             xoá mất param, chèn hướng dẫn <think> cho model không có reasoning native, gửi cả
-//             `thinking` lẫn `reasoning_effort`.
-//  - 'native' (OpenAI chính hãng / server OpenAI-compatible nghiêm ngặt): chỉ gửi `reasoning_effort` khi
-//             client yêu cầu thinking, không sửa system prompt, dùng `max_completion_tokens`.
-//  - 'off'    : không bao giờ gửi tham số reasoning, không chèn prompt.
+// opts.thinkingMode (per profile):
+//  - 'auto'   (default, for gateways like 9Router): restore thinking for reasoning models when compression tools
+//             drop the param, inject a <think> guide for models without native reasoning, send both
+//             `thinking` and `reasoning_effort`.
+//  - 'native' (genuine OpenAI / strict OpenAI-compatible servers): only send `reasoning_effort` when
+//             the client requests thinking, don't touch the system prompt, use `max_completion_tokens`.
+//  - 'off'    : never send reasoning params, never inject prompts.
 function irToChatBody(ir, model, opts = {}) {
   const messages = [];
   const mode = normThinkingMode(opts.thinkingMode);
@@ -952,8 +953,8 @@ function irToChatBody(ir, model, opts = {}) {
       body.thinking = { type: 'adaptive' };
       body.reasoning_effort = ir.thinking.effort || 'high';
     } else {
-      // Phục hồi thinking: Nếu một tool nén bên ngoài (RTK/Headroom) xóa mất object thinking,
-      // nhưng model đích là reasoning model, gateway tự động kích hoạt lại thinking với budget an toàn.
+      // Restore thinking: if an external compression tool (RTK/Headroom) dropped the thinking object,
+      // but the target model is a reasoning model, the gateway auto re-enables thinking with a safe budget.
       const rawBudget = ir.thinking?.budget ?? (ir.thinking?.effort ? effortToBudget(ir.thinking.effort) : 2048);
       const safeBudget = clampBudget(rawBudget);
       body.thinking = { type: 'enabled', budget_tokens: safeBudget };
@@ -977,7 +978,7 @@ function contentToAnthropicBlocks(c) {
   const blocks = [];
   for (const p of c) {
     if (!p) continue;
-    // Anthropic từ chối text block rỗng ("text content blocks must be non-empty").
+    // Anthropic rejects empty text blocks ("text content blocks must be non-empty").
     if (p.type === 'text' && p.text) blocks.push({ type: 'text', text: p.text });
     else if (p.type === 'image_url') {
       const img = urlToAnthropicImage(typeof p.image_url === 'string' ? p.image_url : p.image_url?.url);
@@ -1011,10 +1012,10 @@ function irToAnthropicBody(ir, model) {
     if (blocks.length) messages.push({ role: 'user', content: blocks });
   }
 
-  // Chuẩn hoá tin nhắn cho Anthropic API:
-  // 1. Gộp các tin nhắn cùng role liên tiếp (consecutive user-user hoặc assistant-assistant).
-  // 2. Đảm bảo tin nhắn đầu tiên luôn là 'user'.
-  // 3. Đảm bảo có ít nhất 1 tin nhắn.
+  // Normalize messages for the Anthropic API:
+  // 1. Merge consecutive same-role messages (consecutive user-user or assistant-assistant).
+  // 2. Ensure the first message is always 'user'.
+  // 3. Ensure there is at least 1 message.
   const normalizedMessages = [];
   const toBlocks = (c) => typeof c === 'string' ? (c ? [{ type: 'text', text: c }] : []) : Array.isArray(c) ? c : [];
 
@@ -1064,16 +1065,16 @@ function irToAnthropicBody(ir, model) {
   if (ir.thinking && ir.thinking.type === 'adaptive') {
     body.thinking = { type: 'adaptive' };
   } else if (ir.thinking && ir.thinking.type !== 'disabled' && body.max_tokens > 1024) {
-    // Anthropic yêu cầu 1024 <= budget_tokens < max_tokens; max_tokens quá nhỏ thì bỏ thinking.
+    // Anthropic requires 1024 <= budget_tokens < max_tokens; drop thinking when max_tokens is too small.
     const budget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 4096));
     body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
   }
   if (body.thinking) {
-    // Khi bật thinking, Anthropic không chấp nhận temperature != 1, top_k, hay top_p < 0.95.
+    // When thinking is on, Anthropic rejects temperature != 1, top_k, or top_p < 0.95.
     if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
     delete body.top_k;
     if (body.top_p !== undefined && body.top_p < 0.95) delete body.top_p;
-    // tool_choice any/tool không tương thích với extended thinking.
+    // tool_choice any/tool is incompatible with extended thinking.
     if (body.tool_choice && (body.tool_choice.type === 'any' || body.tool_choice.type === 'tool')) {
       body.tool_choice = { type: 'auto', ...(body.tool_choice.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) };
     }
@@ -1106,8 +1107,8 @@ function irToVertexBody(ir, model) {
     return [];
   };
 
-  // Gộp content liền kề cùng loại: Gemini yêu cầu mọi functionResponse của 1 lượt parallel call
-  // nằm chung 1 content (số functionResponse phải bằng số functionCall của lượt trước).
+  // Merge adjacent contents of the same kind: Gemini requires all functionResponses of one parallel-call round
+  // to share a single content (functionResponse count must match the previous functionCall count).
   const push = (role, parts) => {
     if (!parts.length) return;
     const last = contents[contents.length - 1];
@@ -1118,7 +1119,7 @@ function irToVertexBody(ir, model) {
   };
 
   const healed = healToolPairs(ir.messages);
-  // "Lượt hiện tại" bắt đầu từ user message có nội dung thật cuối cùng (không phải functionResponse).
+  // The "current turn" starts at the last user message with real content (not a functionResponse).
   let turnStart = -1;
   healed.forEach((m, i) => { if (m.role === 'user') turnStart = i; });
   const needSig = geminiRequiresSignatures(model);
@@ -1128,10 +1129,10 @@ function irToVertexBody(ir, model) {
       let resp;
       try {
         const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
-        // functionResponse.response phải là object (Struct), không được là array/primitive.
+        // functionResponse.response must be an object (Struct), not an array/primitive.
         resp = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed ?? '' };
       } catch { resp = { result: m.content ?? '' }; }
-      // Gemini API & Vertex chỉ chấp nhận role 'user' | 'model' (functionResponse nằm trong role 'user').
+      // Gemini API & Vertex only accept roles 'user' | 'model' (functionResponse lives in the 'user' role).
       push('user', [{ functionResponse: { name: m.name || 'tool', response: resp } }]);
       continue;
     }
@@ -1141,7 +1142,7 @@ function irToVertexBody(ir, model) {
         const part = { functionCall: { name: tc.name, args: parseArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) part.thoughtSignature = sig;
-        // Chỉ functionCall đầu tiên của mỗi bước trong lượt hiện tại bị kiểm tra.
+        // Only the first functionCall of each step in the current turn is checked.
         else if (needSig && j === 0 && i > turnStart) part.thoughtSignature = GEMINI_DUMMY_SIGNATURE;
         parts.push(part);
       });
@@ -1176,7 +1177,7 @@ function irToVertexBody(ir, model) {
   if (typeof ir.params.maxTokens === 'number') gc.maxOutputTokens = ir.params.maxTokens;
   if (ir.params.stop.length) gc.stopSequences = ir.params.stop;
   if (ir.thinking && ir.thinking.type !== 'disabled') {
-    // includeThoughts: không có cờ này Gemini sẽ không trả thought parts -> client mất thinking.
+    // includeThoughts: without this flag Gemini won't return thought parts -> the client loses thinking.
     gc.thinkingConfig = { includeThoughts: true };
     if (ir.thinking.type === 'enabled') {
       gc.thinkingConfig.thinkingBudget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 2048));
@@ -1186,8 +1187,8 @@ function irToVertexBody(ir, model) {
   return body;
 }
 
-// JSON Schema -> Gemini/Vertex Schema (OpenAPI subset). Gemini từ chối các key như
-// additionalProperties, $schema, $ref, const, exclusiveMinimum, type dạng mảng...
+// JSON Schema -> Gemini/Vertex Schema (OpenAPI subset). Gemini rejects keys like
+// additionalProperties, $schema, $ref, const, exclusiveMinimum, array-form type...
 const GEMINI_SCHEMA_KEYS = new Set([
   'type', 'format', 'title', 'description', 'nullable', 'enum', 'items', 'properties', 'required',
   'minItems', 'maxItems', 'minProperties', 'maxProperties', 'minLength', 'maxLength', 'pattern',
@@ -1221,16 +1222,16 @@ function toGeminiSchema(schema) {
   }
   if (!out.type && out.properties) out.type = 'object';
   if (out.enum && !out.type) out.type = 'string';
-  if (out.enum && out.type !== 'string') delete out.enum; // Gemini chỉ hỗ trợ enum cho string
+  if (out.enum && out.type !== 'string') delete out.enum; // Gemini only supports enum for strings
   if (Array.isArray(out.required) && out.properties) {
     out.required = out.required.filter(r => Object.hasOwn(out.properties, r));
   }
   return out;
 }
 
-// Claude Code chèn dòng `x-anthropic-billing-header: ...` vào đầu system. Google Antigravity gặp
-// dòng này là trả 429 RESOURCE_EXHAUSTED giả dù quota còn, nên chỉ bỏ khi model đích là antigravity
-// (`ag/...`). Provider Claude của 9router vẫn cần header nên giữ nguyên cho mọi model khác.
+// Claude Code injects an `x-anthropic-billing-header: ...` line at the top of system. Google Antigravity
+// answers that line with a bogus 429 RESOURCE_EXHAUSTED even when quota remains, so strip it only when the target model is antigravity
+// (`ag/...`). 9Router's Claude provider still needs the header, so keep it for all other models.
 const BILLING_HEADER_RE = /^x-anthropic-billing-header:[^\n]*(?:\r?\n)*/i;
 
 function isAntigravityModel(model) {
@@ -1238,7 +1239,7 @@ function isAntigravityModel(model) {
 }
 
 function emitUpstreamBody(outFormat, ir, model, opts = {}) {
-  // thinkingMode 'off' áp dụng cho mọi upstream: bỏ hẳn thinking của client.
+  // thinkingMode 'off' applies to all upstreams: drop the client's thinking entirely.
   let src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
   if (isAntigravityModel(model) && src.system) src = { ...src, system: src.system.replace(BILLING_HEADER_RE, '') };
   switch (outFormat) {
@@ -1250,19 +1251,19 @@ function emitUpstreamBody(outFormat, ir, model, opts = {}) {
 }
 
 // ---------------- native Anthropic healer (direct passthrough) ----------------
-// Nhánh anthropic -> anthropic không đi qua IR (để giữ thinking signature, cache_control, document...),
-// nên sửa trực tiếp trên payload Anthropic, chỉ đụng tới những gì API chắc chắn sẽ từ chối:
-//  1. tool_result mồ côi -> text block;
-//  2. tool_use thiếu tool_result ở user turn kế tiếp -> bù tool_result placeholder;
-//  3. tool_result phải đứng đầu user turn -> đưa lên đầu;
-//  4. thinking block mang chữ ký giả (do gateway sinh khi convert) -> bỏ, vì Anthropic xác thực chữ ký;
-//  5. thinking bật nhưng assistant turn cuối của vòng tool không bắt đầu bằng thinking -> tắt thinking
-//     cho request này (Anthropic: "a final assistant message must start with a thinking block").
+// The anthropic -> anthropic branch skips IR (to preserve thinking signatures, cache_control, documents...),
+// so it patches the Anthropic payload directly, touching only what the API will definitely reject:
+//  1. orphaned tool_result -> text block;
+//  2. tool_use missing tool_result in the next user turn -> add a placeholder tool_result;
+//  3. tool_result must lead the user turn -> move it to the front;
+//  4. thinking block with a fake signature (generated by the gateway during conversion) -> drop, since Anthropic verifies signatures;
+//  5. thinking on but the last assistant turn of the tool loop doesn't start with thinking -> disable thinking
+//     for this request (Anthropic: "a final assistant message must start with a thinking block").
 
 export const PLACEHOLDER_SIGNATURE = 'reasoning-sig';
 
-// Chữ ký do gateway phát cho client Anthropic luôn là "không phải của Anthropic": placeholder, hoặc
-// chữ ký của provider khác được bọc prefix `lsw1.` (để có thể gửi lại đúng provider đó sau này).
+// Signatures the gateway issues to Anthropic clients are always "not from Anthropic": a placeholder, or
+// another provider's signature wrapped with the `lsw1.` prefix (so it can be sent back to that provider later).
 export const FOREIGN_SIG_PREFIX = 'lsw1.';
 
 function isGatewaySignature(sig) {
@@ -1288,8 +1289,8 @@ function healAnthropicPayload(payload) {
   const src = payload.messages.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
   let changed = src.length !== payload.messages.length;
 
-  // Bước 0: bỏ thinking block có chữ ký giả; gộp các user turn liền kề (để tool_result bị tách
-  // sang turn sau vẫn ghép được với tool_use).
+  // Step 0: drop thinking blocks with fake signatures; merge adjacent user turns (so a tool_result split
+  // into a later turn can still be matched with its tool_use).
   const msgs = [];
   for (const m of src) {
     let content = m.content;
@@ -1314,7 +1315,7 @@ function healAnthropicPayload(payload) {
     msgs.push({ ...m, content });
   }
 
-  // Bước 1-3: ghép cặp tool_use / tool_result.
+  // Steps 1-3: pair up tool_use / tool_result.
   const out = [];
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
@@ -1368,7 +1369,7 @@ function healAnthropicPayload(payload) {
 
   let body = { ...payload, messages: out };
 
-  // Bước 5: thinking + vòng tool đang dở mà assistant cuối không mở đầu bằng thinking.
+  // Step 5: thinking + an in-progress tool loop whose last assistant turn doesn't open with thinking.
   const thinkingOn = payload.thinking && payload.thinking.type && payload.thinking.type !== 'disabled';
   if (thinkingOn) {
     const lastUser = out[out.length - 1];
@@ -1387,7 +1388,7 @@ function healAnthropicPayload(payload) {
   return { payload: body, changed: true, notes: [...new Set(notes)] };
 }
 
-// Ước lượng token cho /count_tokens khi upstream không có endpoint đếm thật.
+// Estimate tokens for /count_tokens when the upstream has no real counting endpoint.
 function estimateTokens(payload) {
   let chars = 0;
   let images = 0;
@@ -1409,21 +1410,21 @@ function estimateTokens(payload) {
 }
 
 // ---------------- upstream event normalization ----------------
-// Mọi response upstream (mọi format, stream hay JSON) -> events chuẩn:
+// Every upstream response (any format, stream or JSON) -> standard events:
 // { think:[{text,sig}], text:[str], tools:[{index,id,name,args}],
 //   finish: 'stop'|'length'|'tool_calls'|'content_filter'|null,
 //   usage:{prompt,completion,cached}, sig, error }
 //
-// Quy ước usage: prompt = tổng input token (đã gồm cached, theo ngữ nghĩa OpenAI), cached = cache read.
+// Usage convention: prompt = total input tokens (including cached, per OpenAI semantics), cached = cache read.
 
 function chunkToolFull(tc, idx) {
   return { index: (typeof tc.index === 'number' ? tc.index : idx), id: tc.id || null, name: tc.name || null, args: tc.args || '', sig: tc.sig || null };
 }
 
 // ---------------- Gemini thought signature cache ----------------
-// Gemini 3 bắt buộc gửi lại thoughtSignature của functionCall trong lượt hiện tại (thiếu -> HTTP 400).
-// Client như Claude Code / Codex không mang chữ ký này, nên gateway nhớ theo tool call id (LRU trong RAM)
-// và gắn lại khi lịch sử quay về. Mất cache (restart) -> dùng chữ ký giả Google cho phép.
+// Gemini 3 requires resending the functionCall's thoughtSignature within the current turn (missing -> HTTP 400).
+// Clients like Claude Code / Codex don't carry this signature, so the gateway remembers it by tool call id (in-RAM LRU)
+// and reattaches it when history comes back. Cache lost (restart) -> use the Google-allowed dummy signature.
 // https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures
 export const GEMINI_DUMMY_SIGNATURE = 'skip_thought_signature_validator';
 const MAX_SIGNATURES = 5000;
@@ -1504,8 +1505,8 @@ function normalizeUpstream(parsed, outFormat) {
     return ev;
   }
 
-  // openai-chat | vertex (cả SSE chunk lẫn JSON full: cùng 1 shape)
-  // Đọc usage TRƯỚC: chunk usage cuối của OpenAI (stream_options.include_usage) có `choices: []`.
+  // openai-chat | vertex (both SSE chunks and full JSON share one shape)
+  // Read usage FIRST: OpenAI's final usage chunk (stream_options.include_usage) has `choices: []`.
   const u = smartUsage(parsed.usage ?? parsed.usageMetadata);
   ev.usage = { prompt: u.prompt, completion: u.completion, cached: u.cached };
 
@@ -1525,11 +1526,11 @@ function normalizeUpstream(parsed, outFormat) {
   return ev;
 }
 
-// Normalizer có trạng thái cho 1 response: đánh lại index tool call thành 0,1,2... liên tục.
-//  - Vertex trả functionCall hoàn chỉnh, không có index -> mỗi call là 1 tool mới
-//    (trước đây mọi call đều index 0 nên args của các call bị nối vào nhau).
-//  - Anthropic dùng block index (1, 2...) -> OpenAI client cần index tool_calls bắt đầu từ 0.
-//  - Provider OpenAI-compatible bỏ `index` nhưng gửi id khác nhau -> tách thành tool riêng.
+// Stateful normalizer for one response: renumber tool call indexes to continuous 0,1,2...
+//  - Vertex returns complete functionCalls with no index -> each call is a new tool
+//    (previously every call had index 0 so args from different calls got concatenated).
+//  - Anthropic uses block indexes (1, 2...) -> OpenAI clients need tool_calls indexes starting at 0.
+//  - OpenAI-compatible providers drop `index` but send distinct ids -> split into separate tools.
 function createUpstreamNormalizer(outFormat) {
   const slots = new Map();
   let next = 0;
@@ -1538,7 +1539,7 @@ function createUpstreamNormalizer(outFormat) {
     for (const tc of ev.tools) {
       if (outFormat === 'vertex') {
         tc.index = next++;
-        // Vertex không có id -> sinh id ổn định để client gửi lại, dùng làm khoá cache chữ ký.
+        // Vertex has no id -> generate a stable id for the client to send back, used as the signature-cache key.
         tc.id = tc.id || `call_${rand(24)}`;
         rememberToolSignature(tc.id, tc.sig);
         continue;
@@ -1559,7 +1560,7 @@ function createUpstreamNormalizer(outFormat) {
   };
 }
 
-// Gom events cho non-stream (cũng là accumulator usage cho stream).
+// Collect events for non-stream (also the usage accumulator for stream).
 function createCollector() {
   const C = {
     think: [], text: [], tools: new Map(), finish: null,
@@ -1590,13 +1591,13 @@ function createCollector() {
       if (ev.finish) C.finish = ev.finish;
       if (ev.error) C.error = ev.error;
       if (ev.usage) {
-        // Usage của Anthropic/Vertex là luỹ kế, OpenAI chỉ gửi 1 lần ở cuối -> lấy max, không cộng dồn.
+        // Anthropic/Vertex usage is cumulative, OpenAI sends it once at the end -> take the max, don't accumulate.
         C.prompt = Math.max(C.prompt, ev.usage.prompt || 0);
         C.completionTokens = Math.max(C.completionTokens, ev.usage.completion || 0);
         C.cached = Math.max(C.cached, ev.usage.cached || 0);
       }
     },
-    // Upstream không trả usage -> ước lượng ~4 ký tự / token.
+    // Upstream returned no usage -> estimate ~4 chars / token.
     completion() {
       return C.completionTokens > 0 ? C.completionTokens : Math.ceil(C.chars / 4);
     }
@@ -1605,8 +1606,8 @@ function createCollector() {
 }
 
 // ---------------- <think> tag splitter ----------------
-// Nhiều model OSS (DeepSeek, Qwen, GLM) nhét reasoning vào content dạng <think>...</think>.
-// Splitter chịu được tag bị cắt ngang giữa 2 chunk (VD "<thi" + "nk>").
+// Many OSS models (DeepSeek, Qwen, GLM) stuff reasoning into content as <think>...</think>.
+// The splitter tolerates tags split across 2 chunks (e.g. "<thi" + "nk>").
 
 const THINK_TAGS = ['<think>', '</think>', '<thinking>', '</thinking>'];
 
@@ -1656,7 +1657,7 @@ function splitThinkTags(text) {
 }
 
 // ---------------- client renderers ----------------
-// Mỗi renderer có: start(), think(text, sig), text(t), tool({index,id,name,args}),
+// Each renderer has: start(), think(text, sig), text(t), tool({index,id,name,args}),
 // finish(canonical, {prompt, completion, cached, hasTools}), error(message).
 
 function rand(n = 6) {
@@ -1675,8 +1676,8 @@ function anthropicStopReason(canonical, hasTools) {
 }
 
 // --- Anthropic SSE + message ---
-// Máy trạng thái block tuần tự: index tăng dần theo thứ tự content_block_start, không bao giờ
-// ghi delta vào block đã stop hay dùng lại index (thinking -> tool -> thinking -> text đều hợp lệ).
+// Sequential block state machine: indexes grow in content_block_start order, never
+// write deltas into a stopped block or reuse an index (thinking -> tool -> thinking -> text are all valid).
 function createAnthropicStream(emit, model) {
   const msgId = `msg_${Date.now()}_${rand()}`;
   let nextIndex = 0;
@@ -1881,8 +1882,8 @@ function buildChatMessage({ model, think, text, tools, finish, prompt, completio
 }
 
 // --- OpenAI Responses (Codex) SSE + object ---
-// Codex CLI dựng lịch sử & chạy tool từ `response.output_item.done`, không đọc `response.completed.output`,
-// nên mỗi item (reasoning / message / function_call) phải có đủ vòng added -> delta -> done.
+// Codex CLI builds history & runs tools from `response.output_item.done`, not `response.completed.output`,
+// so each item (reasoning / message / function_call) must complete the full added -> delta -> done cycle.
 function responsesUsage(prompt, completion, cached) {
   return {
     input_tokens: prompt || 0,
@@ -1893,7 +1894,7 @@ function responsesUsage(prompt, completion, cached) {
   };
 }
 
-// Model hay trả args có xuống dòng "thật" bên trong chuỗi JSON (không hợp lệ) -> thử escape control char.
+// Models often return args with literal newlines inside JSON strings (invalid) -> try escaping control chars.
 function parseArgsLenient(v) {
   const first = parseArgs(v);
   if (typeof v !== 'string' || !('raw' in first) || Object.keys(first).length !== 1) return first;
@@ -1904,7 +1905,7 @@ function parseArgsLenient(v) {
   }
 }
 
-// Dựng output item Codex cho 1 tool call dựa theo loại tool gốc đã khai báo trong request.
+// Build the Codex output item for one tool call based on the original tool type declared in the request.
 function responsesToolItem(toolMeta, t, status = 'completed') {
   const meta = toolMeta?.[t.name];
   const ns = meta?.namespace ? { namespace: meta.namespace } : {};
@@ -1974,7 +1975,7 @@ function createResponsesStream(emit, model, opts = {}) {
       send({ type: 'response.function_call_arguments.done', item_id: t.id, output_index: t.index, arguments: t.args });
     }
     output[t.index] = item;
-    // Codex chỉ chạy tool khi nhận output_item.done với item đầy đủ.
+    // Codex only runs the tool upon receiving output_item.done with the complete item.
     send({ type: 'response.output_item.done', output_index: t.index, item });
   }
   const closeTools = () => { for (const t of tools.values()) closeTool(t); };
@@ -2119,7 +2120,7 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
 
 function createVertexStream(emit, model) {
   const cand = (parts) => emit(null, { candidates: [{ content: { role: 'model', parts }, index: 0 }], modelVersion: model });
-  // Tool args từ OpenAI/Anthropic đến dạng delta; Vertex cần functionCall hoàn chỉnh -> gom lại, emit ở cuối.
+  // Tool args arrive from OpenAI/Anthropic as deltas; Vertex needs complete functionCalls -> buffer them, emit at the end.
   const tools = new Map();
   return {
     start() {},

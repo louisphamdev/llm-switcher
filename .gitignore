@@ -13,3 +13,4 @@ Thumbs.db
 proxy.log
 *.log
 config.json.*.tmp
+temp/

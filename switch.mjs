@@ -6,7 +6,7 @@ import http from 'node:http';
 import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
-  applyLaunchState, clearLaunchState
+  applyLaunchState, clearLaunchState, modelSlotsForProfile, modelForSlot, model1MForSlot
 } from './state.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
@@ -34,7 +34,7 @@ const TARGET_ALIASES = {
   vertex: 'vertex', gemini: 'vertex'
 };
 
-// Bỏ các cờ --port/-p khỏi positional args.
+// Strip --port/-p flags from positional args.
 function positionalArgs() {
   const out = [];
   const argv = process.argv.slice(2);
@@ -51,7 +51,7 @@ function getTargetPort() {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Chỉ coi là "đang chạy" khi /health trả đúng chữ ký của LLM Switcher (không nhầm với tool khác chiếm port).
+// Only count as "running" when /health returns the LLM Switcher signature (avoids mistaking another tool on the port).
 function checkProxyRunning(port) {
   return new Promise(resolve => {
     const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: 1000 }, res => {
@@ -110,7 +110,7 @@ function openBrowser(url) {
   } catch {}
 }
 
-// Tìm PID đang LISTEN đúng port (so khớp chính xác cột local address, không khớp nhầm :34560).
+// Find PIDs LISTENing on exactly this port (exact-match the local address column, avoids mismatching :34560).
 function listeningPids(port) {
   const pids = new Set();
   try {
@@ -118,7 +118,7 @@ function listeningPids(port) {
       const out = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
       for (const line of out.split(/\r?\n/)) {
         const parts = line.trim().split(/\s+/);
-        // Proto  Local  Foreign  State  PID  — foreign "0.0.0.0:0" = đang listen (không phụ thuộc ngôn ngữ OS)
+        // Proto  Local  Foreign  State  PID — foreign "0.0.0.0:0" means listening (independent of OS language)
         if (parts.length >= 5 && /^TCP$/i.test(parts[0]) && parts[1].endsWith(`:${port}`) && /:0$/.test(parts[2])) {
           const pid = parseInt(parts[parts.length - 1], 10);
           if (pid > 0) pids.add(pid);
@@ -138,7 +138,7 @@ function listeningPids(port) {
 async function stopProxy(port) {
   const running = await checkProxyRunning(port);
   if (fs.existsSync(paths.pidFile)) {
-    // Chỉ kill theo pid file khi xác nhận switcher đang chạy, tránh kill nhầm process đã tái sử dụng PID.
+    // Only kill by pid file after confirming the switcher is running, to avoid killing an unrelated process that reused the PID.
     if (running) {
       const pid = parseInt(fs.readFileSync(paths.pidFile, 'utf8').trim(), 10);
       if (pid > 0) {
@@ -153,7 +153,7 @@ async function stopProxy(port) {
     await sleep(150);
     if (!(await checkProxyRunning(port))) return true;
   }
-  // Vẫn chạy (VD được start bởi service) -> kill process đang listen port, đã xác nhận đó là LLM Switcher.
+  // Still running (e.g. started by a service) -> kill the process listening on the port, already verified as LLM Switcher.
   for (const pid of listeningPids(port)) {
     if (pid === process.pid) continue;
     try {
@@ -190,12 +190,12 @@ async function changePort(newPortStr) {
 }
 
 function printProfile(profile) {
-  const d = profile.defaultModels || {};
   console.log(`Input Target: ${(profile.inFormat || 'auto').toUpperCase()}`);
   console.log(`Routing:      ${profile.outFormat ? `out=${profile.outFormat}` : `mode=${profile.mode || 'hybrid'}`}`);
   console.log(`Upstream:     ${profile.baseURL || '(not set)'}`);
-  for (const tier of ['opus', 'sonnet', 'haiku', 'fable']) {
-    if (d[tier]) console.log(`${(tier[0].toUpperCase() + tier.slice(1) + ':').padEnd(14)}${d[tier]}${profile.model1M?.[tier] ? '  [1M]' : ''}`);
+  for (const slot of modelSlotsForProfile(profile)) {
+    const model = modelForSlot(profile, slot);
+    if (model) console.log(`${(slot[0].toUpperCase() + slot.slice(1) + ':').padEnd(14)}${model}${model1MForSlot(profile, slot) ? '  [1M]' : ''}`);
   }
 }
 
@@ -228,8 +228,8 @@ async function turnOn(profileName, cliTarget) {
   await ensureProxyRunning(port);
   const st = applyLaunchState(config, port);
 
-  // Tự cài shim: nhờ nó, phiên `claude --resume` mở từ shell chưa source env.sh
-  // vẫn đi qua gateway. Không đụng settings.json nên Claude Code không hiện banner.
+  // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
+  // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
   try {
     const { installed } = installShims();
     const sh = shimStatus();
@@ -317,7 +317,7 @@ function manageService(action) {
   if (action === 'install') {
     if (process.platform === 'win32') {
       try {
-        // execFileSync tự quote đúng cho schtasks; không cần /RL HIGHEST (gateway không cần quyền admin).
+        // execFileSync quotes correctly for schtasks; no /RL HIGHEST needed (gateway needs no admin rights).
         execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/TR', `"${nodeBin}" "${proxyScript}" --port ${port}`, '/SC', 'ONLOGON', '/F'], { stdio: 'inherit' });
         console.log('[SUCCESS] Installed Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
         execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
@@ -478,14 +478,14 @@ async function runDoctor() {
   let allHealthy = true;
   const warn = (msg) => { console.log(msg); allHealthy = false; };
 
-  // 1. Kiểm tra proxy liveness
+  // 1. Check proxy liveness
   if (isRunning) {
     console.log(`[PASS] Gateway service is RUNNING on http://127.0.0.1:${port}`);
   } else {
     warn(`[WARN] Gateway service is STOPPED on port ${port}. Run 'switch on' to activate.`);
   }
 
-  // 2. Kiểm tra profile đang trỏ tới
+  // 2. Check which profiles the targets point to
   const activeMap = getActiveMap(config);
   for (const [t, key] of Object.entries(activeMap)) {
     if (!key) continue;
@@ -494,12 +494,12 @@ async function runDoctor() {
     else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${key}" (${t}) still has placeholder baseURL/apiKey.`);
   }
 
-  // 3. Flag launcher khớp với trạng thái proxy
+  // 3. Launcher flags match proxy state
   if (fs.existsSync(paths.activeFlag) && !isRunning) {
     warn(`[WARN] active.flag exists but proxy is stopped: launched CLIs will get ECONNREFUSED.`);
   }
 
-  // 4. Kiểm tra ~/.claude/settings.json
+  // 4. Check ~/.claude/settings.json
   if (fs.existsSync(claudeSettingsPath)) {
     try {
       const s = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
@@ -516,7 +516,7 @@ async function runDoctor() {
     console.log(`[PASS] ${claudeSettingsPath} does not exist (clean official state).`);
   }
 
-  // 5. Kiểm tra biến môi trường
+  // 5. Check environment variables
   const anthBase = process.env.ANTHROPIC_BASE_URL;
   if (anthBase) {
     if (!/\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(anthBase)) {
@@ -533,7 +533,7 @@ async function runDoctor() {
   console.log(`[INFO] Universal environment loader: env.cmd=${fs.existsSync(paths.envCmd) ? 'READY' : 'PENDING'}`);
   if (fs.existsSync(proxyLogPath)) console.log(`[INFO] Background proxy log: ${proxyLogPath}`);
 
-  // 6. Shim — lớp bảo đảm cho phiên resume / shell chưa source env.sh
+  // 6. Shims — safety net for resumed sessions / shells that never sourced env.sh
   console.log('\n--- Launcher shims (resumed sessions) ---');
   const sh = shimStatus();
   if (!sh.onPath) {
@@ -548,7 +548,7 @@ async function runDoctor() {
     else console.log(`[PASS] '${s.name}' routed through shim.`);
   }
 
-  // 7. Process đang chạy mà thiếu env => phiên đó đang gọi thẳng nhà cung cấp
+  // 7. Running processes missing env => those sessions call the provider directly
   const audit = auditRunningProcesses();
   if (audit.supported && audit.procs.length) {
     for (const p of audit.procs) {

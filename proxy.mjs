@@ -11,16 +11,17 @@ import {
 import {
   TARGETS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
-  isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY
+  isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
+  modelForSlot, primaryModel
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
 
 const MAX_BODY_SIZE = 50 * 1024 * 1024; // 50MB
-const MAX_API_BODY_SIZE = 1024 * 1024;  // 1MB cho /api/*
+const MAX_API_BODY_SIZE = 1024 * 1024;  // 1MB for /api/*
 
-// Chống xung đột mạng: Đảm bảo localhost / 127.0.0.1 không bị các proxy bên ngoài (RTK, Headroom, VPN) chặn bắt
+// Avoid network conflicts: keep localhost / 127.0.0.1 out of external proxies (RTK, Headroom, VPN)
 const currentNoProxy = process.env.NO_PROXY || process.env.no_proxy || '';
 const localHosts = ['127.0.0.1', 'localhost'];
 const existingNoProxy = currentNoProxy.split(',').map(s => s.trim().toLowerCase());
@@ -30,11 +31,11 @@ if (missingNoProxy.length > 0) {
   process.env.no_proxy = process.env.NO_PROXY;
 }
 
-// Port cố định cho vòng đời process: đổi "port" trong config.json khi đang chạy không được làm
-// env.cmd / flag trỏ sang port mà server không lắng nghe.
+// Fixed port for the process lifetime: changing "port" in config.json at runtime has no effect
+// env.cmd / flags would point at a port the server is not listening on.
 const PORT = resolvePort();
 
-// In-memory Request / Response Inspector Ring Buffer (tối đa 40 request gần nhất)
+// In-memory Request / Response Inspector Ring Buffer (up to 40 most recent requests)
 const requestLogs = [];
 const MAX_LOGS = 40;
 function logInspection(entry) {
@@ -74,8 +75,8 @@ function hostnameOf(hostHeader) {
   return h.replace(/:\d+$/, '');
 }
 
-// Chặn DNS rebinding (Host lạ trỏ về 127.0.0.1) và CSRF từ trang web khác (Origin lạ).
-// Nếu không có check Host, một trang độc hại có thể đọc /api/status (chứa API key) hoặc tiêu token qua /v1/*.
+// Block DNS rebinding (unknown Host pointing at 127.0.0.1) and CSRF from other sites (unknown Origin).
+// Without the Host check, a malicious page could read /api/status (contains API key) or burn tokens via /v1/*.
 function checkRequestOrigin(req) {
   if (req.headers.host && !LOOPBACK_HOSTS.has(hostnameOf(req.headers.host))) {
     return 'Forbidden: untrusted Host header';
@@ -153,14 +154,14 @@ function getActiveProfile(clientFormat, req) {
     return { cfg, profileKey: reqProfile, profile: null, error: `Profile "${reqProfile}" requested via x-llm-profile/?profile= does not exist` };
   }
 
-  // Tra cứu active profile theo target CLI (clientFormat: anthropic | responses | openai-chat | vertex).
-  // Profile đã bị xoá / target bị tắt -> coi như OFF, không âm thầm rơi sang profile khác (khác API key!).
+  // Look up the active profile by CLI target (clientFormat: anthropic | responses | openai-chat | vertex).
+  // Deleted profile / disabled target counts as OFF, never silently fall through to another profile (different API key!).
   const key = clientFormat ? getActiveMap(cfg)[clientFormat] : (cfg.activeProfile || null);
   if (!key || !hasProfile(cfg, key)) return { cfg, profileKey: key || null, profile: null };
   return { cfg, profileKey: key, profile: cfg.profiles[key] };
 }
 
-// Dùng cho endpoint không gắn với 1 client format cụ thể (/health, /v1/models).
+// For endpoints not tied to a specific client format (/health, /v1/models).
 function getFirstActiveProfile(preferred) {
   for (const t of preferred) {
     const r = getActiveProfile(t);
@@ -170,17 +171,34 @@ function getFirstActiveProfile(preferred) {
 }
 
 function mapModel(requestedModel, profile) {
-  if (!requestedModel) return profile.defaultModels?.sonnet || 'claude-sonnet-4-6';
+  if (!requestedModel) return primaryModel(profile);
   const clean = requestedModel.replace(/\[1m\]/gi, '').trim();
-  // Nếu client đã chỉ định rõ model có prefix nhà cung cấp (VD ag/..., gh/..., cf/...) thì giữ nguyên
+  // If the client specified a model with a provider prefix (e.g. ag/..., gh/..., cf/...), keep it as-is
   if (clean.includes('/') && !clean.startsWith('anthropic/')) {
     return clean;
   }
   const m = clean.toLowerCase();
-  if (m.includes('fable')) return profile.defaultModels?.fable || clean;
-  if (m.includes('opus')) return profile.defaultModels?.opus || clean;
-  if (m.includes('haiku')) return profile.defaultModels?.haiku || clean;
-  if (m.includes('sonnet')) return profile.defaultModels?.sonnet || clean;
+  if (profile?.inFormat === 'responses') {
+    // Aliases for the real Codex roles in the docs (model / review_model /
+    // agents.default_subagent_model). Unknown names pass through unchanged.
+    const aliases = {
+      main: ['main', 'default', 'codex-main', 'codex-default'],
+      review: ['review', 'codex-review'],
+      subagent: ['subagent', 'codex-subagent']
+    };
+    for (const [slot, names] of Object.entries(aliases)) {
+      if (names.includes(m)) return modelForSlot(profile, slot) || clean;
+    }
+    // Codex model IDs change frequently. Unknown names pass through unchanged.
+    return clean || requestedModel;
+  }
+  if (profile?.inFormat === 'openai-chat' || profile?.inFormat === 'vertex') {
+    if (m === 'default' || m === 'main' || !clean) return modelForSlot(profile, 'default') || clean;
+  }
+  if (m.includes('fable')) return modelForSlot(profile, 'fable') || clean;
+  if (m.includes('opus')) return modelForSlot(profile, 'opus') || clean;
+  if (m.includes('haiku')) return modelForSlot(profile, 'haiku') || clean;
+  if (m.includes('sonnet')) return modelForSlot(profile, 'sonnet') || clean;
   return clean || requestedModel;
 }
 
@@ -218,7 +236,7 @@ function vertexStatus(status) {
   }
 }
 
-// Mỗi SDK parse lỗi theo shape riêng; Claude Code dựa vào error.type + retry-after để quyết định retry.
+// Each SDK parses errors in its own shape; Claude Code relies on error.type + retry-after to decide retries.
 function sendClientError(res, clientFormat, status, message, headers = {}) {
   let body;
   if (clientFormat === 'anthropic') {
@@ -263,8 +281,8 @@ function resolveOutFormat(profile, mappedModel) {
   return String(mappedModel || '').toLowerCase().startsWith('claude-') ? 'anthropic' : 'openai-chat';
 }
 
-// Header client KHÔNG được chuyển tiếp lên upstream: credential của client (VD x-goog-api-key của Gemini SDK
-// sẽ lộ sang upstream bên thứ 3), header điều khiển của switcher, và header hop-by-hop / định danh mạng.
+// Client headers that must NOT be forwarded upstream: client credentials (e.g. the Gemini SDK's x-goog-api-key
+// would leak to a third-party upstream), switcher control headers, and hop-by-hop / network identity headers.
 const BLOCKED_PASSTHROUGH = new Set([
   'x-api-key', 'x-goog-api-key', 'x-goog-user-project', 'x-profile', 'x-llm-profile',
   'x-real-ip', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port'
@@ -276,7 +294,7 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
   const key = profile.apiKey || '';
   const headers = { 'Content-Type': 'application/json' };
 
-  // Passthrough an toàn các client headers từ tool trung gian (x-request-id, traceparent, x-...)
+  // Safely pass through client headers from intermediate tools (x-request-id, traceparent, x-...)
   if (req?.headers) {
     for (const [k, v] of Object.entries(req.headers)) {
       const lk = k.toLowerCase();
@@ -307,7 +325,7 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
   return { url: ov['openai-chat'] || `${base}/chat/completions`, headers };
 }
 
-// Đọc upstream stream: chịu cả SSE `data:` lẫn raw JSON lines (Vertex framing).
+// Read the upstream stream: accept both SSE `data:` and raw JSON lines (Vertex framing).
 async function* readUpstreamPayloads(upstreamRes) {
   const reader = upstreamRes.body.getReader();
   const decoder = new TextDecoder('utf8');
@@ -373,7 +391,7 @@ const HOP_BY_HOP = new Set(['content-length', 'content-encoding', 'transfer-enco
 async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, mappedModel, signal, profile) {
   debugLog('Direct forward to native Anthropic endpoint:', url);
 
-  // Chỉ serialize lại khi thực sự phải sửa; còn lại gửi nguyên bytes của client.
+  // Only re-serialize when a fix is actually needed; otherwise forward the client's original bytes.
   let json = payload;
   let modified = false;
   if (mappedModel && json.model !== mappedModel) {
@@ -472,7 +490,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   const logBase = { clientFormat, outFormat, profile: profileKey, model: mappedModel, stream: ir.stream, requestPreview };
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
 
-  // AbortController để huỷ fetch upstream ngay khi client ngắt kết nối (tiết kiệm token)
+  // AbortController to cancel the upstream fetch as soon as the client disconnects (saves tokens)
   const ac = new AbortController();
   const onClientClose = () => {
     if (!res.writableEnded) {
@@ -483,8 +501,8 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   res.on('close', onClientClose);
 
   try {
-    // Fast path: anthropic in/out đi thẳng, giữ nguyên bytes (kể cả thinking signatures).
-    // Lưu ý: nhánh này không chạy Healer Engine vì không đi qua IR.
+    // Fast path: anthropic in/out goes straight through, preserving original bytes (including thinking signatures).
+    // Note: this branch skips the Healer Engine because it bypasses the IR.
     if (clientFormat === 'anthropic' && outFormat === 'anthropic') {
       const { url, headers } = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
       try {
@@ -596,12 +614,12 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     splitter.flush();
     const completion = col.completion();
     if (streamError) {
-      // Báo lỗi rõ ràng thay vì kết thúc "end_turn" giả -> client biết response bị cụt và có thể retry.
+      // Report the error clearly instead of a fake "end_turn" ending -> the client knows the response was cut off and can retry.
       renderer.error(streamError);
     } else {
       renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, hasTools: col.tools.size > 0 });
     }
-    // OpenAI Chat clients expect a terminal [DONE] line (Responses API không dùng [DONE]).
+    // OpenAI Chat clients expect a terminal [DONE] line (Responses API does not use [DONE]).
     if (clientFormat === 'openai-chat') res.write('data: [DONE]\n\n');
     res.end();
     log({
@@ -616,8 +634,8 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   }
 }
 
-// Claude Code gọi /v1/messages/count_tokens để tính context. Upstream Anthropic native -> hỏi số thật;
-// upstream khác không có endpoint tương đương -> ước lượng (bỏ qua base64 ảnh, cộng cố định mỗi ảnh).
+// Claude Code calls /v1/messages/count_tokens to measure context. Native Anthropic upstream -> ask for the real count;
+// other upstreams have no equivalent endpoint -> estimate (skip image base64, add a fixed cost per image).
 async function handleCountTokens(req, res, buf) {
   let payload;
   try {
@@ -683,7 +701,7 @@ function validateProfileInput(p) {
   return null;
 }
 
-// API key trong UI bị che bằng MASKED_KEY; nếu client gửi lại đúng giá trị che thì dùng key thật đã lưu.
+// API keys are masked with MASKED_KEY in the UI; if the client sends back the masked value, reuse the stored real key.
 function resolveApiKey(cfg, profileKey, apiKey) {
   if (apiKey === MASKED_KEY) return hasProfile(cfg, profileKey) ? (cfg.profiles[profileKey].apiKey || '') : '';
   return apiKey || '';
@@ -733,7 +751,7 @@ async function fetchModels(body, cfg) {
   return { status: 200, json: { ok: true, models: list } };
 }
 
-// Vertex/Gemini: /v1beta/models/{m}:{action} (Gemini API) và
+// Vertex/Gemini: /v1beta/models/{m}:{action} (Gemini API) and
 // /v1/projects/{p}/locations/{l}/publishers/{pub}/models/{m}:{action} (Vertex AI SDK).
 const VERTEX_ROUTE = /^\/(?:v1|v1beta|v1beta1)\/(?:projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/)?models\/([^/:]+):(generateContent|streamGenerateContent)$/;
 
@@ -751,7 +769,7 @@ async function route(req, res) {
     return sendJson(res, 403, { error: guardError });
   }
   if (method === 'OPTIONS') {
-    // Chỉ trả lời preflight cho chính origin của UI (đã qua checkRequestOrigin).
+    // Only answer preflight for the UI's own origin (already past checkRequestOrigin).
     res.writeHead(204, {
       'Access-Control-Allow-Origin': req.headers.origin || `http://127.0.0.1:${PORT}`,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -760,7 +778,7 @@ async function route(req, res) {
     return res.end();
   }
 
-  // Serve Web UI (no-cache: luôn serve bản mới nhất sau khi sửa file)
+  // Serve Web UI (no-cache: always serve the latest version after file edits)
   if (method === 'GET' && (pathname === '/' || pathname === '/ui')) {
     if (fs.existsSync(uiHtmlPath)) {
       res.writeHead(200, {
@@ -929,7 +947,7 @@ async function routeApi(req, res, method, pathname) {
     if (invalid) return sendJson(res, 400, { error: invalid });
 
     const existing = hasProfile(cfg, key) ? cfg.profiles[key] : {};
-    // Merge để không làm mất field UI không quản lý (VD `endpoints`).
+    // Merge so unmanaged UI fields are not lost (e.g. `endpoints`).
     const merged = { ...existing, ...profile };
     merged.apiKey = resolveApiKey(cfg, key, profile.apiKey);
     for (const k of ['outFormat', 'optimizerURL', 'thinkingMode']) {
@@ -937,7 +955,7 @@ async function routeApi(req, res, method, pathname) {
     }
     cfg.profiles[key] = merged;
 
-    // Target đang gán profile này mà inFormat mới không còn hỗ trợ -> tắt target đó.
+    // A target assigned to this profile whose new inFormat no longer supports it -> unassign that target.
     const map = getActiveMap(cfg);
     cfg.activeProfiles = map;
     let unassigned = false;
@@ -948,7 +966,7 @@ async function routeApi(req, res, method, pathname) {
       }
     }
 
-    // Profile đang active (hoặc vừa bị gỡ khỏi target) -> cập nhật lại flag 1M / env files.
+    // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
     if (isProfileActive(cfg, key) || unassigned) commit(cfg);
     else saveConfig(cfg);
     return sendJson(res, 200, { success: true });

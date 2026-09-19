@@ -1,9 +1,10 @@
-// Unit tests cho state.mjs (chỉ các hàm thuần, không ghi flag/env file).
+// Unit tests for state.mjs (pure functions only, no flag/env file writes).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deleteProfile,
-  computeLaunchState, findProfileKey, isValidProfileKey, resolvePort, redactConfig, MASKED_KEY
+  computeLaunchState, findProfileKey, isValidProfileKey, resolvePort, redactConfig, MASKED_KEY,
+  modelSlotsForProfile, modelForSlot, primaryModel
 } from '../state.mjs';
 
 const makeCfg = () => ({
@@ -11,7 +12,11 @@ const makeCfg = () => ({
   activeProfile: 'router',
   profiles: {
     router: { inFormat: 'auto', apiKey: 'sk-1', defaultModels: { opus: 'o', sonnet: 's' }, model1M: { sonnet: true } },
-    codexOnly: { inFormat: 'responses', apiKey: 'sk-2', defaultModels: { opus: 'gpt-x' }, model1M: { opus: true } }
+    codexOnly: {
+      inFormat: 'responses', apiKey: 'sk-2',
+      defaultModels: { main: 'gpt-main', review: 'gpt-review', subagent: 'gpt-sub' },
+      model1M: { main: true }
+    }
   }
 });
 
@@ -52,14 +57,54 @@ test('computeLaunchState derives flags per target profile, not from one global p
   const st = computeLaunchState(cfg, 4000);
   assert.equal(st.active, true);
   assert.equal(st.claude1M, 'sonnet[1m]');
-  assert.equal(st.codex1M, 'gpt-x');
+  assert.equal(st.codex1M, 'gpt-main');
   const env = Object.fromEntries(st.env);
   assert.equal(env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:4000');
-  assert.equal(env.CODEX_MODEL, 'gpt-x');
+  assert.equal(env.LLM_SWITCHER_CODEX_BASE_URL, 'http://127.0.0.1:4000/v1');
+  assert.equal(env.LLM_SWITCHER_CODEX_MAIN_MODEL, 'gpt-main');
+  assert.equal(env.LLM_SWITCHER_CODEX_REVIEW_MODEL, 'gpt-review');
+  assert.equal(env.LLM_SWITCHER_CODEX_SUBAGENT_MODEL, 'gpt-sub');
+  assert.equal(env.LLM_SWITCHER_CODEX_CONTEXT_WINDOW, '1000000');
+  assert.equal(env.LLM_SWITCHER_CODEX_AUTO_COMPACT_LIMIT, '900000');
+  assert.equal(env.CODEX_MODEL, undefined, 'unsupported Codex env variables must not be emitted');
 
   const off = makeCfg();
   off.activeProfiles = { anthropic: null, responses: null, 'openai-chat': null, vertex: null };
   assert.equal(computeLaunchState(off, 4000).active, false);
+});
+
+test('Codex profiles use documented role slots (model/review_model/subagent) and read legacy keys', () => {
+  const profile = makeCfg().profiles.codexOnly;
+  assert.deepEqual(modelSlotsForProfile(profile), ['main', 'review', 'subagent']);
+  assert.equal(primaryModel(profile), 'gpt-main');
+  assert.equal(modelForSlot(profile, 'subagent'), 'gpt-sub');
+
+  // Legacy profiles from the custom-key era (fast/fallback) or Claude tiers remain readable.
+  const legacy = {
+    inFormat: 'responses',
+    defaultModels: { opus: 'old-main', sonnet: 'old-review', fast: 'old-sub', fallback: 'old-fb' },
+    model1M: { fast: true }
+  };
+  assert.equal(modelForSlot(legacy, 'main'), 'old-main');
+  assert.equal(modelForSlot(legacy, 'review'), 'old-review');
+  assert.equal(modelForSlot(legacy, 'subagent'), 'old-sub');
+
+  const cleared = {
+    inFormat: 'responses',
+    defaultModels: { main: '', opus: 'old-main', subagent: '', fast: 'old-sub' }
+  };
+  assert.equal(modelForSlot(cleared, 'main'), '');
+  assert.equal(modelForSlot(cleared, 'subagent'), '');
+});
+
+test('openai-chat and vertex profiles use a single default slot with legacy fallback', () => {
+  assert.deepEqual(modelSlotsForProfile({ inFormat: 'openai-chat' }), ['default']);
+  assert.deepEqual(modelSlotsForProfile({ inFormat: 'vertex' }), ['default']);
+  assert.deepEqual(modelSlotsForProfile({ inFormat: 'auto' }),
+    ['opus', 'sonnet', 'haiku', 'fable']);
+  const legacy = { inFormat: 'openai-chat', defaultModels: { sonnet: 's-old' } };
+  assert.equal(modelForSlot(legacy, 'default'), 's-old');
+  assert.equal(primaryModel(legacy), 's-old');
 });
 
 test('computeLaunchState tags [1m] per Claude tier from the profile model1M map, nothing hard-coded', () => {

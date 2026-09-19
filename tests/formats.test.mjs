@@ -1,4 +1,4 @@
-// Unit tests cho formats.mjs — chạy offline: node --test tests/
+// Unit tests for formats.mjs — runs offline: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -24,6 +24,14 @@ test('anthropicToIR: explicit thinking disabled is not "restored" for reasoning 
   const body = irToChatBody(ir, 'ag/claude-opus-4-6-thinking');
   assert.equal(body.thinking, undefined);
   assert.equal(body.reasoning_effort, undefined);
+});
+
+test('Chat emitter restores thinking for versioned Claude Opus model IDs', () => {
+  const ir = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
+  for (const model of ['ag/claude-opus-4-6', 'ag/claude-opus-4-7', 'claude-opus-5']) {
+    const body = irToChatBody(ir, model);
+    assert.ok(body.thinking, `${model} should receive restored thinking settings`);
+  }
 });
 
 test('emitUpstreamBody: billing header stripped only for antigravity (ag/) models', () => {

@@ -56,16 +56,14 @@
       "baseURL": "https://YOUR-VERTEX-GATEWAY/v1",
       "apiKey": "REPLACE-ME",
       "defaultModels": {
-        "opus": "gemini-3.8-flash-high",
-        "sonnet": "gemini-3.7-flash-high",
-        "haiku": "gemini-3.7-flash-low",
-        "fable": "gemini-3.7-flash-low"
+        "main": "gemini-3.8-flash",
+        "review": "gemini-3.7-flash-medium",
+        "subagent": "gemini-3.6-flash-low"
       },
       "model1M": {
-        "opus": false,
-        "sonnet": false,
-        "haiku": false,
-        "fable": false
+        "main": false,
+        "review": false,
+        "subagent": false
       }
     }
   },
