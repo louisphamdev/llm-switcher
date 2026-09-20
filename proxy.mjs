@@ -736,7 +736,8 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const completion = col.completion();
       const out = clientMessage(clientFormat, {
         model: requestedModel || mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
-        finish: col.finish, prompt: col.prompt, completion, cached: col.cached, sig: col.sig
+        finish: col.finish, prompt: col.prompt, completion, cached: col.cached,
+        reasoning: col.reasoning, sig: col.sig
       });
       sendJson(res, 200, out);
       return log({
@@ -791,7 +792,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       // Report the error clearly instead of a fake "end_turn" ending -> the client knows the response was cut off and can retry.
       renderer.error(streamError);
     } else {
-      renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, hasTools: col.tools.size > 0 });
+      renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, reasoning: col.reasoning, hasTools: col.tools.size > 0 });
     }
     // OpenAI Chat clients expect a terminal [DONE] line (Responses API does not use [DONE]).
     if (clientFormat === 'openai-chat') res.write('data: [DONE]\n\n');
@@ -1481,7 +1482,7 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
     if (streamError) {
       renderer.error(streamError);
     } else {
-      renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, hasTools: col.tools.size > 0 });
+      renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, reasoning: col.reasoning, hasTools: col.tools.size > 0 });
     }
     log({
       status: streamError ? 502 : 200, stream: true,

@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isGatewayPath, toGatewayPath, isInterceptedHost, isPrivateDestination,
-  API_PREFIX, GATEWAY_PREFIX
+  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName
 } from '../blindfold/blindfold.mjs';
 
 test('a dot-segment escape never reaches the gateway', () => {
@@ -69,4 +69,33 @@ test('a malformed target is refused rather than guessed', () => {
   for (const bad of ['', null, undefined, 'http://evil.example/backend-api/codex/responses']) {
     assert.equal(isGatewayPath(bad), false, `must not route: ${String(bad)}`);
   }
+});
+
+// A capture records what a real client sends, so it must never record how that
+// client authenticates. The header name stays so the request shape is still
+// readable; only the value goes.
+test('capture redaction removes credential values and keeps everything else', () => {
+  const out = redactHeaders({
+    'Authorization': 'Bearer secret-token',
+    'COOKIE': 'session=abc',
+    'X-Api-Key': 'sk-123',
+    'proxy-authorization': 'Basic zzz',
+    'Content-Type': 'application/json',
+    'user-agent': 'codex_cli_rs/0.154.0'
+  });
+  assert.equal(out['Authorization'], '<redacted>');
+  assert.equal(out['COOKIE'], '<redacted>', 'matching must be case-insensitive');
+  assert.equal(out['X-Api-Key'], '<redacted>');
+  assert.equal(out['proxy-authorization'], '<redacted>');
+  assert.equal(out['Content-Type'], 'application/json');
+  assert.equal(out['user-agent'], 'codex_cli_rs/0.154.0');
+  assert.ok(Object.keys(out).includes('Authorization'), 'the header name must survive');
+});
+
+test('capture filenames carry no path separator', () => {
+  const n = captureName('post', '/backend-api/codex/responses?stream=true', 1700000000000);
+  assert.ok(!/[\\/]/.test(n), `unsafe filename: ${n}`);
+  assert.match(n, /^1700000000000-POST-/);
+  assert.ok(!n.includes('?'), 'the query string must not reach the filename');
+  assert.match(captureName('GET', '/'), /-root\.json$/);
 });

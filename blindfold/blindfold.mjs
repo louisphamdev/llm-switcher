@@ -58,8 +58,48 @@ export const API_PREFIX = arg('prefix', '/backend-api/codex');
 export const GATEWAY_PREFIX = arg('gateway-prefix', '/v1');
 const CERT_DIR = arg('certs', path.join(HERE, 'certs'));
 const VERBOSE = process.argv.includes('--verbose');
+const CAPTURE_DIR = arg('capture', null);
 
 const log = (...args) => { if (VERBOSE) console.log('[blindfold]', ...args); };
+
+// A capture file records what a genuine client sends on the wire. It must never
+// record how that client authenticates, so these header values are replaced while
+// the header names stay, keeping the shape of the request visible.
+// Account identifiers are not credentials, but a capture is meant to be readable
+// and shareable, and these name the person the traffic belongs to.
+const SECRET_HEADERS = new Set([
+  'authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key', 'api-key',
+  'chatgpt-account-id', 'openai-organization', 'x-goog-user-project'
+]);
+
+export function redactHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    out[k] = SECRET_HEADERS.has(k.toLowerCase()) ? '<redacted>' : v;
+  }
+  return out;
+}
+
+export function captureName(method, url, now = Date.now()) {
+  const safe = String(url || '/').split('?')[0].replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${now}-${String(method || 'GET').toUpperCase()}-${safe || 'root'}.json`;
+}
+
+const CAPTURE_LIMIT = 200000;
+const clip = (s) => (s.length > CAPTURE_LIMIT ? s.slice(0, CAPTURE_LIMIT) + '...[truncated]' : s);
+
+// A capture is a diagnostic. Failing to write one must never fail the request.
+function writeCapture(record) {
+  if (!CAPTURE_DIR) return;
+  try {
+    fs.mkdirSync(CAPTURE_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(CAPTURE_DIR, captureName(record.method, record.url)),
+      JSON.stringify(record, null, 2), 'utf8');
+  } catch (err) {
+    log('capture failed:', err.message);
+  }
+}
 
 // Decide on the NORMALIZED path, never on the raw request target.
 //
@@ -118,6 +158,12 @@ mitm.on('request', (req, res) => {
   if (!isGatewayPath(req.url)) return passThroughRequest(req, res);
 
   log('gateway', req.method, req.url);
+  // Collect a copy for the capture file while the bytes keep flowing. Buffering
+  // to write the file first would hold back a streamed response.
+  const reqChunks = [];
+  const resChunks = [];
+  if (CAPTURE_DIR) req.on('data', (c) => reqChunks.push(c));
+
   const upstream = http.request({
     host: GATEWAY_HOST,
     port: GATEWAY_PORT,
@@ -126,6 +172,18 @@ mitm.on('request', (req, res) => {
     headers: gatewayHeaders(req.headers)
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
+    if (CAPTURE_DIR) {
+      upRes.on('data', (c) => resChunks.push(c));
+      upRes.on('end', () => writeCapture({
+        method: req.method,
+        url: req.url,
+        requestHeaders: redactHeaders(req.headers),
+        requestBody: clip(Buffer.concat(reqChunks).toString('utf8')),
+        status: upRes.statusCode,
+        responseHeaders: redactHeaders(upRes.headers),
+        responseBody: clip(Buffer.concat(resChunks).toString('utf8'))
+      }));
+    }
     upRes.pipe(res);
   });
   upstream.on('error', (err) => {

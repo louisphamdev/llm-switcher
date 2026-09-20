@@ -238,10 +238,19 @@ function smartUsage(u) {
     }
     return 0;
   };
+  // Reasoning tokens are billed output the client never sees, and each upstream
+  // puts them somewhere else: OpenAI chat in completion_tokens_details, the
+  // Responses API in output_tokens_details, Anthropic as thinking_tokens, Vertex
+  // as thoughtsTokenCount. Measured 2026-09-20 through 9Router: 95 of 96 output
+  // tokens were reasoning, so losing this field misreports almost the whole cost.
+  const outDet = (o.completion_tokens_details && typeof o.completion_tokens_details === 'object')
+    ? o.completion_tokens_details
+    : (o.output_tokens_details && typeof o.output_tokens_details === 'object') ? o.output_tokens_details : {};
   return {
     prompt: num(o.prompt_tokens, o.input_tokens, o.promptTokenCount, o.inputTokens),
     completion: num(o.completion_tokens, o.output_tokens, o.candidatesTokenCount, o.outputTokens),
-    cached: num(det.cached_tokens, o.cached_tokens, o.cachedContentTokenCount, o.cached_content_token_count, o.cache_read_input_tokens)
+    cached: num(det.cached_tokens, o.cached_tokens, o.cachedContentTokenCount, o.cached_content_token_count, o.cache_read_input_tokens),
+    reasoning: num(outDet.reasoning_tokens, outDet.thinking_tokens, o.thoughtsTokenCount, o.reasoning_tokens)
   };
 }
 
@@ -1519,7 +1528,14 @@ function anthropicUsage(u) {
   const input = Number(o.input_tokens) || 0;
   const cacheRead = Number(o.cache_read_input_tokens) || 0;
   const cacheCreate = Number(o.cache_creation_input_tokens) || 0;
-  return { prompt: input + cacheRead + cacheCreate, completion: Number(o.output_tokens) || 0, cached: cacheRead };
+  // Anthropic reports thinking tokens under output_tokens_details.
+  const det = (o.output_tokens_details && typeof o.output_tokens_details === 'object') ? o.output_tokens_details : {};
+  return {
+    prompt: input + cacheRead + cacheCreate,
+    completion: Number(o.output_tokens) || 0,
+    cached: cacheRead,
+    reasoning: Number(det.thinking_tokens || det.reasoning_tokens) || 0
+  };
 }
 
 function upstreamError(parsed) {
@@ -1576,7 +1592,9 @@ function normalizeUpstream(parsed, outFormat) {
   // openai-chat | vertex (both SSE chunks and full JSON share one shape)
   // Read usage FIRST: OpenAI's final usage chunk (stream_options.include_usage) has `choices: []`.
   const u = smartUsage(parsed.usage ?? parsed.usageMetadata);
-  ev.usage = { prompt: u.prompt, completion: u.completion, cached: u.cached };
+  // Forward the whole shape. Listing the fields by hand here is how `reasoning`
+  // was silently dropped between smartUsage and the emitters on 2026-09-20.
+  ev.usage = u;
 
   const choice = firstChoice(parsed);
   const node = smartDelta(choice) || (outFormat === 'vertex' ? parsed : null);
@@ -1632,7 +1650,8 @@ function createUpstreamNormalizer(outFormat) {
 function createCollector() {
   const C = {
     think: [], text: [], tools: new Map(), finish: null,
-    prompt: 0, completionTokens: 0, cached: 0, sig: null, chars: 0, error: null,
+    prompt: 0, completionTokens: 0, cached: 0, reasoning: 0, usageSum: 0,
+    sig: null, chars: 0, error: null,
     add(ev) {
       for (const t of (ev.think || [])) {
         C.think.push(t.text);
@@ -1659,15 +1678,38 @@ function createCollector() {
       if (ev.finish) C.finish = ev.finish;
       if (ev.error) C.error = ev.error;
       if (ev.usage) {
-        // Anthropic/Vertex usage is cumulative, OpenAI sends it once at the end -> take the max, don't accumulate.
+        // Three upstream shapes, not two:
+        //   cumulative  - Anthropic/Vertex repeat a running total in every chunk
+        //   final-once  - OpenAI sends one usage object at the end
+        //   per-chunk   - qwen/zai on Cloudflare send a DELTA every chunk
+        //                 (completion_tokens: 1 x N, see docs/LLM-RESPONSE-MATRIX.md)
+        // Math.max is right for the first two and reports 1 for the third. A value
+        // that does not grow is the signature of a delta, so switch to summing the
+        // moment a later chunk reports less completion than the running total.
+        const completion = ev.usage.completion || 0;
+        C.completionTokens = Math.max(C.completionTokens, completion);
+        C.usageSum += completion;
         C.prompt = Math.max(C.prompt, ev.usage.prompt || 0);
-        C.completionTokens = Math.max(C.completionTokens, ev.usage.completion || 0);
         C.cached = Math.max(C.cached, ev.usage.cached || 0);
+        C.reasoning = Math.max(C.reasoning, ev.usage.reasoning || 0);
       }
     },
     // Upstream returned no usage -> estimate ~4 chars / token.
+    //
+    // Three upstream shapes exist, not two. Anthropic and Vertex repeat a running
+    // total in every chunk and OpenAI sends one object at the end: for both, the
+    // maximum is the answer. But qwen and zai on Cloudflare send a per-token DELTA
+    // in every chunk (`completion_tokens: 1` x N, docs/LLM-RESPONSE-MATRIX.md:126),
+    // and the maximum of those is 1 no matter how long the reply was.
+    //
+    // Rather than guess the shape from the number pattern, compare the reported
+    // total against what was actually streamed. A total far below the text we
+    // received cannot be a total, so the sum is the honest figure.
     completion() {
-      return C.completionTokens > 0 ? C.completionTokens : Math.ceil(C.chars / 4);
+      const estimate = Math.ceil(C.chars / 4);
+      if (C.completionTokens <= 0) return estimate;
+      if (C.usageSum > C.completionTokens && C.completionTokens * 4 < estimate) return C.usageSum;
+      return C.completionTokens;
     }
   };
   return C;
@@ -1914,6 +1956,7 @@ function createChatStream(emit, model) {
       const prompt = stats.prompt || 0;
       const usage = { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
       if (stats.cached) usage.prompt_tokens_details = { cached_tokens: stats.cached };
+      if (stats.reasoning > 0) usage.completion_tokens_details = { reasoning_tokens: stats.reasoning };
       chunk([{ index: 0, delta: {}, finish_reason: chatFinish(canonical, stats.hasTools) }], usage);
     },
     error(message) {
@@ -1922,7 +1965,7 @@ function createChatStream(emit, model) {
   };
 }
 
-function buildChatMessage({ model, think, text, tools, finish, prompt, completion, cached, id }) {
+function buildChatMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, stats }) {
   const msg = { role: 'assistant', content: (text || []).join('') || null };
   const thinking = (think || []).join('');
   if (thinking) {
@@ -1939,6 +1982,8 @@ function buildChatMessage({ model, think, text, tools, finish, prompt, completio
   if (msg.content === null && !msg.tool_calls) msg.content = '';
   const usage = { prompt_tokens: prompt || 0, completion_tokens: completion || 0, total_tokens: (prompt || 0) + (completion || 0) };
   if (cached) usage.prompt_tokens_details = { cached_tokens: cached };
+  const r = reasoning ?? stats?.reasoning;
+  if (r > 0) usage.completion_tokens_details = { reasoning_tokens: r };
   return {
     id: id || `chatcmpl-${Date.now()}${rand(4)}`,
     object: 'chat.completion',
@@ -1952,12 +1997,12 @@ function buildChatMessage({ model, think, text, tools, finish, prompt, completio
 // --- OpenAI Responses (Codex) SSE + object ---
 // Codex CLI builds history & runs tools from `response.output_item.done`, not `response.completed.output`,
 // so each item (reasoning / message / function_call) must complete the full added -> delta -> done cycle.
-function responsesUsage(prompt, completion, cached) {
+function responsesUsage(prompt, completion, cached, reasoning) {
   return {
     input_tokens: prompt || 0,
     input_tokens_details: { cached_tokens: cached || 0 },
     output_tokens: completion || 0,
-    output_tokens_details: { reasoning_tokens: 0 },
+    output_tokens_details: { reasoning_tokens: reasoning || 0 },
     total_tokens: (prompt || 0) + (completion || 0)
   };
 }
@@ -2109,7 +2154,7 @@ function createResponsesStream(emit, model, opts = {}) {
         type: 'response.completed',
         response: snapshot(incomplete ? 'incomplete' : 'completed', {
           incomplete_details: incomplete ? { reason: 'max_output_tokens' } : null,
-          usage: responsesUsage(stats.prompt, stats.completion, stats.cached)
+          usage: responsesUsage(stats.prompt, stats.completion, stats.cached, stats.reasoning)
         })
       });
     },
@@ -2119,7 +2164,7 @@ function createResponsesStream(emit, model, opts = {}) {
   };
 }
 
-function buildResponsesMessage({ model, think, text, tools, finish, prompt, completion, cached, id, toolMeta }) {
+function buildResponsesMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, toolMeta, stats }) {
   const output = [];
   const thinking = (think || []).join('');
   if (thinking) output.push({ id: `rs_${rand(24)}`, type: 'reasoning', summary: [{ type: 'summary_text', text: thinking }] });
@@ -2137,13 +2182,14 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
     }));
   }
   const incomplete = finish === 'length';
+  const r = reasoning ?? stats?.reasoning;
   return {
     id: id || `resp_${Date.now()}${rand(8)}`, object: 'response', created_at: Math.floor(Date.now() / 1000), model,
     status: incomplete ? 'incomplete' : 'completed',
     incomplete_details: incomplete ? { reason: 'max_output_tokens' } : null,
     output,
     output_text: body,
-    usage: responsesUsage(prompt, completion, cached)
+    usage: responsesUsage(prompt, completion, cached, r)
   };
 }
 

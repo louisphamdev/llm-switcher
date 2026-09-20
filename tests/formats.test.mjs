@@ -8,7 +8,8 @@ import {
   createAnthropicStream, createResponsesStream, createVertexStream,
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
-  isAntigravityModel
+  isAntigravityModel, smartUsage,
+  createChatStream, buildChatMessage
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -489,4 +490,149 @@ test('createResponsesStream.error carries a mapped code (Codex retryable failure
   assert.equal(failed.data.response.status, 'failed');
   assert.equal(failed.data.response.error.code, 'rate_limit_exceeded');
   assert.match(failed.data.response.id, /^resp_/);
+});
+
+// ---------------------------------------------------------------------------
+// Usage accounting. Measured against real upstreams on 2026-09-20.
+// ---------------------------------------------------------------------------
+
+// Reasoning tokens are the expensive half of a thinking model's output, and every
+// upstream reports them in its own place. Measured live through 9Router:
+//   {"completion_tokens":96,"completion_tokens_details":{"reasoning_tokens":95}}
+// 95 of 96 output tokens were reasoning. Dropping the field makes the client
+// believe a reasoning model did no reasoning.
+test('smartUsage reads reasoning tokens from every upstream shape', () => {
+  const openaiChat = smartUsage({
+    prompt_tokens: 2012, completion_tokens: 96, total_tokens: 2108,
+    completion_tokens_details: { reasoning_tokens: 95 }
+  });
+  assert.equal(openaiChat.reasoning, 95, 'OpenAI chat: completion_tokens_details');
+
+  const responses = smartUsage({
+    input_tokens: 10, output_tokens: 50,
+    output_tokens_details: { reasoning_tokens: 40 }
+  });
+  assert.equal(responses.reasoning, 40, 'OpenAI Responses: output_tokens_details');
+
+  const anthropic = smartUsage({
+    input_tokens: 10, output_tokens: 50,
+    output_tokens_details: { thinking_tokens: 33 }
+  });
+  assert.equal(anthropic.reasoning, 33, 'Anthropic: thinking_tokens');
+
+  const vertex = smartUsage({
+    promptTokenCount: 10, candidatesTokenCount: 50, thoughtsTokenCount: 21
+  });
+  assert.equal(vertex.reasoning, 21, 'Vertex: thoughtsTokenCount');
+
+  assert.equal(smartUsage({ prompt_tokens: 5, completion_tokens: 5 }).reasoning, 0,
+    'no reasoning reported means zero, not undefined');
+});
+
+// docs/LLM-RESPONSE-MATRIX.md:126 records qwen/zai on Cloudflare sending usage in
+// EVERY chunk as a per-token delta (completion_tokens: 1 x N). Math.max over those
+// yields 1 regardless of how long the answer was.
+test('collector accumulates per-chunk usage deltas instead of taking the max', () => {
+  const c = createCollector();
+  for (let i = 0; i < 40; i++) {
+    c.add({ text: 'x', usage: { prompt: i === 0 ? 120 : 0, completion: 1, cached: 0 } });
+  }
+  assert.equal(c.completion(), 40,
+    'forty per-token deltas must total 40, not 1');
+  assert.equal(c.prompt, 120, 'the prompt total is reported once and must not be summed away');
+});
+
+// Anthropic and Vertex report a running total in every chunk. Summing those would
+// multiply the count, so the collector must still take the max for that shape.
+test('collector keeps taking the max for cumulative usage', () => {
+  const c = createCollector();
+  c.add({ text: 'a', usage: { prompt: 100, completion: 10, cached: 0 } });
+  c.add({ text: 'b', usage: { prompt: 100, completion: 25, cached: 0 } });
+  c.add({ text: 'c', usage: { prompt: 100, completion: 60, cached: 0 } });
+  assert.equal(c.completion(), 60, 'a cumulative series must report its last value');
+  assert.equal(c.prompt, 100);
+});
+
+test('emitters carry reasoning tokens through to the client', () => {
+  const respMsg = buildResponsesMessage({
+    model: 'm',
+    text: ['hello'],
+    prompt: 100,
+    completion: 50,
+    cached: 20,
+    reasoning: 35
+  });
+  assert.equal(respMsg.usage.output_tokens_details.reasoning_tokens, 35);
+
+  let streamResp;
+  const respStream = createResponsesStream((event, data) => {
+    if (event === 'response.completed') streamResp = data.response;
+  }, 'm');
+  respStream.start();
+  respStream.finish('stop', { prompt: 100, completion: 50, cached: 20, reasoning: 35 });
+  assert.equal(streamResp.usage.output_tokens_details.reasoning_tokens, 35);
+
+  const chatMsg = buildChatMessage({
+    model: 'm',
+    text: ['hello'],
+    prompt: 100,
+    completion: 50,
+    cached: 20,
+    reasoning: 35
+  });
+  assert.deepEqual(chatMsg.usage.completion_tokens_details, { reasoning_tokens: 35 });
+
+  const chatMsgZero = buildChatMessage({
+    model: 'm',
+    text: ['hello'],
+    prompt: 100,
+    completion: 50,
+    cached: 20,
+    reasoning: 0
+  });
+  assert.equal(chatMsgZero.usage.completion_tokens_details, undefined);
+
+  let chatStreamChunk;
+  const chatStream = createChatStream((err, chunk) => {
+    if (chunk?.usage) chatStreamChunk = chunk;
+  }, 'm');
+  chatStream.start();
+  chatStream.finish('stop', { prompt: 100, completion: 50, cached: 20, reasoning: 35 });
+  assert.deepEqual(chatStreamChunk.usage.completion_tokens_details, { reasoning_tokens: 35 });
+
+  let chatStreamZeroChunk;
+  const chatStreamZero = createChatStream((err, chunk) => {
+    if (chunk?.usage) chatStreamZeroChunk = chunk;
+  }, 'm');
+  chatStreamZero.start();
+  chatStreamZero.finish('stop', { prompt: 100, completion: 50, cached: 20, reasoning: 0 });
+  assert.equal(chatStreamZeroChunk.usage.completion_tokens_details, undefined);
+});
+
+
+// Four separate places rebuilt the usage object by listing its fields by hand, and
+// each one silently dropped `reasoning` on 2026-09-20. This test walks the whole
+// path — parse, collect, emit — so a fifth hand-written copy fails here instead of
+// reaching a user as a zero.
+test('reasoning tokens survive the full parse -> collect -> emit path', () => {
+  const norm = createUpstreamNormalizer('openai-chat');
+  const collector = createCollector();
+  const chunks = [
+    { choices: [{ delta: { content: 'O' } }] },
+    { choices: [{ delta: { content: 'K' } }], usage: {
+      prompt_tokens: 2012, completion_tokens: 96,
+      completion_tokens_details: { reasoning_tokens: 95 }
+    } }
+  ];
+  for (const c of chunks) collector.add(norm(c));
+
+  assert.equal(collector.reasoning, 95, 'the collector must keep the reasoning count');
+
+  const built = buildResponsesMessage({
+    model: 'gpt-5.6-sol', think: [], text: ['OK'], tools: [], finish: 'stop',
+    prompt: collector.prompt, completion: collector.completion(),
+    cached: collector.cached, reasoning: collector.reasoning
+  });
+  assert.equal(built.usage.output_tokens_details.reasoning_tokens, 95,
+    'the Responses emitter must report what the upstream billed');
 });
