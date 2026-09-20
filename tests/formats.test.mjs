@@ -7,7 +7,8 @@ import {
   createUpstreamNormalizer, createCollector, createThinkTagSplitter,
   createAnthropicStream, createResponsesStream, createVertexStream,
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
-  buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody
+  buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
+  isAntigravityModel
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -428,4 +429,64 @@ test('OpenAI-compatible Gemini: extra_content.google.thought_signature is captur
   assert.equal(body.messages.find(m => m.tool_calls).tool_calls[0].extra_content.google.thought_signature, 'SIG_OAI');
   const plain = irToChatBody(anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: [{ type: 'tool_use', id: 'other', name: 'f', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'other', content: 'ok' }] }] }), 'gpt-4o');
   assert.equal(plain.messages.find(m => m.tool_calls).tool_calls[0].extra_content, undefined);
+});
+
+test('toGeminiSchema: bare string shorthands become Schema objects (Vertex 400 fix)', () => {
+  assert.deepEqual(toGeminiSchema('object'), { type: 'object', properties: {} });
+  assert.deepEqual(toGeminiSchema('string'), { type: 'string' });
+  assert.deepEqual(
+    toGeminiSchema({ type: 'object', properties: { tags: { type: 'array', items: 'object' }, n: 'string' } }),
+    { type: 'object', properties: { tags: { type: 'array', items: { type: 'object', properties: {} } }, n: { type: 'string' } } }
+  );
+});
+
+test('toGeminiSchema: local $refs are inlined, $defs dropped', () => {
+  const schema = {
+    type: 'object',
+    properties: { msg: { $ref: '#/$defs/Part', description: 'a part' } },
+    $defs: { Part: { type: 'object', properties: { text: { type: 'string' } } } }
+  };
+  assert.deepEqual(toGeminiSchema(schema), {
+    type: 'object',
+    properties: { msg: { type: 'object', properties: { text: { type: 'string' } }, description: 'a part' } }
+  });
+  assert.deepEqual(toGeminiSchema({ $ref: '#/$defs/Missing' }), {});
+});
+
+test('toGeminiSchema: anyOf-null unions collapse to nullable', () => {
+  assert.deepEqual(
+    toGeminiSchema({ anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] }),
+    { type: 'array', items: { type: 'string' }, nullable: true }
+  );
+  const multi = toGeminiSchema({ anyOf: [{ type: 'string' }, { type: 'integer' }] });
+  assert.equal(multi.anyOf.length, 2);
+});
+
+test('toGeminiSchema: garbage required entries and extra keys are stripped', () => {
+  const out = toGeminiSchema({
+    type: 'object',
+    properties: { a: { type: 'string' } },
+    required: [{ type: 'a' }, 'b'],
+    additionalProperties: true
+  });
+  assert.deepEqual(out.required, []);
+  assert.equal(out.additionalProperties, undefined);
+});
+
+test('isAntigravityModel gates the Gemini-safe tool rewrite', () => {
+  assert.ok(isAntigravityModel('ag/gemini-3.8-flash'));
+  assert.ok(isAntigravityModel('antigravity/x'));
+  assert.ok(!isAntigravityModel('gpt-5-codex'));
+});
+
+test('createResponsesStream.error carries a mapped code (Codex retryable failures)', () => {
+  const events = [];
+  const s = createResponsesStream((e, d) => events.push({ event: e, data: d }), 'ag/mock');
+  s.start();
+  s.error('slow down', 'rate_limit_exceeded');
+  assert.deepEqual(events.slice(0, 2).map(e => e.event), ['response.created', 'response.in_progress']);
+  const failed = events.find(e => e.event === 'response.failed');
+  assert.equal(failed.data.response.status, 'failed');
+  assert.equal(failed.data.response.error.code, 'rate_limit_exceeded');
+  assert.match(failed.data.response.id, /^resp_/);
 });

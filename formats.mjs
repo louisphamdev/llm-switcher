@@ -1202,19 +1202,79 @@ const GEMINI_SCHEMA_KEYS = new Set([
   'minimum', 'maximum', 'anyOf', 'propertyOrdering', 'default', 'example'
 ]);
 
-function toGeminiSchema(schema) {
+// Resolve a local JSON-Schema $ref ('#/$defs/X', '#/definitions/X', '#/properties/...')
+// against the root parameters object. Returns the target node or null.
+function resolveLocalRef(root, ref) {
+  if (typeof ref !== 'string' || !ref.startsWith('#/')) return null;
+  const parts = ref.slice(2).split('/').map(p => p.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let node = root;
+  for (const p of parts) {
+    if (!node || typeof node !== 'object') return null;
+    node = node[p];
+  }
+  return node && typeof node === 'object' && !Array.isArray(node) ? node : null;
+}
+
+// A union of exactly one real schema plus an optional null branch collapses to that
+// schema (+nullable). Anything else (multi-branch anyOf) is left for the caller.
+function collapseNullableUnion(branches) {
+  if (!Array.isArray(branches)) return null;
+  const isNullBranch = (s) => {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    if (s.type === 'null') return true;
+    if (Array.isArray(s.type)) return s.type.length === 1 && s.type[0] === 'null';
+    if (Array.isArray(s.enum) && s.enum.length === 1 && s.enum[0] === null) return true;
+    return false;
+  };
+  const rest = branches.filter(s => !isNullBranch(s));
+  if (rest.length !== 1) return null;
+  return { schema: rest[0], nullable: rest.length !== branches.length };
+}
+
+function toGeminiSchema(schema, root, seen) {
+  // Shorthand left by some MCP servers: a bare "object"/"string" where a Schema belongs.
+  // Vertex rejects the raw string with INVALID_ARGUMENT, so expand it.
+  if (typeof schema === 'string') {
+    return schema === 'object' ? { type: 'object', properties: {} } : { type: schema };
+  }
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  root = root || schema;
+  seen = seen || new Set();
+  if (seen.has(schema)) return {};
+  // Inline local $refs: Vertex/GenAI function declarations do not support $ref/$defs.
+  if (typeof schema.$ref === 'string') {
+    const target = resolveLocalRef(root, schema.$ref);
+    if (!target) return {};
+    seen.add(schema);
+    const merged = toGeminiSchema(target, root, seen);
+    seen.delete(schema);
+    const extra = {};
+    for (const [k, v] of Object.entries(schema)) {
+      if (k !== '$ref' && (k === 'description' || k === 'title' || k === 'default' || k === 'example')) extra[k] = v;
+    }
+    return { ...merged, ...extra };
+  }
   const out = {};
   for (const [k, v] of Object.entries(schema)) {
+    if (k === '$ref' || k === '$defs' || k === 'definitions') continue;
     if (k === 'const') { out.enum = [v]; continue; }
-    if (k === 'oneOf' && Array.isArray(v)) { out.anyOf = v.map(toGeminiSchema); continue; }
+    if ((k === 'oneOf' || k === 'anyOf') && Array.isArray(v)) {
+      const collapsed = collapseNullableUnion(v);
+      if (collapsed) {
+        const inner = toGeminiSchema(collapsed.schema, root, seen);
+        if (inner && typeof inner === 'object' && !Array.isArray(inner)) Object.assign(out, inner);
+        if (collapsed.nullable) out.nullable = true;
+        continue;
+      }
+      if (k === 'oneOf') { out.anyOf = v.map(s => toGeminiSchema(s, root, seen)); continue; }
+    }
     if (!GEMINI_SCHEMA_KEYS.has(k)) continue;
     if (k === 'properties' && v && typeof v === 'object') {
-      out.properties = Object.fromEntries(Object.entries(v).map(([name, s]) => [name, toGeminiSchema(s)]));
+      out.properties = Object.fromEntries(Object.entries(v).map(([name, s]) => [name, toGeminiSchema(s, root, seen)]));
     } else if (k === 'items') {
-      out.items = Array.isArray(v) ? toGeminiSchema(v[0] || {}) : toGeminiSchema(v);
+      out.items = Array.isArray(v) ? toGeminiSchema(v[0] || {}, root, seen) : toGeminiSchema(v, root, seen);
     } else if (k === 'anyOf' && Array.isArray(v)) {
-      out.anyOf = v.map(toGeminiSchema);
+      out.anyOf = v.map(s => toGeminiSchema(s, root, seen));
     } else if (k === 'type' && Array.isArray(v)) {
       const types = v.filter(t => t !== 'null');
       out.type = types[0] || 'string';
@@ -2053,8 +2113,8 @@ function createResponsesStream(emit, model, opts = {}) {
         })
       });
     },
-    error(message) {
-      send({ type: 'response.failed', response: snapshot('failed', { error: { code: 'server_error', message: String(message || 'Upstream stream error') } }) });
+    error(message, code = 'server_error') {
+      send({ type: 'response.failed', response: snapshot('failed', { error: { code: String(code || 'server_error'), message: String(message || 'Upstream stream error') } }) });
     }
   };
 }
@@ -2182,5 +2242,6 @@ export {
   createAnthropicStream, buildAnthropicMessage,
   createChatStream, buildChatMessage,
   createResponsesStream, buildResponsesMessage,
-  vertexFinish, createVertexStream, buildVertexMessage
+  vertexFinish, createVertexStream, buildVertexMessage,
+  isAntigravityModel
 };
