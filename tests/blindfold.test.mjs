@@ -10,9 +10,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import zlib from 'node:zlib';
 import {
   isGatewayPath, toGatewayPath, isInterceptedHost, isPrivateDestination,
-  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName
+  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody
 } from '../blindfold/blindfold.mjs';
 
 test('a dot-segment escape never reaches the gateway', () => {
@@ -90,6 +91,35 @@ test('capture redaction removes credential values and keeps everything else', ()
   assert.equal(out['Content-Type'], 'application/json');
   assert.equal(out['user-agent'], 'codex_cli_rs/0.154.0');
   assert.ok(Object.keys(out).includes('Authorization'), 'the header name must survive');
+});
+
+// Real-world failure (2026-09-20): a capture of Claude Code recorded 647 bytes of
+// gzip for a response that carried a full SSE stream. The client sends
+// "accept-encoding: gzip", so reading the wire bytes as UTF-8 stores noise. The
+// capture looked like an empty response and the defect was invisible until the
+// file was parsed.
+test('a compressed response body is decoded for the capture', () => {
+  const sse = 'event: message_start\ndata: {"type":"message_start"}\n\n';
+  assert.equal(decodeBody(zlib.gzipSync(Buffer.from(sse)), 'gzip'), sse);
+  assert.equal(decodeBody(zlib.gzipSync(Buffer.from(sse)), 'GZIP'), sse, 'must be case-insensitive');
+  assert.equal(decodeBody(zlib.brotliCompressSync(Buffer.from(sse)), 'br'), sse);
+  assert.equal(decodeBody(zlib.deflateSync(Buffer.from(sse)), 'deflate'), sse);
+  assert.equal(decodeBody(zlib.zstdCompressSync(Buffer.from(sse)), 'zstd'), sse);
+});
+
+test('an unencoded body is passed through untouched', () => {
+  const plain = '{"ok":true}';
+  assert.equal(decodeBody(Buffer.from(plain), undefined), plain);
+  assert.equal(decodeBody(Buffer.from(plain), 'identity'), plain);
+  assert.equal(decodeBody(Buffer.from(plain), ''), plain);
+});
+
+// A truncated stream is normal: the client can abort mid-answer. The capture must
+// still be written, and it must not store bytes that read like a provider reply.
+test('a body that cannot be decoded reports the reason instead of storing noise', () => {
+  const broken = zlib.gzipSync(Buffer.from('hello')).subarray(0, 8);
+  const out = decodeBody(broken, 'gzip');
+  assert.match(out, /^\[capture: cannot decode gzip body of 8 bytes: /);
 });
 
 test('capture filenames carry no path separator', () => {

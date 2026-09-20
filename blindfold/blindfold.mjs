@@ -30,6 +30,7 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import tls from 'node:tls';
+import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -87,6 +88,30 @@ export function captureName(method, url, now = Date.now()) {
 
 const CAPTURE_LIMIT = 200000;
 const clip = (s) => (s.length > CAPTURE_LIMIT ? s.slice(0, CAPTURE_LIMIT) + '...[truncated]' : s);
+
+// A client asks for gzip, so the bytes on the wire are compressed. Reading them as
+// UTF-8 yields binary noise, which is what a capture recorded before this existed.
+// The proxy forwards the compressed bytes untouched; only the copy is decoded.
+const DECODERS = {
+  gzip: zlib.gunzipSync,
+  'x-gzip': zlib.gunzipSync,
+  br: zlib.brotliDecompressSync,
+  deflate: zlib.inflateSync,
+  zstd: zlib.zstdDecompressSync
+};
+
+export function decodeBody(buffer, contentEncoding) {
+  const name = String(contentEncoding || '').trim().toLowerCase();
+  const decode = DECODERS[name];
+  if (!decode) return buffer.toString('utf8');
+  try {
+    return decode(buffer).toString('utf8');
+  } catch (err) {
+    // An aborted or truncated stream cannot be decoded. Say so in the file rather
+    // than writing noise that reads like a malformed response from the provider.
+    return `[capture: cannot decode ${name} body of ${buffer.length} bytes: ${err.message}]`;
+  }
+}
 
 // A capture is a diagnostic. Failing to write one must never fail the request.
 function writeCapture(record) {
@@ -154,15 +179,34 @@ function armTimeout(socket, onTimeout) {
 
 const mitm = https.createServer();
 
+// Collect a copy for the capture file while the bytes keep flowing. Buffering to
+// write the file first would hold back a streamed response. Both routes record,
+// because on a host with no gateway prefix every exchange is a passthrough and a
+// capture that skipped them would always be empty.
+function recordExchange(req) {
+  if (!CAPTURE_DIR) return null;
+  const reqChunks = [];
+  req.on('data', (c) => reqChunks.push(c));
+  return (upRes) => {
+    const resChunks = [];
+    upRes.on('data', (c) => resChunks.push(c));
+    upRes.on('end', () => writeCapture({
+      method: req.method,
+      url: req.url,
+      requestHeaders: redactHeaders(req.headers),
+      requestBody: clip(decodeBody(Buffer.concat(reqChunks), req.headers['content-encoding'])),
+      status: upRes.statusCode,
+      responseHeaders: redactHeaders(upRes.headers),
+      responseBody: clip(decodeBody(Buffer.concat(resChunks), upRes.headers['content-encoding']))
+    }));
+  };
+}
+
 mitm.on('request', (req, res) => {
   if (!isGatewayPath(req.url)) return passThroughRequest(req, res);
 
   log('gateway', req.method, req.url);
-  // Collect a copy for the capture file while the bytes keep flowing. Buffering
-  // to write the file first would hold back a streamed response.
-  const reqChunks = [];
-  const resChunks = [];
-  if (CAPTURE_DIR) req.on('data', (c) => reqChunks.push(c));
+  const record = recordExchange(req);
 
   const upstream = http.request({
     host: GATEWAY_HOST,
@@ -172,18 +216,7 @@ mitm.on('request', (req, res) => {
     headers: gatewayHeaders(req.headers)
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
-    if (CAPTURE_DIR) {
-      upRes.on('data', (c) => resChunks.push(c));
-      upRes.on('end', () => writeCapture({
-        method: req.method,
-        url: req.url,
-        requestHeaders: redactHeaders(req.headers),
-        requestBody: clip(Buffer.concat(reqChunks).toString('utf8')),
-        status: upRes.statusCode,
-        responseHeaders: redactHeaders(upRes.headers),
-        responseBody: clip(Buffer.concat(resChunks).toString('utf8'))
-      }));
-    }
+    if (record) record(upRes);
     upRes.pipe(res);
   });
   upstream.on('error', (err) => {
@@ -197,6 +230,7 @@ mitm.on('request', (req, res) => {
 // usage pages behave exactly as they do without this process.
 function passThroughRequest(req, res) {
   log('passthrough', req.method, req.url);
+  const record = recordExchange(req);
   const upstream = https.request({
     host: TARGET_HOST,
     servername: TARGET_HOST,
@@ -206,6 +240,7 @@ function passThroughRequest(req, res) {
     headers: { ...req.headers, host: TARGET_HOST }
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
+    if (record) record(upRes);
     upRes.pipe(res);
   });
   upstream.on('error', (err) => {

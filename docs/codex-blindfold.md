@@ -136,6 +136,25 @@ node blindfold/blindfold.mjs --capture ./captures
 Each file holds the method, the URL, both header sets and both bodies, truncated
 at 200000 characters. Use it to learn what a genuine CLI or IDE puts on the wire.
 
+Both routes are recorded: the calls that go to the gateway, and the calls that are
+re-originated to the real host. A compressed body is decoded first, because a
+client asks for `gzip` and the bytes on the wire are not readable text. The
+forwarded response keeps its original bytes; only the copy in the file is decoded.
+
+To record a different tool, point the proxy at that tool's host and give it a
+prefix that no path can match, so every request is re-originated and recorded:
+
+```bash
+bash blindfold/make-certs.sh api.anthropic.com /tmp/anthropic-certs
+node blindfold/blindfold.mjs --host api.anthropic.com --prefix /no-gateway \
+  --port 3458 --certs /tmp/anthropic-certs --capture /tmp/anthropic-captures
+```
+
+Then start the tool with `HTTPS_PROXY=http://127.0.0.1:3458` and the CA in the
+variable that the tool reads. A Node client reads `NODE_EXTRA_CA_CERTS`. Set both
+variables for that process only; a variable set for one process does not change a
+process that already runs.
+
 Credential headers never reach the file. `authorization`, `proxy-authorization`,
 `cookie`, `set-cookie`, `x-api-key` and `api-key` are replaced with `<redacted>`,
 and so are the account identifiers `chatgpt-account-id`, `openai-organization` and
