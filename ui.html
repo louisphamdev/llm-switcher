@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Local dashboard for the LLM Switcher gateway: route Claude Code, Codex, OpenAI and Vertex clients to a provider of your choice.">
   <title>LLM Switcher | Local gateway</title>
   <link rel="icon" href="data:,">
   <script>
@@ -26,7 +27,9 @@
       --border-active: #38bdf8;
       --text: #f8fafc;
       --text-muted: #94a3b8;
-      --text-dim: #64748b;
+      /* Measured against the darkest and the lightest surface this token sits on
+         (--bg through --surface-elevated). #64748b read 3.48:1 on the elevated card. */
+      --text-dim: #7d8ba1;
       --primary-bg: #f8fafc;
       --primary-fg: #090a0f;
       --primary-hover: #e2e8f0;
@@ -36,8 +39,8 @@
       --success-muted: rgba(16, 185, 129, 0.12);
       --warning: #f59e0b;
       --warning-muted: rgba(245, 158, 11, 0.12);
-      --danger: #ef4444;
-      --danger-muted: rgba(239, 68, 68, 0.12);
+      --danger: #f87171;
+      --danger-muted: rgba(248, 113, 113, 0.12);
       --radius-sm: 6px;
       --radius: 8px;
       --radius-lg: 10px;
@@ -56,18 +59,21 @@
       --border-active: #0284c7;
       --text: #0f172a;
       --text-muted: #475569;
-      --text-dim: #94a3b8;
+      /* Measured against the two backgrounds these tokens actually sit on (#ffffff and
+         --bg), and against the 10% tint the badges blend to. The previous values read
+         2.45:1 to 4.13:1, below the 4.5:1 floor. */
+      --text-dim: #64748b;
       --primary-bg: #0f172a;
       --primary-fg: #ffffff;
       --primary-hover: #1e293b;
       --accent: #0284c7;
       --accent-muted: rgba(2, 132, 199, 0.08);
-      --success: #059669;
-      --success-muted: rgba(5, 150, 105, 0.1);
-      --warning: #d97706;
-      --warning-muted: rgba(217, 119, 6, 0.1);
-      --danger: #dc2626;
-      --danger-muted: rgba(220, 38, 38, 0.1);
+      --success: #047857;
+      --success-muted: rgba(4, 120, 87, 0.1);
+      --warning: #92400e;
+      --warning-muted: rgba(146, 64, 14, 0.1);
+      --danger: #b91c1c;
+      --danger-muted: rgba(185, 28, 28, 0.1);
       color-scheme: light;
     }
 
@@ -583,7 +589,10 @@
       min-width: 0;
     }
     .form-group.full { grid-column: span 2; }
-    label {
+    /* .field-heading names a group of settings. A <label> that points at no field
+       reads to assistive technology as a broken association, so headings use this
+       instead and keep the same appearance. */
+    label, .field-heading {
       font-size: 11px;
       font-weight: 500;
       color: var(--text-muted);
@@ -786,7 +795,7 @@
   </style>
 </head>
 <body>
-  <div class="container">
+  <main class="container">
     <!-- Header -->
     <header>
       <div class="title-group">
@@ -931,6 +940,7 @@
         <button id="tab-button-general" type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-general" tabindex="0" onclick="switchTab('tab-general')">General</button>
         <button id="tab-button-routing" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-routing" tabindex="-1" onclick="switchTab('tab-routing')">Routing</button>
         <button id="tab-button-models" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-models" tabindex="-1" onclick="switchTab('tab-models')">Models</button>
+        <button id="tab-button-codex" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-codex" tabindex="-1" onclick="switchTab('tab-codex')" hidden>Codex</button>
         <button id="tab-button-inspector" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-inspector" tabindex="-1" onclick="switchTab('tab-inspector'); loadInspectorLogs();">Request log</button>
       </div>
 
@@ -952,7 +962,7 @@
             </div>
             <div class="form-group full">
               <label for="p-key-val">API key or bearer token</label>
-              <input type="password" id="p-key-val" placeholder="sk-...">
+              <input type="password" id="p-key-val" autocomplete="off" placeholder="sk-...">
             </div>
           </div>
         </div>
@@ -997,7 +1007,7 @@
             </div>
             <div class="form-group full" style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px;">
               <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-                <label>Token Optimizers</label>
+                <span class="field-heading">Token Optimizers</span>
                 <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">Headroom • Ponytail • RTK</span>
               </div>
               <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
@@ -1041,6 +1051,64 @@
         </div>
 
         <!-- Tab 4: Live Inspector -->
+        <!-- Tab 4: Codex — only the names this CLI is allowed to observe -->
+        <div id="tab-codex" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-codex" hidden>
+          <div class="warning-callout">
+            <span class="badge badge-convert">NOTE</span>
+            <div>
+              <strong>Codex sees only these names.</strong> The slot aliases <code>main</code>, <code>review</code> and
+              <code>subagent</code> stay inside the gateway. Leave a field empty to let Codex keep its own default for that role.
+            </div>
+          </div>
+
+          <div class="form-grid" style="margin-top: 12px;">
+            <div class="form-group full">
+              <label for="p-public-main">Session model name</label>
+              <input type="text" id="p-public-main" list="model-options" placeholder="e.g. gpt-5.6-sol">
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Shown in the CLI <code>/model</code> picker and sent with every request.</span>
+            </div>
+            <div class="form-group">
+              <label for="p-public-review">Review model name</label>
+              <input type="text" id="p-public-review" list="model-options" placeholder="e.g. gpt-5.6-terra">
+            </div>
+            <div class="form-group">
+              <label for="p-public-subagent">Subagent model name</label>
+              <input type="text" id="p-public-subagent" list="model-options" placeholder="e.g. gpt-5.6-luna">
+            </div>
+          </div>
+
+          <div class="form-grid" style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
+            <div class="form-group full">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; text-transform: none;">
+                <input type="checkbox" id="p-blindfold" style="width: 13px; height: 13px;" onchange="onBlindfoldToggle(this.checked)">
+                Blindfold mode — hide the gateway address from the CLI
+              </label>
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                Off: the CLI is given a base URL override, and it prints a warning on its own <code>/model</code> screen.
+                On: the CLI keeps its official endpoint and reaches the gateway through a local interceptor.
+                Build the certificates first with <code>bash blindfold/make-certs.sh &lt;host&gt;</code>.
+              </span>
+            </div>
+          </div>
+
+          <div class="form-grid" id="blindfold-fields" hidden>
+            <div class="form-group">
+              <label for="p-blindfold-host">Intercepted host</label>
+              <input type="text" id="p-blindfold-host" placeholder="chatgpt.com">
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">ChatGPT sign-in: <code>chatgpt.com</code>. API key: <code>api.openai.com</code>.</span>
+            </div>
+            <div class="form-group">
+              <label for="p-blindfold-port">Interceptor port</label>
+              <input type="number" id="p-blindfold-port" min="1" max="65535" placeholder="3457">
+            </div>
+            <div class="form-group full">
+              <label for="p-blindfold-prefix">API path prefix</label>
+              <input type="text" id="p-blindfold-prefix" placeholder="/backend-api/codex">
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Requests under this path reach the gateway. Every other path goes to the real host. API key accounts use <code>/v1</code>.</span>
+            </div>
+          </div>
+        </div>
+
         <div id="tab-inspector" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-inspector" hidden>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <div>
@@ -1083,7 +1151,7 @@
         </div>
       </form>
     </div>
-  </div>
+  </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
@@ -1103,6 +1171,9 @@
     let renderedSlotFormat = 'auto';
     const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
     const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
+    // Order matters: publicModels is read by position when codexRoles has no entry.
+    const CODEX_ROLE_SLOTS = ['main', 'review', 'subagent'];
+
     const LEGACY_SLOT_KEYS = {
       main: ['opus'],
       review: ['sonnet'],
@@ -1267,8 +1338,70 @@
     function onInFormatChange(newFmt) {
       collectCurrentSlotValues(renderedSlotFormat);
       renderModelSlots(newFmt);
+      renderCodexTab(newFmt);
       if (loadedModels.length > 0) renderModelBrowser(loadedModels);
       formDirty = true;
+    }
+
+    // The Codex tab only applies to a profile that serves the Responses protocol.
+    // Showing it elsewhere would offer settings that nothing reads.
+    function renderCodexTab(format) {
+      const applies = format === 'responses';
+      const btn = document.getElementById('tab-button-codex');
+      if (btn) btn.hidden = !applies;
+      if (!applies && document.getElementById('tab-codex')?.classList.contains('active')) {
+        switchTab('tab-general');
+      }
+
+      const p = currentProfileBuffer || {};
+      const roles = p.codexRoles || {};
+      const published = Array.isArray(p.publicModels) ? p.publicModels : [];
+      CODEX_ROLE_SLOTS.forEach((slot, i) => {
+        const input = document.getElementById(`p-public-${slot}`);
+        if (input) input.value = roles[slot] || published[i] || '';
+      });
+
+      const chk = document.getElementById('p-blindfold');
+      if (chk) chk.checked = Boolean(p.blindfold);
+      const host = document.getElementById('p-blindfold-host');
+      if (host) host.value = p.blindfoldHost || '';
+      const port = document.getElementById('p-blindfold-port');
+      if (port) port.value = p.blindfoldPort || '';
+      const prefix = document.getElementById('p-blindfold-prefix');
+      if (prefix) prefix.value = p.blindfoldPrefix || '';
+      onBlindfoldToggle(Boolean(p.blindfold));
+    }
+
+    // The form already marks itself dirty through one input/change listener, so this
+    // only reveals the fields that the toggle governs.
+    function onBlindfoldToggle(enabled) {
+      const fields = document.getElementById('blindfold-fields');
+      if (fields) fields.hidden = !enabled;
+    }
+
+    // One set of inputs feeds both keys: codexRoles is the role mapping the gateway
+    // resolves, publicModels is the flat list /v1/models serves. Writing only one of
+    // them lets the two drift apart.
+    function collectCodexValues(profile) {
+      if (profile.inFormat !== 'responses') return;
+
+      const roles = {};
+      const published = [];
+      CODEX_ROLE_SLOTS.forEach(slot => {
+        const value = document.getElementById(`p-public-${slot}`)?.value.trim() || '';
+        roles[slot] = value;
+        if (value && !published.includes(value)) published.push(value);
+      });
+      profile.codexRoles = roles;
+      profile.publicModels = published;
+
+      profile.blindfold = Boolean(document.getElementById('p-blindfold')?.checked);
+      const host = document.getElementById('p-blindfold-host')?.value.trim() || '';
+      const prefix = document.getElementById('p-blindfold-prefix')?.value.trim() || '';
+      const port = parseInt(document.getElementById('p-blindfold-port')?.value, 10);
+      profile.blindfoldHost = host;
+      profile.blindfoldPrefix = prefix;
+      profile.blindfoldPort = Number.isInteger(port) && port > 0 && port <= 65535 ? port : '';
     }
 
     function collectCurrentSlotValues(format = renderedSlotFormat) {
@@ -1557,6 +1690,7 @@
       document.getElementById('p-key-val').value = p.apiKey || '';
 
       renderModelSlots(p.inFormat || 'auto');
+      renderCodexTab(p.inFormat || 'auto');
 
       document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
       const usedBy = Object.entries(state.activeProfiles || {}).filter(([, v]) => v === key).map(([t]) => t);
@@ -1600,6 +1734,7 @@
       document.getElementById('p-key-val').value = '';
 
       renderModelSlots('auto');
+      renderCodexTab('auto');
 
       document.getElementById('btn-delete').style.display = 'none';
       document.getElementById('active-tag').innerText = '';
@@ -1853,6 +1988,7 @@
         model1M: merged1M
       };
       profile.outFormat = outFormat;
+      collectCodexValues(profile);
 
       try {
         const res = await fetch('/api/save-profile', {
