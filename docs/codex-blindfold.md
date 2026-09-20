@@ -142,6 +142,11 @@ and so are the account identifiers `chatgpt-account-id`, `openai-organization` a
 `x-goog-user-project`. The header names stay, so the shape of the request is still
 readable.
 
+CAUTION: The redaction covers headers only. Both bodies are written as they
+travelled, so a capture holds your prompts, your source code and the answers of
+the model. Treat the directory as private. `captures/` is in `.gitignore`; if you
+capture somewhere else, ignore that path too before you commit.
+
 NOTE: Only the HTTP path is recorded. Codex sends its completions over a WebSocket,
 which this proxy relays as raw bytes, so those exchanges do not produce a file.
 

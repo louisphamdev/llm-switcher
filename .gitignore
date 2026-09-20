@@ -20,6 +20,8 @@ blindfold.pid
 blindfold.log
 env-codex.cmd
 env-codex.sh
+# blindfold --capture writes request and response bodies verbatim
+captures/
 
 # archify visual-check writes evidence sidecars next to the diagram it checked
 docs/diagrams/*.visual-check.*
