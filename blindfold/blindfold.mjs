@@ -32,6 +32,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createFrameReader, negotiatesDeflate } from './wsframe.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -114,12 +115,12 @@ export function decodeBody(buffer, contentEncoding) {
 }
 
 // A capture is a diagnostic. Failing to write one must never fail the request.
-function writeCapture(record) {
+function writeCapture(record, fileName) {
   if (!CAPTURE_DIR) return;
   try {
     fs.mkdirSync(CAPTURE_DIR, { recursive: true });
     fs.writeFileSync(
-      path.join(CAPTURE_DIR, captureName(record.method, record.url)),
+      path.join(CAPTURE_DIR, fileName || captureName(record.method, record.url)),
       JSON.stringify(record, null, 2), 'utf8');
   } catch (err) {
     log('capture failed:', err.message);
@@ -250,6 +251,87 @@ function passThroughRequest(req, res) {
   req.pipe(upstream);
 }
 
+// Relay a WebSocket and record the messages that cross it.
+//
+// A Codex completion is a WebSocket, not an HTTP POST, so without this the capture
+// of the one call that matters holds the handshake and nothing else. Every byte is
+// still forwarded unchanged; the frame reader works on a copy.
+function captureUpgrade(req, clientSocket, target) {
+  log('ws capture started for', req.url);
+  const messages = [];
+  const name = captureName(req.method, req.url);
+  let handshake = Buffer.alloc(0);
+  let readFromClient = null;
+  let readFromServer = null;
+  let written = 0;
+
+  const collect = (from, frames) => {
+    for (const f of frames) {
+      if (written >= CAPTURE_LIMIT) return;
+      const text = f.payload.toString('utf8');
+      written += text.length;
+      messages.push({ from, type: f.type, ...(f.compressed ? { compressed: true } : {}),
+        ...(f.note ? { note: f.note } : {}), ...(f.reason ? { reason: f.reason } : {}),
+        payload: clip(text) });
+    }
+    if (frames.length) scheduleFlush();
+  };
+  let scheduleFlush = () => {};
+
+  // Backpressure: a plain write() loses what pipe() gives for free, and a slow peer
+  // would then grow an unbounded buffer inside this process.
+  target.on('drain', () => clientSocket.resume());
+  clientSocket.on('drain', () => target.resume());
+
+  target.on('data', (chunk) => {
+    if (!clientSocket.write(chunk)) target.pause();
+    if (readFromServer) return collect('server', readFromServer(chunk));
+
+    // The 101 response has to be parsed before any frame: it names the extension,
+    // and inflating a payload that was never compressed produces noise.
+    handshake = Buffer.concat([handshake, chunk]);
+    const end = handshake.indexOf('\r\n\r\n');
+    if (end === -1) return;
+    const text = handshake.subarray(0, end).toString('latin1');
+    const inflate = negotiatesDeflate(/^sec-websocket-extensions:(.*)$/im.exec(text)?.[1]);
+    readFromServer = createFrameReader({ inflate });
+    readFromClient = createFrameReader({ inflate });
+    const rest = handshake.subarray(end + 4);
+    if (rest.length) collect('server', readFromServer(rest));
+  });
+
+  clientSocket.on('data', (chunk) => {
+    if (!target.write(chunk)) clientSocket.pause();
+    if (readFromClient) collect('client', readFromClient(chunk));
+  });
+
+  // Do not wait for 'close' to write the file. A WebSocket stays open, and when the
+  // client process exits the socket can be collected without ever emitting 'close',
+  // so a capture that only wrote on close wrote nothing at all. Flush shortly after
+  // the traffic goes quiet instead, and keep flushing as more messages arrive.
+  let timer = null;
+  const flush = () => {
+    timer = null;
+    writeCapture({
+      method: req.method,
+      url: req.url,
+      protocol: 'websocket',
+      requestHeaders: redactHeaders(req.headers),
+      messageCount: messages.length,
+      messages
+    }, name);
+  };
+  scheduleFlush = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(flush, 800);
+    timer.unref?.();
+  };
+  for (const s of [clientSocket, target]) {
+    s.on('close', flush);
+    s.on('end', flush);
+  }
+}
+
 // WebSocket upgrades: relay the raw TCP stream once the handshake is written.
 mitm.on('upgrade', (req, clientSocket, head) => {
   const toGateway = isGatewayPath(req.url);
@@ -266,7 +348,11 @@ mitm.on('upgrade', (req, clientSocket, head) => {
     for (const [k, v] of Object.entries(headers)) lines.push(`${k}: ${v}`);
     target.write(lines.join('\r\n') + '\r\n\r\n');
     if (head?.length) target.write(head);
-    clientSocket.pipe(target).pipe(clientSocket);
+    if (!CAPTURE_DIR) {
+      clientSocket.pipe(target).pipe(clientSocket);
+      return;
+    }
+    captureUpgrade(req, clientSocket, target);
   });
 
   const close = () => { target.destroy(); clientSocket.destroy(); };
