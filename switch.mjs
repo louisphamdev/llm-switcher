@@ -3,10 +3,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync, execSync } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
 import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
-  applyLaunchState, clearLaunchState, modelSlotsForProfile, modelForSlot, model1MForSlot
+  applyLaunchState, clearLaunchState, computeLaunchState, certCoversHost,
+  modelSlotsForProfile, modelForSlot, model1MForSlot
 } from './state.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
@@ -81,6 +83,94 @@ function startProxyBackground(port) {
   fs.closeSync(log);
   fs.writeFileSync(paths.pidFile, String(child.pid), 'utf8');
   return child.pid;
+}
+
+// ---------------- blindfold interceptor ----------------
+//
+// Blindfold mode routes Codex through HTTPS_PROXY instead of a base URL override.
+// That variable is a hard dependency: if the interceptor is not listening, Codex
+// cannot reach anything at all. So its lifetime follows the gateway's, and an
+// activation with a missing certificate is refused rather than half-applied.
+
+const blindfoldScript = path.join(ROOT_DIR, 'blindfold', 'blindfold.mjs');
+const blindfoldPidFile = path.join(ROOT_DIR, 'blindfold.pid');
+
+function checkBlindfoldRunning(port) {
+  return new Promise(resolve => {
+    const socket = net.connect({ host: '127.0.0.1', port, timeout: 1000 });
+    socket.on('connect', () => { socket.destroy(); resolve(true); });
+    socket.on('error', () => resolve(false));
+    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+  });
+}
+
+// Refuse before any file is written. A half-applied blindfold leaves HTTPS_PROXY
+// pointing at a port nothing listens on, and then Codex reaches no host at all.
+function assertBlindfoldUsable(port) {
+  const planned = computeLaunchState(config, port);
+  if (!planned.blindfold) return;
+  const { ca, host } = planned.blindfold;
+  const leaf = path.join(ROOT_DIR, 'blindfold', 'certs', 'leaf.pem');
+  const build = `bash blindfold/make-certs.sh ${host}`;
+
+  if (!fs.existsSync(ca) || !fs.existsSync(leaf)) {
+    console.error(`[Error] Blindfold mode is on, but the certificates are missing in ${path.dirname(ca)}.`);
+    console.error(`        Build them first:  ${build}`);
+    console.error('        Or set "blindfold": false in the profile.');
+    process.exit(1);
+  }
+  // A leaf for another host fails the TLS handshake with an error that reads like a
+  // network fault, so name the real cause here instead.
+  if (!certCoversHost(fs.readFileSync(leaf, 'utf8'), host)) {
+    console.error(`[Error] The leaf certificate does not cover "${host}".`);
+    console.error(`        Rebuild it for that host:  ${build}`);
+    process.exit(1);
+  }
+}
+
+async function syncBlindfold(st, port) {
+  if (st?.blindfold) await ensureBlindfoldRunning(st.blindfold, port);
+  else stopBlindfold();
+}
+
+async function ensureBlindfoldRunning(blindfold, port) {
+  if (await checkBlindfoldRunning(blindfold.port)) {
+    console.log(`[Blindfold] Interceptor already listening on port ${blindfold.port}.`);
+    return;
+  }
+  const log = fs.openSync(path.join(ROOT_DIR, 'blindfold.log'), 'a');
+  const child = spawn(process.execPath, [
+    blindfoldScript,
+    '--port', String(blindfold.port),
+    '--gateway-port', String(port),
+    '--host', blindfold.host,
+    '--prefix', blindfold.prefix
+  ], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
+  child.unref();
+  fs.closeSync(log);
+  fs.writeFileSync(blindfoldPidFile, String(child.pid), 'utf8');
+
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    if (await checkBlindfoldRunning(blindfold.port)) {
+      console.log(`[Blindfold] Interceptor on port ${blindfold.port}; Codex keeps its official endpoint.`);
+      return;
+    }
+  }
+  console.error(`[Error] The interceptor did not come up on port ${blindfold.port}. See blindfold.log.`);
+  process.exit(1);
+}
+
+function stopBlindfold() {
+  if (!fs.existsSync(blindfoldPidFile)) return;
+  const pid = parseInt(fs.readFileSync(blindfoldPidFile, 'utf8').trim(), 10);
+  if (pid > 0) {
+    try {
+      if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
+      else process.kill(pid, 'SIGTERM');
+    } catch {}
+  }
+  try { fs.unlinkSync(blindfoldPidFile); } catch {}
 }
 
 async function ensureProxyRunning(port) {
@@ -225,8 +315,10 @@ async function turnOn(profileName, cliTarget) {
 
   const profile = config.profiles[key];
   console.log(`Activating profile: [${profile.name || key}] (${key})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
+  assertBlindfoldUsable(port);
   await ensureProxyRunning(port);
   const st = applyLaunchState(config, port);
+  await syncBlindfold(st, port);
 
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
@@ -259,7 +351,7 @@ async function turnOff(targetArg) {
     }
     setTargetProfile(config, target, null);
     saveConfig(config);
-    applyLaunchState(config, port);
+    await syncBlindfold(applyLaunchState(config, port), port);
     console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
     printTargets(getActiveMap(config));
     return;
@@ -269,6 +361,7 @@ async function turnOff(targetArg) {
   deactivateAll(config);
   saveConfig(config);
   clearLaunchState();
+  stopBlindfold();
   const stopped = await stopProxy(port);
   console.log(stopped ? 'Stopped local proxy service.' : 'Proxy service was not running.');
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');

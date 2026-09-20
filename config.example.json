@@ -55,6 +55,14 @@
       "outFormat": "vertex",
       "baseURL": "https://YOUR-VERTEX-GATEWAY/v1",
       "apiKey": "REPLACE-ME",
+      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "codexRoles": {
+        "main": "gpt-5.6-sol",
+        "review": "gpt-5.6-terra",
+        "subagent": "gpt-5.6-luna"
+      },
+      "blindfold": false,
+      "blindfoldPort": 3457,
       "defaultModels": {
         "main": "gemini-3.8-flash",
         "review": "gemini-3.7-flash-medium",

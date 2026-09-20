@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +16,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = __dirname;
 export const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
 export const DEFAULT_PORT = 3456;
+export const DEFAULT_BLINDFOLD_PORT = 3457;
+// Codex with ChatGPT sign-in calls https://chatgpt.com/backend-api/codex.
+// An API-key account calls https://api.openai.com/v1 instead.
+export const DEFAULT_BLINDFOLD_HOST = 'chatgpt.com';
+export const DEFAULT_BLINDFOLD_PREFIX = '/backend-api/codex';
 export const CLAUDE_MODEL_SLOTS = ['opus', 'sonnet', 'haiku', 'fable'];
 // Codex CLI model roles per OpenAI docs (config-reference):
 // - main     <-> `model` (session model)
@@ -55,6 +61,11 @@ export const paths = {
   flagOpenAI1M: path.join(ROOT_DIR, 'openai-1m.flag'), // OpenAI launcher flag
   envCmd: path.join(ROOT_DIR, 'env.cmd'),
   envSh: path.join(ROOT_DIR, 'env.sh'),
+  envCodexCmd: path.join(ROOT_DIR, 'env-codex.cmd'),
+  envCodexSh: path.join(ROOT_DIR, 'env-codex.sh'),
+  codexCatalog: path.join(ROOT_DIR, 'model-catalog.json'),
+  codexCatalogTemplate: path.join(ROOT_DIR, 'codex-catalog-template.json'),
+  blindfoldCA: path.join(ROOT_DIR, 'blindfold', 'certs', 'ca.pem'),
   pidFile: path.join(ROOT_DIR, 'proxy.pid')
 };
 
@@ -149,6 +160,105 @@ export function model1MForSlot(profile, slot) {
     if (Object.hasOwn(flags, k)) return Boolean(flags[k]);
   }
   return false;
+}
+
+// ---------------- Codex-facing model names ----------------
+//
+// Codex must never be handed a switcher-internal name. It can display whatever it
+// is given: the /model picker renders the local catalog file, and `review_model` /
+// `agents.default_subagent_model` show up in its config. So every name that leaves
+// this process for the CLI comes from `publicModels` (official OpenAI slugs), while
+// the slots main/review/subagent stay server-side for mapModel to resolve.
+//
+// `codexRoles` overrides a single role when position is not the wanted pairing.
+export function codexPublicModel(profile, slot) {
+  const explicit = Object.hasOwn(profile?.codexRoles || {}, slot) ? profile.codexRoles[slot] : null;
+  if (explicit) return String(explicit);
+  // Read by POSITION, without compacting the array. Dropping a blank entry first would
+  // move every later role onto the wrong model, and /review would run on the subagent.
+  const published = Array.isArray(profile?.publicModels) ? profile.publicModels : [];
+  const index = CODEX_MODEL_SLOTS.indexOf(slot);
+  return index >= 0 ? String(published[index] || '') : '';
+}
+
+// A model name reaches cmd.exe twice: env.cmd runs as a batch file, and the shim then
+// expands the variable unquoted onto the Codex command line. So the name is restricted
+// to the characters real model IDs use. An unsafe name is dropped, never escaped:
+// dropping it loses one override, escaping it correctly in two shells is a bet.
+const SAFE_MODEL_NAME = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+export function isSafeModelName(name) {
+  return typeof name === 'string' && SAFE_MODEL_NAME.test(name);
+}
+
+/**
+ * Does this leaf certificate cover the host the interceptor will present it for?
+ * Changing blindfoldHost without rebuilding the leaf produces a TLS error that reads
+ * like a network fault, so the launcher compares the two before it starts anything.
+ */
+export function certCoversHost(pem, host) {
+  if (!pem || !host) return false;
+  let names;
+  try {
+    names = new crypto.X509Certificate(pem).subjectAltName;
+  } catch {
+    return false;
+  }
+  if (!names) return false;
+  const target = String(host).toLowerCase();
+  return names.split(',').some(entry => {
+    const value = entry.trim().replace(/^DNS:/i, '').toLowerCase();
+    if (value === target) return true;
+    // One wildcard label only, exactly as TLS clients match it.
+    if (value.startsWith('*.')) {
+      const suffix = value.slice(1);
+      return target.endsWith(suffix) && !target.slice(0, -suffix.length).includes('.');
+    }
+    return false;
+  });
+}
+
+let cachedCatalogTemplate = null;
+
+function codexCatalogTemplate() {
+  if (cachedCatalogTemplate) return cachedCatalogTemplate;
+  try {
+    cachedCatalogTemplate = JSON.parse(fs.readFileSync(paths.codexCatalogTemplate, 'utf8'));
+  } catch {
+    cachedCatalogTemplate = null;
+  }
+  return cachedCatalogTemplate;
+}
+
+/**
+ * Build the catalog Codex loads through `--config model_catalog_json`.
+ * Returns null when the profile publishes no official names: Codex then keeps its
+ * own built-in catalog, which is leak-free too.
+ */
+export function buildCodexCatalog(profile) {
+  const template = codexCatalogTemplate();
+  if (!template) return null;
+
+  // The catalog is what the picker reads, so its window must match the profile. When
+  // two slots publish the same name the smaller window wins: overstating it makes
+  // Codex size a session and its auto-compact point against space it does not have.
+  const windows = new Map();
+  for (const slot of CODEX_MODEL_SLOTS) {
+    const name = codexPublicModel(profile, slot);
+    if (!name) continue;
+    const is1M = model1MForSlot(profile, slot);
+    if (!windows.has(name) || !is1M) windows.set(name, is1M);
+  }
+  if (!windows.size) return null;
+
+  return {
+    models: [...windows].map(([name, is1M]) => ({
+      ...structuredClone(template),
+      slug: name,
+      display_name: name,
+      ...(is1M ? { context_window: 1000000, max_context_window: 1000000 } : {})
+    }))
+  };
 }
 
 export function parsePort(value) {
@@ -286,7 +396,22 @@ export function computeLaunchState(cfg, port) {
     claude1M: claude ? claudeTier1M(claude) : null,
     codex1M: codex && model1MForSlot(codex, 'main') ? (primaryModel(codex) || '1000000') : null,
     openai1M: openai && anyTier1M(openai) ? (primaryModel(openai) || '1000000') : null,
-    env: []
+    // host and prefix travel with the port: an account that signs in with an API key
+    // reaches a different host under a different prefix, and the launcher cannot guess
+    // either one. The defaults cover ChatGPT sign-in.
+    blindfold: codex?.blindfold
+      ? {
+        port: parsePort(codex.blindfoldPort) || DEFAULT_BLINDFOLD_PORT,
+        host: String(codex.blindfoldHost || DEFAULT_BLINDFOLD_HOST),
+        prefix: String(codex.blindfoldPrefix || DEFAULT_BLINDFOLD_PREFIX),
+        ca: paths.blindfoldCA
+      }
+      : null,
+    env: [],
+    // Variables only the Codex shim may apply. They go to a separate file because the
+    // `claude` shim sources the shared one, and a Codex-only proxy would capture every
+    // claude HTTPS call — including after a restart, when the interceptor is not running.
+    envCodex: []
   };
 
   if (claude) {
@@ -307,10 +432,27 @@ export function computeLaunchState(cfg, port) {
   if (codex) {
     // These are internal shim inputs, not Codex configuration variables.
     // The installed Codex shim converts them to documented `--config` keys.
-    state.env.push(['LLM_SWITCHER_CODEX_BASE_URL', `${base}/v1`]);
-    if (modelForSlot(codex, 'main')) state.env.push(['LLM_SWITCHER_CODEX_MAIN_MODEL', modelForSlot(codex, 'main')]);
-    if (modelForSlot(codex, 'review')) state.env.push(['LLM_SWITCHER_CODEX_REVIEW_MODEL', modelForSlot(codex, 'review')]);
-    if (modelForSlot(codex, 'subagent')) state.env.push(['LLM_SWITCHER_CODEX_SUBAGENT_MODEL', modelForSlot(codex, 'subagent')]);
+    if (codex.blindfold) {
+      // Blindfold mode: Codex keeps its official endpoint and reaches the gateway
+      // through blindfold/blindfold.mjs, so no base URL override exists to report.
+      // NO_PROXY keeps local MCP servers off the intercept path.
+      const blindfoldURL = `http://127.0.0.1:${state.blindfold.port}`;
+      state.envCodex.push(['HTTPS_PROXY', blindfoldURL]);
+      state.envCodex.push(['https_proxy', blindfoldURL]);
+      state.envCodex.push(['NO_PROXY', '127.0.0.1,localhost']);
+      state.envCodex.push(['no_proxy', '127.0.0.1,localhost']);
+      state.envCodex.push(['CODEX_CA_CERTIFICATE', paths.blindfoldCA]);
+    } else {
+      state.env.push(['LLM_SWITCHER_CODEX_BASE_URL', `${base}/v1`]);
+    }
+    // Official names only. An upstream ID here would reach the CLI as a --config
+    // value and show up in its UI, which is the leak this indirection exists for.
+    for (const slot of CODEX_MODEL_SLOTS) {
+      const publicName = codexPublicModel(codex, slot);
+      if (isSafeModelName(publicName)) {
+        state.env.push([`LLM_SWITCHER_CODEX_${slot.toUpperCase()}_MODEL`, publicName]);
+      }
+    }
     if (state.codex1M) {
       state.env.push(['LLM_SWITCHER_CODEX_CONTEXT_WINDOW', '1000000']);
       state.env.push(['LLM_SWITCHER_CODEX_AUTO_COMPACT_LIMIT', '900000']);
@@ -331,28 +473,43 @@ export function applyLaunchState(cfg, port) {
   writeOrRemove(paths.flagCodex1M, st.codex1M);
   writeOrRemove(paths.flagOpenAI1M, st.openai1M);
 
+  const renderCmd = (pairs) => ['@echo off', 'REM Auto-generated by LLM Switcher for active profiles',
+    ...pairs.map(([k, v]) => `SET "${k}=${v}"`)].join('\r\n') + '\r\n';
+  const renderSh = (pairs) => ['#!/usr/bin/env sh', '# Auto-generated by LLM Switcher for active profiles',
+    ...pairs.map(([k, v]) => `export ${k}='${String(v).replace(/'/g, `'\\''`)}'`)].join('\n') + '\n';
+
   if (st.active) {
-    const cmd = ['@echo off', 'REM Auto-generated by LLM Switcher for active profiles'];
-    const sh = ['#!/usr/bin/env sh', '# Auto-generated by LLM Switcher for active profiles'];
-    for (const [k, v] of st.env) {
-      cmd.push(`SET "${k}=${v}"`);
-      sh.push(`export ${k}='${String(v).replace(/'/g, `'\\''`)}'`);
-    }
     try {
-      fs.writeFileSync(paths.envCmd, cmd.join('\r\n') + '\r\n', 'utf8');
-      fs.writeFileSync(paths.envSh, sh.join('\n') + '\n', 'utf8');
+      fs.writeFileSync(paths.envCmd, renderCmd(st.env), 'utf8');
+      fs.writeFileSync(paths.envSh, renderSh(st.env), 'utf8');
+    } catch {}
+    // Written even when empty, so a stale Codex-only file from a previous profile
+    // can never survive a switch.
+    try {
+      fs.writeFileSync(paths.envCodexCmd, renderCmd(st.envCodex), 'utf8');
+      fs.writeFileSync(paths.envCodexSh, renderSh(st.envCodex), 'utf8');
     } catch {}
   } else {
     writeOrRemove(paths.envCmd, null);
     writeOrRemove(paths.envSh, null);
+    writeOrRemove(paths.envCodexCmd, null);
+    writeOrRemove(paths.envCodexSh, null);
   }
+
+  // The catalog follows the active Codex profile, so a profile switch can never
+  // leave the previous profile's model names on the /model screen.
+  const codexKey = getActiveMap(cfg).responses;
+  const codexProfile = hasProfile(cfg, codexKey) ? cfg.profiles[codexKey] : null;
+  const catalog = st.active && codexProfile ? buildCodexCatalog(codexProfile) : null;
+  writeOrRemove(paths.codexCatalog, catalog ? JSON.stringify(catalog) : null);
 
   cleanClaudeSettings();
   return st;
 }
 
 export function clearLaunchState() {
-  for (const f of [paths.activeFlag, paths.flag1M, paths.flagCodex1M, paths.flagOpenAI1M, paths.envCmd, paths.envSh]) {
+  for (const f of [paths.activeFlag, paths.flag1M, paths.flagCodex1M, paths.flagOpenAI1M,
+    paths.envCmd, paths.envSh, paths.envCodexCmd, paths.envCodexSh, paths.codexCatalog]) {
     writeOrRemove(f, null);
   }
   cleanClaudeSettings();

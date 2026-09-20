@@ -7,6 +7,8 @@ proxy.pid
 *.bak-*
 env.cmd
 env.sh
+model-catalog.json
+blindfold/certs/
 node_modules/
 .DS_Store
 Thumbs.db
@@ -14,3 +16,10 @@ proxy.log
 *.log
 config.json.*.tmp
 temp/
+blindfold.pid
+blindfold.log
+env-codex.cmd
+env-codex.sh
+
+# archify visual-check writes evidence sidecars next to the diagram it checked
+docs/diagrams/*.visual-check.*

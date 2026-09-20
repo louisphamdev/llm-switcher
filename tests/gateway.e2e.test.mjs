@@ -3,6 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -114,6 +115,9 @@ before(async () => {
     profiles: {
       chat: { name: 'Mock Chat', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-chat', defaultModels: models },
       vtx: { name: 'Mock Vertex', mode: 'convert', inFormat: 'auto', outFormat: 'vertex', baseURL: `${base}/vtx`, apiKey: 'sk-secret-vtx', defaultModels: models },
+      agmock: { name: 'Mock AG via chat', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-ag', defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
+      pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' } },
+      roles: { name: 'Mock Public Roles', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-roles', publicModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       native: { name: 'Mock Strict OpenAI', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', thinkingMode: 'native', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-native', defaultModels: models },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
     }
@@ -212,6 +216,182 @@ test('Codex (Responses) stream: output_item.done carries function_call; no [DONE
   assert.deepEqual(JSON.parse(fc.arguments), { path: 'a.txt' });
   assert.equal(events.at(-1).event, 'response.completed');
   assert.equal(events.at(-1).data.response.usage.input_tokens, 1234);
+});
+
+test('Codex via ag/* target: Gemini-hostile tool schemas are rewritten before upstream', async () => {
+  const res = await post('/v1/responses', {
+    model: 'main', stream: false,
+    input: 'clean my tools',
+    tools: [{ type: 'function', name: 'gmail_x', parameters: {
+      type: 'object',
+      properties: {
+        ids: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] },
+        part: { $ref: '#/$defs/P' },
+        raw: 'object'
+      },
+      required: ['ids', 'nope'],
+      $defs: { P: { type: 'object', properties: { t: { type: 'string' } } } }
+    } }]
+  }, { 'x-llm-profile': 'agmock' });
+  assert.equal(res.status, 200);
+  const up = received.at(-1);
+  assert.equal(up.body.model, 'ag/mock-flash');
+  const params = up.body.tools[0].function.parameters;
+  assert.deepEqual(params.properties.ids, { type: 'array', items: { type: 'string' }, nullable: true });
+  assert.deepEqual(params.properties.part, { type: 'object', properties: { t: { type: 'string' } } });
+  assert.deepEqual(params.properties.raw, { type: 'object', properties: {} });
+  assert.deepEqual(params.required, ['ids']);
+  assert.ok(!JSON.stringify(params).includes('$ref'), 'no $ref survives');
+  assert.equal(params.$defs, undefined);
+});
+
+test('Codex bare OpenAI model IDs fail closed to the main slot (no 404 passthrough)', async () => {
+  const res = await post('/v1/responses', { model: 'gpt-5.6-sol', stream: false, input: 'RATE_LIMIT probe' }, { 'x-llm-profile': 'agmock' });
+  assert.equal(received.at(-1).body.model, 'ag/mock-flash');
+  assert.equal(res.status, 429);
+  assert.equal((await res.json()).error.message, 'slow down');
+});
+
+// Once Codex is told the official names, those names must still reach the right
+// slot. Without this the blanket gpt-* fail-closed rule sends review and subagent
+// traffic to the main model.
+test('Official public names resolve to their own slot, not to the main fail-closed slot', async () => {
+  await post('/v1/responses', { model: 'gpt-5.6-terra', stream: false, input: 'go' }, { 'x-llm-profile': 'roles' });
+  assert.equal(received.at(-1).body.model, 'ag/mock-review');
+  await post('/v1/responses', { model: 'gpt-5.6-luna', stream: false, input: 'go' }, { 'x-llm-profile': 'roles' });
+  assert.equal(received.at(-1).body.model, 'ag/mock-low');
+  // An official name the profile does not publish still fails closed to main.
+  await post('/v1/responses', { model: 'gpt-5.1-codex-max', stream: false, input: 'go' }, { 'x-llm-profile': 'roles' });
+  assert.equal(received.at(-1).body.model, 'ag/mock-flash');
+});
+
+// The upgrade handler is a second entrance to the gateway. Node emits 'upgrade', not
+// 'request', so route() and its checkRequestOrigin never run there. Without this guard
+// any web page can open ws://127.0.0.1:<port>/v1/responses and spend the profile key:
+// browsers do not apply same-origin to WebSocket.
+function rawHandshake(headers) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(proxyPort, '127.0.0.1', () => {
+      const lines = ['GET /v1/responses HTTP/1.1', ...headers,
+        'Upgrade: websocket', 'Connection: Upgrade', 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version: 13'];
+      socket.write(lines.join('\r\n') + '\r\n\r\n');
+    });
+    let data = '';
+    socket.setTimeout(5000, () => { socket.destroy(); resolve(data); });
+    socket.on('data', c => {
+      data += c;
+      if (data.includes('\r\n\r\n')) { socket.destroy(); resolve(data); }
+    });
+    socket.on('error', reject);
+    socket.on('close', () => resolve(data));
+  });
+}
+
+test('WS upgrade refuses a foreign Origin and a foreign Host, and still accepts loopback', async () => {
+  const evilOrigin = await rawHandshake([`Host: 127.0.0.1:${proxyPort}`, 'Origin: https://evil.example']);
+  assert.ok(!evilOrigin.includes('101'), `foreign Origin must not get a 101: ${evilOrigin.slice(0, 80)}`);
+
+  const evilHost = await rawHandshake([`Host: evil.example:${proxyPort}`]);
+  assert.ok(!evilHost.includes('101'), `foreign Host must not get a 101: ${evilHost.slice(0, 80)}`);
+
+  // An absent Origin stays allowed: Codex sends none, and blindfold deletes it.
+  const ok = await rawHandshake([`Host: 127.0.0.1:${proxyPort}`]);
+  assert.match(ok, /HTTP\/1\.1 101/, 'a loopback handshake must still succeed');
+});
+
+// The dashboard writes these keys, and a hand-edited config reaches the same sink.
+// state.mjs already drops an unsafe name before it can reach env.cmd; rejecting it
+// here as well tells the user why, instead of losing the value in silence.
+test('save-profile rejects a model name that could act as a command', async () => {
+  const bad = await post('/api/save-profile', {
+    key: 'probe', profile: { name: 'p', baseURL: 'http://127.0.0.1:1/v1', publicModels: ['a & echo pwned'] }
+  });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /publicModels/);
+
+  const badRole = await post('/api/save-profile', {
+    key: 'probe', profile: { name: 'p', baseURL: 'http://127.0.0.1:1/v1', codexRoles: { review: 'x"&y' } }
+  });
+  assert.equal(badRole.status, 400);
+  assert.match((await badRole.json()).error, /codexRoles/);
+
+  const badPort = await post('/api/save-profile', {
+    key: 'probe', profile: { name: 'p', baseURL: 'http://127.0.0.1:1/v1', blindfoldPort: 70000 }
+  });
+  assert.equal(badPort.status, 400);
+  assert.match((await badPort.json()).error, /blindfoldPort/);
+
+  const badHost = await post('/api/save-profile', {
+    key: 'probe', profile: { name: 'p', baseURL: 'http://127.0.0.1:1/v1', blindfoldHost: 'not a host/' }
+  });
+  assert.equal(badHost.status, 400);
+  assert.match((await badHost.json()).error, /blindfoldHost/);
+
+  // The shapes the dashboard actually sends stay valid, empty strings included.
+  const ok = await post('/api/save-profile', {
+    key: 'probe', profile: {
+      name: 'p', baseURL: 'http://127.0.0.1:1/v1', inFormat: 'responses',
+      publicModels: ['gpt-5.6-sol', 'ag/mock-flash'],
+      codexRoles: { main: 'gpt-5.6-sol', review: '', subagent: '' },
+      blindfold: true, blindfoldHost: 'chatgpt.com', blindfoldPort: 3457, blindfoldPrefix: '/backend-api/codex'
+    }
+  });
+  assert.equal(ok.status, 200);
+});
+
+test('Codex WS transport: upstream 429 becomes response.failed with rate_limit_exceeded', async () => {  const ws = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/responses`);
+  await new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('ws open timeout')), 5000);
+    ws.addEventListener('open', () => { clearTimeout(t); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(t); reject(new Error('ws open error')); }, { once: true });
+  });
+  const seen = [];
+  const failedP = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('no response.failed, got: ' + JSON.stringify(seen.map(s => s.type)))), 15000);
+    ws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(String(ev.data));
+      seen.push(msg);
+      if (msg.type === 'response.failed') { clearTimeout(t); resolve(msg); }
+    });
+  });
+  ws.send(JSON.stringify({ type: 'response.create', model: 'main', input: 'RATE_LIMIT over ws' }));
+  const failed = await failedP;
+  ws.close();
+  assert.deepEqual(seen.slice(0, 2).map(s => s.type), ['response.created', 'response.in_progress']);
+  assert.equal(failed.response.status, 'failed');
+  assert.equal(failed.response.error.code, 'rate_limit_exceeded');
+  assert.match(failed.response.error.message, /slow down/);
+});
+
+test('Public catalog: /v1/models serves official names with no switcher branding', async () => {
+  const res = await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'pub' } });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.ok(!text.includes('llm-switcher'), 'no switcher branding leaks to the client');
+  assert.ok(!text.includes('ag/'), 'no upstream IDs leak to the client');
+  const json = JSON.parse(text);
+  assert.deepEqual(json.data.map(m => m.id), ['gpt-5.6-sol', 'gpt-5.2']);
+  assert.ok(json.models.every(m => m.slug && m.display_name));
+});
+
+test('Response events echo the requested model, never the mapped upstream ID', async () => {
+  const res = await post('/v1/responses', { model: 'main', stream: true, input: 'go' }, { 'x-llm-profile': 'agmock' });
+  assert.equal(received.at(-1).body.model, 'ag/mock-flash');
+  const events = parseSSE(await res.text());
+  const created = events.find(e => e.event === 'response.created');
+  assert.equal(created.data.response.model, 'main');
+  assert.equal(events.at(-1).data.response.model, 'main');
+});
+
+test('Model list exposes only real mapped IDs, no slot aliases', async () => {
+  const res = await fetch(url('/v1/models'));
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  const ids = json.data.map(m => m.id);
+  assert.deepEqual([...ids].sort(), ['up-fable', 'up-haiku', 'up-opus', 'up-sonnet']);
+  assert.ok(!ids.some(id => ['main', 'review', 'subagent', 'opus', 'sonnet', 'haiku', 'fable'].includes(id)), 'no slot aliases, got: ' + ids.join(','));
+  assert.ok(json.models.every(m => m.slug && m.display_name));
 });
 
 test('Vertex upstream: multiple functionCall chunks become separate tool_use blocks', async () => {

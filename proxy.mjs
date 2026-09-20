@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   OUT_FORMATS, IN_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
+  toGeminiSchema, isAntigravityModel,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage
 } from './formats.mjs';
@@ -14,7 +15,7 @@ import {
   TARGETS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
-  modelForSlot, primaryModel
+  modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -285,7 +286,11 @@ function getActiveProfile(clientFormat, req) {
 }
 
 // For endpoints not tied to a specific client format (/health, /v1/models).
-function getFirstActiveProfile(preferred) {
+function getFirstActiveProfile(preferred, req) {
+  if (req) {
+    const r = getActiveProfile(null, req);
+    if (r.profile) return r;
+  }
   for (const t of preferred) {
     const r = getActiveProfile(t);
     if (r.profile) return r;
@@ -312,7 +317,18 @@ function mapModel(requestedModel, profile) {
     for (const [slot, names] of Object.entries(aliases)) {
       if (names.includes(m)) return modelForSlot(profile, slot) || clean;
     }
-    // Codex model IDs change frequently. Unknown names pass through unchanged.
+    // The official names the CLI was given (publicModels) carry the role. Resolve
+    // them before the fail-closed rule below, otherwise review and subagent traffic
+    // collapses onto the main slot.
+    for (const slot of CODEX_MODEL_SLOTS) {
+      const publicName = codexPublicModel(profile, slot);
+      if (publicName && publicName.toLowerCase() === m) return modelForSlot(profile, slot) || clean;
+    }
+    // Codex model IDs change frequently. Bare OpenAI IDs (config leftovers like gpt-5.6-sol,
+    // retired gpt-5.3-codex) have no credentials behind 9Router -> fail closed to the main slot
+    // instead of passing through to an upstream 404. Provider-prefixed names (ag/..., cf/...)
+    // are preserved by the early return above.
+    if (/^(gpt|o\d|codex)([-/]|$)/i.test(clean)) return modelForSlot(profile, 'main') || clean;
     return clean || requestedModel;
   }
   if (profile?.inFormat === 'openai-chat' || profile?.inFormat === 'vertex') {
@@ -669,8 +685,12 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     // Clean and fix tool schemas for Gemini / 9router compatibility:
     // 1. Strip disallowed keywords ('encrypted', '$schema', 'cache_control')
     // 2. Fix invalid schema values where a property has a string value "object" instead of a valid schema object
+    // 3. For ag/* targets (Gemini behind 9Router): rewrite to the strict Schema subset
     if (upBody?.tools && Array.isArray(upBody.tools)) {
       upBody.tools = cleanSchemaDeep(upBody.tools);
+      if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
+        upBody.tools = geminiSafeTools(upBody.tools);
+      }
     }
     const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
@@ -715,7 +735,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const tools = [...col.tools.values()].sort((a, b) => a.index - b.index);
       const completion = col.completion();
       const out = clientMessage(clientFormat, {
-        model: mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
+        model: requestedModel || mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
         finish: col.finish, prompt: col.prompt, completion, cached: col.cached, sig: col.sig
       });
       sendJson(res, 200, out);
@@ -732,7 +752,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    const renderer = clientRenderer(clientFormat, res, mappedModel, { toolMeta: ir.toolMeta });
+    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta });
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
     let streamError = null;
@@ -852,6 +872,31 @@ function validateProfileInput(p) {
       return `Invalid baseURL "${p.baseURL}"`;
     }
   }
+  // Names the CLI receives end up on a command line. state.mjs drops an unsafe one
+  // before the write; refusing it here says why instead of losing it in silence.
+  if (p.publicModels !== undefined) {
+    if (!Array.isArray(p.publicModels)) return 'publicModels must be an array';
+    for (const name of p.publicModels) {
+      if (name !== '' && !isSafeModelName(name)) return `Invalid publicModels entry "${name}"`;
+    }
+  }
+  if (p.codexRoles !== undefined) {
+    if (!p.codexRoles || typeof p.codexRoles !== 'object' || Array.isArray(p.codexRoles)) {
+      return 'codexRoles must be an object';
+    }
+    for (const [slot, name] of Object.entries(p.codexRoles)) {
+      if (name !== '' && !isSafeModelName(name)) return `Invalid codexRoles.${slot} value "${name}"`;
+    }
+  }
+  if (p.blindfoldPort !== undefined && p.blindfoldPort !== '' && !parsePort(p.blindfoldPort)) {
+    return `Invalid blindfoldPort "${p.blindfoldPort}"`;
+  }
+  if (p.blindfoldHost !== undefined && p.blindfoldHost !== '' && !/^[A-Za-z0-9.-]{1,253}$/.test(p.blindfoldHost)) {
+    return `Invalid blindfoldHost "${p.blindfoldHost}"`;
+  }
+  if (p.blindfoldPrefix !== undefined && p.blindfoldPrefix !== '' && !/^\/[A-Za-z0-9._~/-]{0,200}$/.test(p.blindfoldPrefix)) {
+    return `Invalid blindfoldPrefix "${p.blindfoldPrefix}"`;
+  }
   return null;
 }
 
@@ -947,7 +992,7 @@ async function route(req, res) {
 
   // Health check
   if (method === 'GET' && pathname === '/health') {
-    const { profileKey, profile } = getFirstActiveProfile(TARGETS);
+    const { profileKey, profile } = getFirstActiveProfile(TARGETS, req);
     return sendJson(res, 200, {
       status: 'ok',
       proxy: 'llm-switcher',
@@ -963,11 +1008,13 @@ async function route(req, res) {
   }
 
   // OpenAI-style model list (Codex / OpenAI SDK discovery).
-  // Include both real model IDs and slot aliases (main, review, subagent …) with
-  // full Codex model descriptor fields (slug, display_name, context_window, etc.)
-  // so Codex CLI does not reject the response with "missing field `slug`".
+  // Served IDs come from profile.publicModels when set (official-facing names the
+  // CLI already knows, e.g. gpt-5.6-sol) so the client never observes the internal
+  // upstream IDs or slot aliases. Slot aliases (main, review, ...) are never
+  // advertised: Codex sends them in-request and mapModel resolves them server-side.
+  // Without publicModels, fall back to the deduplicated mapped upstream IDs.
   if (method === 'GET' && (pathname === '/v1/models' || pathname === '/models')) {
-    const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex']);
+    const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex'], req);
     const created = Math.floor(Date.now() / 1000);
     const seen = new Set();
     const list = [];
@@ -978,27 +1025,21 @@ async function route(req, res) {
       id,
       slug: id,
       display_name: id,
-      description: `LLM Switcher mapped model (${id})`,
       context_window: 1000000,
       max_context_window: 1000000,
       object: 'model',
       created,
-      owned_by: 'llm-switcher'
+      owned_by: 'system'
     });
 
-    if (profile?.defaultModels) {
-      for (const [slot, modelId] of Object.entries(profile.defaultModels)) {
-        if (modelId && !seen.has(modelId)) {
-          seen.add(modelId);
-          list.push({ id: modelId, object: 'model', created, owned_by: 'llm-switcher' });
-          codexModels.push(makeCodexModel(modelId));
-        }
-        // Expose slot aliases (main, review, subagent …) so Codex finds metadata for them
-        if (slot && !seen.has(slot)) {
-          seen.add(slot);
-          list.push({ id: slot, object: 'model', created, owned_by: 'llm-switcher' });
-          codexModels.push(makeCodexModel(slot));
-        }
+    const publicIds = Array.isArray(profile?.publicModels) && profile.publicModels.length
+      ? profile.publicModels
+      : Object.values(profile?.defaultModels || {});
+    for (const modelId of publicIds) {
+      if (modelId && !seen.has(modelId)) {
+        seen.add(modelId);
+        list.push({ id: modelId, object: 'model', created, owned_by: 'system' });
+        codexModels.push(makeCodexModel(modelId));
       }
     }
     return sendJson(res, 200, {
@@ -1012,7 +1053,7 @@ async function route(req, res) {
   if (method === 'GET' && (pathname.startsWith('/v1/models/') || pathname.startsWith('/models/'))) {
     const modelId = decodeURIComponent(pathname.replace(/^\/(v1\/)?models\//, ''));
     if (modelId) {
-      const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex']);
+      const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex'], req);
       const resolvedId = profile ? (mapModel(modelId, profile) || modelId) : modelId;
       const created = Math.floor(Date.now() / 1000);
       return sendJson(res, 200, {
@@ -1020,12 +1061,11 @@ async function route(req, res) {
         id: modelId,
         slug: modelId,
         display_name: modelId,
-        description: `LLM Switcher mapped model (${modelId})`,
         context_window: 1000000,
         max_context_window: 1000000,
         object: 'model',
         created,
-        owned_by: 'llm-switcher'
+        owned_by: 'system'
       });
     }
   }
@@ -1298,33 +1338,58 @@ function encodeWsFrame(data, opcode = 1) {
   return Buffer.concat([header, payload]);
 }
 
-function sendWsError(socket, status, message) {
+// Map an upstream HTTP status to a Responses-API error code so Codex can tell a
+// retryable rate-limit from a fatal request error.
+function responsesErrorCode(status) {
+  if (status === 429) return 'rate_limit_exceeded';
+  if (status === 401) return 'authentication_error';
+  if (status === 403) return 'permission_denied';
+  if (status === 404) return 'not_found_error';
+  if (status === 400) return 'invalid_request_error';
+  return 'server_error';
+}
+
+// Terminal failure for the WS (responses-ws) transport: Codex ends a turn only on
+// response.completed / response.failed, so a bare {type:'error'} frame leaves the turn
+// hanging. Emit the full created -> in_progress -> failed sequence instead.
+function sendWsFailed(socket, model, message, status = 500) {
   if (!socket.writable) return;
-  socket.write(encodeWsFrame(JSON.stringify({
-    type: 'error',
-    error: {
-      message,
-      type: 'invalid_request_error',
-      code: status
-    }
-  })));
+  const renderer = createResponsesStream((e, d) => {
+    if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
+  }, model || 'main');
+  renderer.start();
+  renderer.error(message, responsesErrorCode(status));
+}
+
+// 9Router forwards OpenAI-format tools to Gemini/Vertex for ag/* models, which accept only
+// a strict Schema subset: bare "object" strings, $ref/$defs, anyOf-null unions and
+// additionalProperties all come back as HTTP 400 INVALID_ARGUMENT. Rewrite tool parameters
+// into that subset before sending upstream. Non-ag targets keep the OpenAI superset.
+function geminiSafeTools(tools) {
+  return tools.map(t => {
+    if (!t || t.type !== 'function' || !t.function) return t;
+    return { ...t, function: { ...t.function, parameters: toGeminiSchema(t.function.parameters || { type: 'object', properties: {} }) } };
+  });
 }
 
 async function handleWsResponseCreate(socket, payload, req, activeControllerHolder) {
   const clientFormat = 'responses';
   const { profileKey, profile, error: profileError } = getActiveProfile(clientFormat, req);
   if (!loadConfig()) {
-    return sendWsError(socket, 500, `LLM Switcher config not loaded (${configPath}): ${getConfigLoadError()?.message || 'missing file'}`);
+    sendWsFailed(socket, payload?.model || 'main', `LLM Switcher config not loaded (${configPath}): ${getConfigLoadError()?.message || 'missing file'}`, 500);
+    return;
   }
   if (!profile) {
-    return sendWsError(socket, 503, profileError || 'Proxy is currently OFF for responses.');
+    sendWsFailed(socket, payload?.model || 'main', profileError || 'Proxy is currently OFF for responses.', 503);
+    return;
   }
 
   let ir;
   try {
     ir = parseToIR('responses', payload);
   } catch (e) {
-    return sendWsError(socket, 400, `Cannot parse responses request: ${e.message}`);
+    sendWsFailed(socket, payload?.model || 'main', `Cannot parse responses request: ${e.message}`, 400);
+    return;
   }
   ir.stream = true;
 
@@ -1345,6 +1410,9 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
     const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
     if (upBody?.tools && Array.isArray(upBody.tools)) {
       upBody.tools = cleanSchemaDeep(upBody.tools);
+      if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
+        upBody.tools = geminiSafeTools(upBody.tools);
+      }
     }
     const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, true, req);
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
@@ -1355,14 +1423,14 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}:ws] Network error:`, fetchErr.message);
-      sendWsError(socket, 502, `Failed to connect to upstream: ${fetchErr.cause?.message || fetchErr.message}`);
+      sendWsFailed(socket, mappedModel, `Failed to connect to upstream: ${fetchErr.cause?.message || fetchErr.message}`, 502);
       return log({ status: 502, error: fetchErr.message });
     }
 
     if (!upstreamRes.ok) {
       const errText = await upstreamRes.text().catch(() => '');
       console.error(`[${profileKey}:ws] Error HTTP ${upstreamRes.status}:`, errText.slice(0, 500));
-      sendWsError(socket, upstreamRes.status, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`);
+      sendWsFailed(socket, mappedModel, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, upstreamRes.status);
       return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
     }
 
@@ -1373,7 +1441,7 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
-    }, mappedModel, { toolMeta: ir.toolMeta });
+    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta });
 
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
@@ -1424,7 +1492,7 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
   } catch (err) {
     if (ac.signal.aborted) return log({ status: 499, error: 'aborted' });
     console.error(`[${profileKey}:ws] Error:`, err);
-    sendWsError(socket, 500, err.message);
+    sendWsFailed(socket, payload?.model || 'main', err.message, 500);
     log({ status: 500, error: err.message });
   } finally {
     if (activeControllerHolder?.ac === ac) activeControllerHolder.ac = null;
@@ -1432,6 +1500,23 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
 }
 
 server.on('upgrade', (req, socket) => {
+  // Node emits 'upgrade' instead of 'request', so route() never runs here and the
+  // Host/Origin guard has to be applied again. Browsers do not apply same-origin to
+  // WebSocket, so without this any visited page could open ws://127.0.0.1/v1/responses
+  // and spend the profile's API key. An absent Origin stays allowed on purpose: Codex
+  // sends none, and the blindfold interceptor deletes it.
+  const guardError = checkRequestOrigin(req);
+  if (guardError) {
+    socket.write(
+      'HTTP/1.1 403 Forbidden\r\n' +
+      'Connection: close\r\n' +
+      'Content-Type: application/json\r\n\r\n' +
+      `{"error":{"message":${JSON.stringify(guardError)}}}\r\n`
+    );
+    socket.destroy();
+    return;
+  }
+
   const p = new URL(req.url || '/', 'http://127.0.0.1').pathname;
   if (p !== '/v1/responses' && p !== '/responses') {
     socket.write(
@@ -1452,7 +1537,7 @@ server.on('upgrade', (req, socket) => {
   const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   
   const { profile } = getActiveProfile('responses', req);
-  const activeModel = profile?.defaultModels?.main || 'main';
+  const activeModel = profile?.publicModels?.[0] || profile?.defaultModels?.main || 'main';
 
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +

@@ -104,15 +104,41 @@ test('Codex shim injects documented config overrides on POSIX and Windows', () =
   for (const platform of ['linux', 'win32']) {
     const body = renderShim('codex', platform);
     assert.match(body, /openai_base_url/);
-    assert.match(body, /model=.+main|model=main/);
+    // The main model stays official (from the user's config.toml): forcing the
+    // internal "main" alias here used to make first-party IDs bypass the proxy.
+    assert.doesNotMatch(body, /--config model=main/);
     assert.match(body, /review_model/);
     assert.match(body, /agents\.default_subagent_model/);
     assert.match(body, /model_context_window/);
     assert.match(body, /model_auto_compact_token_limit/);
+    assert.match(body, /model_catalog_json/);
+  }
+});
+
+// The /model picker reads the local catalog file and the --config values, never
+// /v1/models. A literal `review_model=review` therefore printed the switcher's
+// own slot names straight into the Codex UI (found 2026-09-20).
+test('Codex shim passes official role names through, never a hard-coded slot alias', () => {
+  for (const platform of ['linux', 'win32']) {
+    const body = renderShim('codex', platform);
+    assert.doesNotMatch(body, /review_model=["']?review["']?\s/, 'slot alias must not be hard-coded');
+    assert.doesNotMatch(body, /default_subagent_model=["']?subagent["']?\s/, 'slot alias must not be hard-coded');
+    assert.match(body, /review_model=.*LLM_SWITCHER_CODEX_REVIEW_MODEL/);
+    assert.match(body, /default_subagent_model=.*LLM_SWITCHER_CODEX_SUBAGENT_MODEL/);
+  }
+});
+
+// Blindfold's HTTPS_PROXY belongs to Codex alone. The claude shim sources the shared
+// env file, so the proxy variables live in a Codex-only file that only this shim reads.
+test('only the Codex shim loads the Codex-only environment file', () => {
+  for (const platform of ['linux', 'win32']) {
+    assert.match(renderShim('codex', platform), /env-codex\.(cmd|sh)/);
+    assert.doesNotMatch(renderShim('claude', platform), /env-codex/);
   }
 });
 
 test('Claude shim does not receive Codex config overrides', () => {
   assert.doesNotMatch(renderShim('claude', 'linux'), /agents\.default_subagent_model/);
   assert.doesNotMatch(renderShim('claude', 'win32'), /CODEX_SWITCHER_ARGS/);
+  assert.doesNotMatch(renderShim('claude', 'win32'), /model_catalog_json/);
 });
