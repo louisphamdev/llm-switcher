@@ -125,6 +125,26 @@ The answer is the model list of the gateway. Change the path to `/backend-api/co
 
 NOTE: On Windows, `curl` uses the Schannel TLS backend. Schannel ignores `--cacert` for this test and reports error 60. Use the Node command above instead.
 
+## Record what a client sends
+
+Add `--capture <dir>` to write one JSON file per intercepted exchange:
+
+```bash
+node blindfold/blindfold.mjs --capture ./captures
+```
+
+Each file holds the method, the URL, both header sets and both bodies, truncated
+at 200000 characters. Use it to learn what a genuine CLI or IDE puts on the wire.
+
+Credential headers never reach the file. `authorization`, `proxy-authorization`,
+`cookie`, `set-cookie`, `x-api-key` and `api-key` are replaced with `<redacted>`,
+and so are the account identifiers `chatgpt-account-id`, `openai-organization` and
+`x-goog-user-project`. The header names stay, so the shape of the request is still
+readable.
+
+NOTE: Only the HTTP path is recorded. Codex sends its completions over a WebSocket,
+which this proxy relays as raw bytes, so those exchanges do not produce a file.
+
 ## How to go back
 
 1. Set `"blindfold": false` in the profile.
