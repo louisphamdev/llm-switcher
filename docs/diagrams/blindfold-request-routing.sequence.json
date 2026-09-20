@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Codex Request Routing Through Blindfold",
+    "output": "docs/diagrams/blindfold-request-routing.html",
+    "viewBox": [
+      1060,
+      480
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "codex",
+      "type": "external",
+      "label": "Codex CLI",
+      "sublabel": "official endpoint"
+    },
+    {
+      "id": "blindfold",
+      "type": "security",
+      "label": "Blindfold",
+      "sublabel": "CONNECT proxy, port 3457"
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "Gateway",
+      "sublabel": "llm-switcher, port 3456"
+    },
+    {
+      "id": "upstream",
+      "type": "cloud",
+      "label": "Provider",
+      "sublabel": "9Router upstream"
+    }
+  ],
+  "segments": [
+    {
+      "from": 152,
+      "to": 232,
+      "label": "Tunnel setup"
+    },
+    {
+      "from": 242,
+      "to": 404,
+      "label": "Codex API call"
+    }
+  ],
+  "messages": [
+    {
+      "id": "connect",
+      "from": "codex",
+      "to": "blindfold",
+      "y": 162,
+      "label": "CONNECT chatgpt.com:443",
+      "variant": "emphasis"
+    },
+    {
+      "id": "established",
+      "from": "blindfold",
+      "to": "codex",
+      "y": 190,
+      "label": "200 Connection Established",
+      "variant": "return"
+    },
+    {
+      "id": "handshake",
+      "from": "codex",
+      "to": "blindfold",
+      "y": 218,
+      "label": "TLS: leaf trusted via CODEX_CA_CERTIFICATE",
+      "variant": "security"
+    },
+    {
+      "id": "api-call",
+      "from": "codex",
+      "to": "blindfold",
+      "y": 252,
+      "label": "POST /backend-api/codex/responses",
+      "variant": "emphasis"
+    },
+    {
+      "id": "forward",
+      "from": "blindfold",
+      "to": "gateway",
+      "y": 280,
+      "label": "normalized path, Host set to loopback",
+      "variant": "security"
+    },
+    {
+      "id": "upstream-call",
+      "from": "gateway",
+      "to": "upstream",
+      "y": 308,
+      "label": "slot model, real provider key",
+      "variant": "emphasis"
+    },
+    {
+      "id": "upstream-stream",
+      "from": "upstream",
+      "to": "gateway",
+      "y": 336,
+      "label": "stream",
+      "variant": "return"
+    },
+    {
+      "id": "echo",
+      "from": "gateway",
+      "to": "blindfold",
+      "y": 364,
+      "label": "echoes the requested model name",
+      "variant": "return"
+    },
+    {
+      "id": "api-reply",
+      "from": "blindfold",
+      "to": "codex",
+      "y": 392,
+      "label": "response",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "blindfold",
+      "from": 156,
+      "to": 398,
+      "type": "security"
+    },
+    {
+      "participant": "gateway",
+      "from": 275,
+      "to": 370,
+      "type": "backend"
+    },
+    {
+      "participant": "upstream",
+      "from": 303,
+      "to": 342,
+      "type": "cloud"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Why the CLI stays quiet",
+      "items": [
+        "Codex keeps its official endpoint, so no base URL override exists",
+        "Without that override the CLI prints no warning on its /model screen",
+        "Its config.toml is never edited"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Where each request goes",
+      "items": [
+        "Path under /backend-api/codex/ - the local gateway",
+        "Any other path on chatgpt.com - a new TLS session to the real host",
+        "Another public host - a raw byte tunnel; a local address is refused"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "The routing decision",
+      "items": [
+        "The path is normalized before the prefix test, never after",
+        "A dot-segment escape is passed through, not routed to the gateway",
+        "Only chatgpt.com is decrypted, sign-in and token refresh included"
+      ]
+    }
+  ]
+}

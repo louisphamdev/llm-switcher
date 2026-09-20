@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Codex Model Name Resolution",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/codex-model-name-resolution.html"
+  },
+  "lanes": [
+    { "id": "profile", "label": "Profile (config.json)" },
+    { "id": "switcher", "label": "Switcher" },
+    { "id": "cli", "label": "Codex CLI" },
+    { "id": "gateway", "label": "Gateway" }
+  ],
+  "phases": [
+    { "id": "declared", "label": "Declared", "fromCol": 0, "toCol": 1 },
+    { "id": "generated", "label": "Generated on every switch", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "runtime", "label": "Request path", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["pub", "resolve", "catalog", "picker", "request", "mapmodel"],
+  "nodes": [
+    { "id": "pub", "lane": "profile", "col": 0, "type": "database", "label": "publicModels", "sublabel": "official names, in role order", "width": 148 },
+    { "id": "roles", "lane": "profile", "col": 1, "type": "database", "label": "codexRoles", "sublabel": "per-role override", "tag": "wins over position", "width": 148 },
+    { "id": "resolve", "lane": "switcher", "col": 1, "type": "backend", "label": "codexPublicModel", "sublabel": "slot to official name", "width": 148 },
+    { "id": "catalog", "lane": "switcher", "col": 2, "type": "database", "label": "model-catalog.json", "sublabel": "official slugs only", "width": 148 },
+    { "id": "envfile", "lane": "switcher", "col": 3, "type": "database", "label": "env.cmd / env.sh", "sublabel": "role names only", "tag": "unsafe name dropped", "width": 148 },
+    { "id": "picker", "lane": "cli", "col": 3, "type": "frontend", "label": "/model picker", "sublabel": "reads the local catalog", "width": 148 },
+    { "id": "request", "lane": "cli", "col": 4, "type": "frontend", "label": "API request", "sublabel": "sends an official name", "width": 148 },
+    { "id": "slots", "lane": "gateway", "col": 4, "type": "database", "label": "defaultModels", "sublabel": "upstream IDs", "width": 148 },
+    { "id": "mapmodel", "lane": "gateway", "col": 5, "type": "backend", "label": "mapModel", "sublabel": "official name to slot", "width": 148 }
+  ],
+  "edges": [
+    { "id": "pub-resolve", "from": "pub", "to": "resolve", "label": "position sets the role", "variant": "emphasis" },
+    { "id": "roles-resolve", "from": "roles", "to": "resolve", "label": "override", "variant": "dashed", "role": "branch" },
+    { "id": "resolve-catalog", "from": "resolve", "to": "catalog", "variant": "emphasis" },
+    { "id": "resolve-env", "from": "resolve", "to": "envfile", "label": "review + subagent", "variant": "default" },
+    { "id": "catalog-picker", "from": "catalog", "to": "picker", "label": "the picker never calls /v1/models", "variant": "emphasis" },
+    { "id": "env-request", "from": "envfile", "to": "request", "label": "--config", "variant": "default" },
+    { "id": "picker-request", "from": "picker", "to": "request", "variant": "emphasis" },
+    { "id": "request-map", "from": "request", "to": "mapmodel", "label": "official name over the wire", "variant": "emphasis" },
+    { "id": "map-slots", "from": "mapmodel", "to": "slots", "label": "upstream ID stays server side", "variant": "security", "role": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One direction only",
+      "items": [
+        "Official names travel out to the CLI",
+        "The slot aliases main, review and subagent never leave the gateway",
+        "mapModel resolves an official name before the gpt-* fail-closed rule"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "What the picker reads",
+      "items": [
+        "The /model screen renders the local catalog file",
+        "That file is rebuilt from publicModels on every profile switch",
+        "A stale catalog cannot survive a switch"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Two guards on the names",
+      "items": [
+        "A blank entry means no override for that slot, and shifts nothing",
+        "A name outside [A-Za-z0-9._:/-] is dropped before it reaches env.cmd"
+      ]
+    }
+  ]
+}

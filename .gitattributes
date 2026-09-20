@@ -1,0 +1,16 @@
+# Line endings are a cross-platform correctness problem here, not a preference.
+# A shell script checked out with CRLF fails on Linux and macOS with
+# "bad interpreter: /usr/bin/env sh^M", so everything the repository executes is
+# stored and checked out with LF. Only the Windows batch launchers need CRLF.
+* text=auto eol=lf
+
+switch text eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.webp binary
+*.pfx binary

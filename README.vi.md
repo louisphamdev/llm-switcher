@@ -230,6 +230,11 @@ node switch.mjs on
 node proxy.mjs
 ```
 
+Repo có sẵn hai launcher cho cùng một script: `switch` cho Linux và macOS, `switch.cmd`
+cho Windows. Thêm thư mục repo vào PATH là `switch <lệnh>` chạy giống nhau trên cả ba.
+Khác biệt giữa các nền tảng, và hai tính năng không chạy ở mọi nơi, nằm trong
+[📖 `docs/cross-platform.md`](docs/cross-platform.md).
+
 Mở Bảng điều khiển Web Dashboard tại: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
 
 ---
@@ -293,13 +298,41 @@ Trên Windows, đặt `%USERPROFILE%\.llm-switcher\bin` trước thư mục Code
 
 Shim không sửa `~/.codex/config.toml`. Khi gateway hoạt động, shim truyền các override chính thức sau vào binary Codex thật:
 
-| Vai trò trong profile | Khóa cấu hình Codex | Alias tại gateway |
+| Vai trò trong profile | Khóa cấu hình Codex | Tên mà CLI nhận được |
 |---|---|---|
-| `main` | `model` | `main` |
-| `review` | `review_model` | `review` |
-| `subagent` | `agents.default_subagent_model` | `subagent` |
+| `main` | `model` | `publicModels[0]` |
+| `review` | `review_model` | `publicModels[1]` |
+| `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
+
+**Codex không bao giờ nhận tên nội bộ.** Alias `main`, `review`, `subagent` chỉ tồn tại bên trong gateway. CLI nhận tên model chính thức từ `publicModels`, và `mapModel` phân giải ngược từng tên về đúng slot. Đặt `codexRoles` trong profile nếu muốn ghép khác thứ tự danh sách đó.
+
+Shim còn truyền `model_catalog_json`. File này được sinh lại từ `publicModels` mỗi lần đổi profile, và màn `/model` đọc chính nó. Màn `/model` không gọi `/v1/models`.
 
 Shim cũng truyền `openai_base_url` để route qua gateway cục bộ. Nếu `main` bật context 1M, shim truyền `model_context_window=1000000` và `model_auto_compact_token_limit=900000`. Override dòng lệnh có độ ưu tiên cao hơn cấu hình người dùng và dự án. Hãy chạy lại `switch shim install` sau khi nâng cấp từ bản cũ.
+
+### Chế độ blindfold (tùy chọn)
+
+Khi có override base URL, Codex in một dòng ngay trên màn `/model` của nó:
+
+```
+base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be supported or work properly.
+```
+
+Blindfold xóa dòng đó. Codex giữ nguyên endpoint chính thức, switcher chặn ở tầng mạng. Không cần quyền admin, không cài chứng chỉ vào system trust store, không sửa `~/.codex/config.toml`.
+
+```bash
+bash blindfold/make-certs.sh chatgpt.com   # chạy một lần
+# rồi đặt "blindfold": true trong profile Codex
+switch codex <profile>                     # interceptor khởi động cùng gateway
+```
+
+`switch` khởi động interceptor cùng gateway và dừng nó bằng `switch off`. Thiếu CA thì `switch` từ chối kích hoạt và không ghi file nào.
+
+Hãy đọc [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) trước khi bật. Tài liệu nói rõ phạm vi chặn, rủi ro khi giữ private key của CA, và cách quay lại. Mở đầu là ba sơ đồ:
+
+- [Request routing](docs/diagrams/blindfold-request-routing.html) — một request, từ CONNECT tới provider
+- [Model name resolution](docs/diagrams/codex-model-name-resolution.html) — CLI thấy tên nào, và tên đó phân giải ở đâu
+- [Lifecycle under switch](docs/diagrams/blindfold-switch-lifecycle.html) — kích hoạt, từ chối, và tắt
 
 ---
 

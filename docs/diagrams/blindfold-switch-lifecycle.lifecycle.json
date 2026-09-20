@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Blindfold Lifecycle Under switch",
+    "output": "docs/diagrams/blindfold-switch-lifecycle.html",
+    "viewBox": [
+      1080,
+      566
+    ],
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Activation rail"
+    },
+    {
+      "id": "branch",
+      "label": "Branch and exit"
+    }
+  ],
+  "states": [
+    {
+      "id": "off",
+      "type": "start",
+      "label": "Off",
+      "sublabel": "official endpoints",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "idle"
+    },
+    {
+      "id": "requested",
+      "type": "active",
+      "label": "switch codex",
+      "sublabel": "profile selected",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "running"
+    },
+    {
+      "id": "validate",
+      "type": "decision",
+      "label": "CA present?",
+      "sublabel": "checked before any write",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "gate"
+    },
+    {
+      "id": "starting",
+      "type": "active",
+      "label": "Applying",
+      "sublabel": "env, catalog, shims",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "running"
+    },
+    {
+      "id": "active",
+      "type": "success",
+      "label": "Active",
+      "sublabel": "Codex routed and blinded",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "success"
+    },
+    {
+      "id": "refused",
+      "type": "failure",
+      "label": "Refused",
+      "sublabel": "no file written",
+      "lane": "branch",
+      "col": 0,
+      "tag": "recoverable"
+    },
+    {
+      "id": "interceptor",
+      "type": "active",
+      "label": "Interceptor",
+      "sublabel": "port 3457",
+      "lane": "branch",
+      "col": 1,
+      "tag": "spawned"
+    },
+    {
+      "id": "stopped",
+      "type": "success",
+      "label": "Stopped",
+      "sublabel": "switch off",
+      "lane": "branch",
+      "col": 2,
+      "tag": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "validate",
+      "to": "refused",
+      "variant": "security",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "refused",
+      "to": "requested",
+      "variant": "dashed"
+    },
+    {
+      "from": "starting",
+      "to": "interceptor",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "active",
+      "to": "stopped",
+      "variant": "dashed",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One command owns both",
+      "items": [
+        "switch starts the gateway and the interceptor together",
+        "switch off stops both and clears the generated files"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Refuse before writing",
+      "items": [
+        "Blindfold replaces the base URL override with HTTPS_PROXY",
+        "A missing CA stops activation before the first file is written"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "How to recover",
+      "items": [
+        "Run bash blindfold/make-certs.sh chatgpt.com",
+        "Then run switch codex again"
+      ]
+    }
+  ]
+}

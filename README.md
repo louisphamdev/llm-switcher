@@ -230,6 +230,11 @@ node switch.mjs on
 node proxy.mjs
 ```
 
+The repository ships two launchers for the same script: `switch` for Linux and macOS,
+`switch.cmd` for Windows. Put the repository directory on PATH and `switch <command>`
+works the same on all three. Platform differences, and the two features that are not
+available everywhere, are in [📖 `docs/cross-platform.md`](docs/cross-platform.md).
+
 Open the Web Dashboard at: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
 
 ---
@@ -293,13 +298,41 @@ On Windows, add `%USERPROFILE%\.llm-switcher\bin` before the real Codex director
 
 The shim does not edit `~/.codex/config.toml`. When the gateway is active, it passes these official command-line overrides to the real Codex binary:
 
-| Profile role | Codex configuration key | Gateway alias |
+| Profile role | Codex configuration key | Name the CLI receives |
 |---|---|---|
-| `main` | `model` | `main` |
-| `review` | `review_model` | `review` |
-| `subagent` | `agents.default_subagent_model` | `subagent` |
+| `main` | `model` | `publicModels[0]` |
+| `review` | `review_model` | `publicModels[1]` |
+| `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
+
+**Codex never receives an internal name.** The slot aliases `main`, `review` and `subagent` stay inside the gateway. The CLI receives the official model names from `publicModels`, and `mapModel` resolves each one back to its slot. Set `codexRoles` in the profile when you want a different pairing than the order of that list.
+
+The shim also passes `model_catalog_json`. That file is generated from `publicModels` on every profile change, and the `/model` picker reads it. The picker never calls `/v1/models`.
 
 It also passes `openai_base_url` for local routing. If 1M context is enabled for `main`, it passes `model_context_window=1000000` and `model_auto_compact_token_limit=900000`. Command-line overrides have higher precedence than user and project configuration. Re-run `switch shim install` after upgrading an older checkout.
+
+### Blindfold mode (optional)
+
+A base URL override makes Codex print one line on its own `/model` screen:
+
+```
+base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be supported or work properly.
+```
+
+Blindfold mode removes that line. Codex keeps its official endpoint, and the switcher intercepts the network hop instead. It needs no administrator rights, no certificate in a system trust store, and no change to `~/.codex/config.toml`.
+
+```bash
+bash blindfold/make-certs.sh chatgpt.com   # once
+# then set "blindfold": true in the Codex profile
+switch codex <profile>                     # starts the interceptor with the gateway
+```
+
+`switch` starts the interceptor with the gateway and stops it with `switch off`. If the CA is missing it refuses the activation and writes no file.
+
+Read [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) before you turn it on. The guide explains the interception scope, the risk of holding a private CA, and how to go back. It opens with three diagrams:
+
+- [Request routing](docs/diagrams/blindfold-request-routing.html) — one request, from CONNECT to the provider
+- [Model name resolution](docs/diagrams/codex-model-name-resolution.html) — which name the CLI sees, and where it resolves
+- [Lifecycle under switch](docs/diagrams/blindfold-switch-lifecycle.html) — activation, refusal, and shutdown
 
 ---
 

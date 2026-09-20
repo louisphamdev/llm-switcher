@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# POSIX counterpart of switch.cmd. Put this directory on PATH and the `switch`
+# command works the same on Linux, macOS and Windows.
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec node "$DIR/switch.mjs" "$@"
