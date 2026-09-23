@@ -18,7 +18,7 @@ import {
 } from './service.mjs';
 
 const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
-const proxyLogPath = path.join(ROOT_DIR, 'proxy.log');
+const proxyLogPath = paths.proxyLog;
 const userProfile = os.homedir();
 
 const config = loadConfig();

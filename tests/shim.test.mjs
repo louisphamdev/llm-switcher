@@ -15,6 +15,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
+// The shims read the launch files from the state dir. A private one keeps the checkout's files untouched.
+const STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'shimstate-'));
+process.env.LLM_SWITCHER_STATE_DIR = STATE;
+
 const { SHIM_DIR, SHIMMED, pathExportLine, suggestedRcFiles, shimStatus, renderShim } =
   await import(pathToFileURL(path.join(ROOT, 'shim.mjs')).href);
 
@@ -27,34 +31,32 @@ if (process.platform !== 'win32') {
     fs.chmodSync(path.join(RENDER_DIR, name), 0o755);
   }
 }
-test.after(() => fs.rmSync(RENDER_DIR, { recursive: true, force: true }));
+test.after(() => {
+  fs.rmSync(RENDER_DIR, { recursive: true, force: true });
+  fs.rmSync(STATE, { recursive: true, force: true });
+});
 
-// Run the shim with a fake PATH: fakeDir holds a mocked "real" binary.
-function runShim(name, args, { active, fakeDir, extraPath = '', env = {} }) {
-  const flag = path.join(ROOT, 'active.flag');
-  const envSh = path.join(ROOT, 'env.sh');
-  const hadFlag = fs.existsSync(flag);
-  const hadEnv = fs.existsSync(envSh);
-  const savedFlag = hadFlag ? fs.readFileSync(flag) : null;
-  const savedEnv = hadEnv ? fs.readFileSync(envSh) : null;
-
-  try {
-    if (active) {
-      fs.writeFileSync(flag, 'active');
-      fs.writeFileSync(envSh, "export ANTHROPIC_BASE_URL='http://127.0.0.1:3456'\n");
-    } else {
-      if (fs.existsSync(flag)) fs.unlinkSync(flag);
-    }
-    const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin'].filter(Boolean).join(':');
-    return execFileSync(path.join(RENDER_DIR, name), args, {
-      encoding: 'utf8', env: { ...process.env, ...env, PATH: PATH_ }, timeout: 15000
-    }).trim();
-  } finally {
-    if (savedFlag !== null) fs.writeFileSync(flag, savedFlag);
-    else if (fs.existsSync(flag)) fs.unlinkSync(flag);
-    if (savedEnv !== null) fs.writeFileSync(envSh, savedEnv);
-    else if (fs.existsSync(envSh)) fs.unlinkSync(envSh);
+// Run the shim with a fake PATH: fakeDir holds a mocked "real" binary. `files` are launch files to
+// write into the state dir first; every other launch file is removed.
+function runShim(name, args, { active, fakeDir, extraPath = '', env = {}, files = {} }) {
+  for (const f of fs.readdirSync(STATE)) fs.rmSync(path.join(STATE, f), { force: true });
+  if (active) {
+    fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+    fs.writeFileSync(path.join(STATE, 'env.sh'), "export ANTHROPIC_BASE_URL='http://127.0.0.1:3456'\n");
   }
+  for (const [f, content] of Object.entries(files)) fs.writeFileSync(path.join(STATE, f), content);
+  const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin'].filter(Boolean).join(':');
+  return execFileSync(path.join(RENDER_DIR, name), args, {
+    encoding: 'utf8', env: { ...process.env, ...env, PATH: PATH_ }, timeout: 15000
+  }).trim();
+}
+
+// A fake binary that prints every argument on its own line, so the test sees argument boundaries.
+function makeArgvBin(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimargv-'));
+  fs.writeFileSync(path.join(dir, name), '#!/usr/bin/env bash\necho "HTTPS_PROXY=${HTTPS_PROXY:-NONE}"\nprintf \'%s\\n\' "$@"\n');
+  fs.chmodSync(path.join(dir, name), 0o755);
+  return dir;
 }
 
 function makeFakeBin(name) {
@@ -107,8 +109,49 @@ test('helpers report PATH guidance and shim wiring', () => {
   assert.deepEqual(st.shims.map(s => s.name), SHIMMED);
 });
 
-test('Codex shim injects documented config overrides on POSIX and Windows', () => {
-  for (const platform of ['linux', 'win32']) {
+// Behaviour on POSIX: the shim, run against the launch files, hands Codex exactly these arguments.
+test('Codex shim passes the gateway, the catalog and quoted role names from the launch files', (t) => {
+  if (process.platform === 'win32') return t.skip('posix only');
+  const env = [
+    "export LLM_SWITCHER_CODEX_BASE_URL='http://127.0.0.1:3456/v1'",
+    "export LLM_SWITCHER_CODEX_MAIN_MODEL='gpt-5.6-sol'",
+    "export LLM_SWITCHER_CODEX_REVIEW_MODEL='gpt-5.2'",
+    "export LLM_SWITCHER_CODEX_SUBAGENT_MODEL='gpt-5.6-luna'",
+    "export LLM_SWITCHER_CODEX_CONTEXT_WINDOW='1000000'",
+    "export LLM_SWITCHER_CODEX_AUTO_COMPACT_LIMIT='900000'"
+  ].join('\n') + '\n';
+  const out = runShim('codex', ['exec', 'hi'], {
+    fakeDir: makeArgvBin('codex'),
+    files: { 'active.flag': 'active', 'env.sh': env, 'env-codex.sh': "export HTTPS_PROXY='http://127.0.0.1:3457'\n", 'model-catalog.json': '{}' }
+  }).split('\n');
+  assert.equal(out[0], 'HTTPS_PROXY=http://127.0.0.1:3457');
+  assert.deepEqual(out.slice(1), [
+    '--config', 'openai_base_url=http://127.0.0.1:3456/v1',
+    '--config', `model_catalog_json=${path.join(STATE, 'model-catalog.json')}`,
+    '--config', 'model="gpt-5.6-sol"',
+    '--config', 'review_model="gpt-5.2"',
+    '--config', 'agents.default_subagent_model="gpt-5.6-luna"',
+    '--config', 'model_context_window=1000000',
+    '--config', 'model_auto_compact_token_limit=900000',
+    'exec', 'hi'
+  ]);
+  // With the gateway off, Codex gets its own arguments only and no proxy.
+  const off = runShim('codex', ['exec'], { fakeDir: makeArgvBin('codex'), files: { 'env.sh': env, 'env-codex.sh': "export HTTPS_PROXY='http://127.0.0.1:3457'\n" } }).split('\n');
+  assert.deepEqual(off, ['HTTPS_PROXY=NONE', 'exec']);
+});
+
+test('Claude shim never loads the Codex-only file or passes Codex overrides', (t) => {
+  if (process.platform === 'win32') return t.skip('posix only');
+  const out = runShim('claude', ['--resume'], {
+    fakeDir: makeArgvBin('claude'),
+    files: { 'active.flag': 'active', 'env.sh': "export LLM_SWITCHER_CODEX_MAIN_MODEL='gpt-x'\n", 'env-codex.sh': "export HTTPS_PROXY='http://127.0.0.1:3457'\n" }
+  }).split('\n');
+  assert.deepEqual(out, ['HTTPS_PROXY=NONE', '--resume']);
+});
+
+// Windows cannot run here, so the Windows template is checked as text.
+test('Windows Codex shim names every documented config override', () => {
+  for (const platform of ['win32']) {
     const body = renderShim('codex', platform);
     assert.match(body, /openai_base_url/);
     // The main model stays official (from the user's config.toml): forcing the
@@ -125,8 +168,8 @@ test('Codex shim injects documented config overrides on POSIX and Windows', () =
 // The /model picker reads the local catalog file and the --config values, never
 // /v1/models. A literal `review_model=review` therefore printed the switcher's
 // own slot names straight into the Codex UI (found 2026-09-20).
-test('Codex shim passes official role names through, never a hard-coded slot alias', () => {
-  for (const platform of ['linux', 'win32']) {
+test('Windows Codex shim passes official role names through, never a hard-coded slot alias', () => {
+  for (const platform of ['win32']) {
     const body = renderShim('codex', platform);
     assert.doesNotMatch(body, /review_model=["']?review["']?\s/, 'slot alias must not be hard-coded');
     assert.doesNotMatch(body, /default_subagent_model=["']?subagent["']?\s/, 'slot alias must not be hard-coded');
@@ -137,27 +180,20 @@ test('Codex shim passes official role names through, never a hard-coded slot ali
 
 // Blindfold's HTTPS_PROXY belongs to Codex alone. The claude shim sources the shared
 // env file, so the proxy variables live in a Codex-only file that only this shim reads.
-test('only the Codex shim loads the Codex-only environment file', () => {
-  for (const platform of ['linux', 'win32']) {
+test('only the Windows Codex shim loads the Codex-only environment file', () => {
+  for (const platform of ['win32']) {
     assert.match(renderShim('codex', platform), /env-codex\.(cmd|sh)/);
     assert.doesNotMatch(renderShim('claude', platform), /env-codex/);
   }
 });
 
-test('Claude shim does not receive Codex config overrides', () => {
-  assert.doesNotMatch(renderShim('claude', 'linux'), /agents\.default_subagent_model/);
+test('Windows Claude shim does not receive Codex config overrides', () => {
   assert.doesNotMatch(renderShim('claude', 'win32'), /CODEX_SWITCHER_ARGS/);
   assert.doesNotMatch(renderShim('claude', 'win32'), /model_catalog_json/);
 });
 
 // README promises that the main role reaches Codex as the `model` override.
-test('Codex shim passes the main model as --config model', (t) => {
-  if (process.platform === 'win32') return t.skip('posix only');
-  const fake = makeFakeBin('codex');
-  const withModel = runShim('codex', ['exec'], { active: false, fakeDir: fake, env: { LLM_SWITCHER_CODEX_MAIN_MODEL: 'gpt-x' } });
-  assert.match(withModel, /--config model="gpt-x"/);
-  const without = runShim('codex', ['exec'], { active: false, fakeDir: fake, env: { LLM_SWITCHER_CODEX_MAIN_MODEL: '' } });
-  assert.doesNotMatch(without, /--config model=/);
+test('Windows Codex shim passes the main model as --config model', () => {
   assert.match(renderShim('codex', 'win32'), /if defined LLM_SWITCHER_CODEX_MAIN_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model=/);
 });
 

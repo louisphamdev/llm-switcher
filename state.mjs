@@ -98,7 +98,7 @@ export const claudeSettingsPath = path.join(claudeDir, 'settings.json');
 
 // The shims read the launch files from the checkout. LLM_SWITCHER_STATE_DIR moves them for tests,
 // which must not rewrite the launch state of a switcher that is in use.
-const STATE_DIR = process.env.LLM_SWITCHER_STATE_DIR ? path.resolve(process.env.LLM_SWITCHER_STATE_DIR) : ROOT_DIR;
+export const STATE_DIR = process.env.LLM_SWITCHER_STATE_DIR ? path.resolve(process.env.LLM_SWITCHER_STATE_DIR) : ROOT_DIR;
 
 export const paths = {
   activeFlag: path.join(STATE_DIR, 'active.flag'),
@@ -110,6 +110,8 @@ export const paths = {
   envCodexCmd: path.join(STATE_DIR, 'env-codex.cmd'),
   envCodexSh: path.join(STATE_DIR, 'env-codex.sh'),
   codexCatalog: path.join(STATE_DIR, 'model-catalog.json'),
+  proxyLog: path.join(STATE_DIR, 'proxy.log'),
+  blindfoldLog: path.join(STATE_DIR, 'blindfold.log'),
   codexCatalogTemplate: path.join(ROOT_DIR, 'codex-catalog-template.json'),
   blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(ROOT_DIR, 'blindfold', 'certs'), 'ca.pem')
 };
@@ -793,7 +795,7 @@ export function openLog(file) {
 
 // The single place that starts an interceptor.
 function spawnBlindfold(desired, gatewayPort) {
-  const log = openLog(path.join(ROOT_DIR, 'blindfold.log'));
+  const log = openLog(paths.blindfoldLog);
   const child = spawn(process.execPath, [
     blindfoldScript,
     '--port', String(desired.port),
