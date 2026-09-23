@@ -28,12 +28,16 @@ if [ "$OWNER" != "$(id -u)" ]; then
   exit 1
 fi
 chmod 700 "$OUT_DIR"
-( cd "$OUT_DIR" && rm -f ca.cnf leaf.cnf leaf.ext ca.key ca.pem leaf.key leaf.csr leaf.pem ca.srl )
+
+# Build in a private work directory and move the results into place last. A failed run then
+# keeps the previous working set, and mv replaces a planted symlink instead of writing through it.
+WORK="$(mktemp -d "$OUT_DIR/.build.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
 
 echo "[blindfold] host   : $HOST"
 echo "[blindfold] output : $OUT_DIR"
 
-cat > "$OUT_DIR/ca.cnf" <<EOF
+cat > "$WORK/ca.cnf" <<EOF
 [req]
 prompt = no
 distinguished_name = dn
@@ -48,7 +52,7 @@ keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
 EOF
 
-cat > "$OUT_DIR/leaf.cnf" <<EOF
+cat > "$WORK/leaf.cnf" <<EOF
 [req]
 prompt = no
 distinguished_name = dn
@@ -57,26 +61,25 @@ distinguished_name = dn
 CN = $HOST
 EOF
 
-cat > "$OUT_DIR/leaf.ext" <<EOF
+cat > "$WORK/leaf.ext" <<EOF
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
 subjectAltName = DNS:$HOST,DNS:*.$HOST
 EOF
 
-openssl ecparam -name prime256v1 -genkey -noout -out "$OUT_DIR/ca.key"
-openssl req -x509 -new -key "$OUT_DIR/ca.key" -sha256 -days "$CA_DAYS" \
-  -config "$OUT_DIR/ca.cnf" -out "$OUT_DIR/ca.pem"
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/ca.key"
+openssl req -x509 -new -key "$WORK/ca.key" -sha256 -days "$CA_DAYS" \
+  -config "$WORK/ca.cnf" -out "$WORK/ca.pem"
 
-openssl ecparam -name prime256v1 -genkey -noout -out "$OUT_DIR/leaf.key"
-openssl req -new -key "$OUT_DIR/leaf.key" -config "$OUT_DIR/leaf.cnf" -out "$OUT_DIR/leaf.csr"
-openssl x509 -req -in "$OUT_DIR/leaf.csr" \
-  -CA "$OUT_DIR/ca.pem" -CAkey "$OUT_DIR/ca.key" -CAcreateserial \
-  -days "$LEAF_DAYS" -sha256 -extfile "$OUT_DIR/leaf.ext" \
-  -out "$OUT_DIR/leaf.pem"
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/leaf.key"
+openssl req -new -key "$WORK/leaf.key" -config "$WORK/leaf.cnf" -out "$WORK/leaf.csr"
+openssl x509 -req -in "$WORK/leaf.csr" \
+  -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial \
+  -days "$LEAF_DAYS" -sha256 -extfile "$WORK/leaf.ext" \
+  -out "$WORK/leaf.pem"
 
-rm -f "$OUT_DIR/leaf.csr" "$OUT_DIR/ca.cnf" "$OUT_DIR/leaf.cnf" "$OUT_DIR/leaf.ext" "$OUT_DIR/ca.srl"
-chmod 600 "$OUT_DIR"/*.key 2>/dev/null || true
+mv -f "$WORK/ca.key" "$WORK/ca.pem" "$WORK/leaf.key" "$WORK/leaf.pem" "$OUT_DIR/"
 
 echo "[blindfold] CA     : $OUT_DIR/ca.pem"
 echo "[blindfold] leaf   : $OUT_DIR/leaf.pem"

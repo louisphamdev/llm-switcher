@@ -28,3 +28,4 @@ docs/diagrams/*.visual-check.*
 # admin API token (mode 0600) — never commit
 admin.token
 blindfold.json
+ui-open.html

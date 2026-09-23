@@ -7,7 +7,7 @@ import {
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken,
-  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold
+  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher
 } from './state.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
@@ -83,8 +83,15 @@ async function ensureProxyRunning(port) {
     return;
   }
   if (state === 'foreign') refuseForeignPort(port, 'this switcher');
-  console.log(`Starting proxy service on port ${port}...`);
-  startProxyBackground(port);
+  // An installed service owns the gateway: a detached copy next to it would be a second gateway.
+  const svc = installedService();
+  if (svc && servicePort(svc) === port) {
+    console.log(`Starting the ${svc} service on port ${port}...`);
+    serviceStart(svc);
+  } else {
+    console.log(`Starting proxy service on port ${port}...`);
+    startProxyBackground(port);
+  }
   for (let i = 0; i < 20; i++) {
     await sleep(250);
     if ((await probeGateway(port)) === 'ours') return;
@@ -179,14 +186,17 @@ function listeningPids(port) {
   return [...pids];
 }
 
-// Returns 'stopped', 'not-running', or 'still-running'. The kill targets the process that listens on
-// the port, right after the identity probe confirmed that listener is this switcher.
+// Returns 'stopped', 'not-running', 'not-ours' or 'still-running'. The kill targets the process that
+// listens on the port, right after the identity probe confirmed that listener is this switcher.
 async function stopProxy(port) {
-  if ((await probeGateway(port)) !== 'ours') return 'not-running';
+  const state = await probeGateway(port);
+  if (state === 'free') return 'not-running';
+  if (state === 'foreign') return 'not-ours';
+  // Gone means the port is free; a slow answer is not proof that the gateway stopped.
   const waitGone = async () => {
     for (let i = 0; i < 20; i++) {
       await sleep(150);
-      if ((await probeGateway(port)) !== 'ours') return true;
+      if ((await probeGateway(port)) === 'free') return true;
     }
     return false;
   };
@@ -209,7 +219,8 @@ async function changePort(newPortStr) {
   const oldPort = resolvePort([], config);
   const svc = installedService();
   const wasRunning = await checkProxyRunning(oldPort);
-  if (wasRunning && !svc) {
+  // Stop the old gateway even when a service is installed: it may be a copy started outside the unit.
+  if (wasRunning) {
     console.log(`Stopping gateway on current port ${oldPort}...`);
     if ((await stopProxy(oldPort)) === 'still-running') {
       console.error(`[Error] The gateway on port ${oldPort} did not stop. The port is unchanged.`);
@@ -310,9 +321,10 @@ async function turnOn(profileName, cliTarget) {
     // and run the settings.json cleaner, so the previous state is re-applied instead.
     restoreConfigBytes(previousBytes);
     applyLaunchState(JSON.parse(previousBytes.toString('utf8')), port, { cleanSettings: false });
-    await requestBlindfoldSync(port);
+    const back = await requestBlindfoldSync(port);
     console.error(`[Error] ${bf.error}`);
-    console.error('        The previous configuration is restored.');
+    console.error('        The previous config.json and launcher files are restored.');
+    if (!back.ok) console.error(`        The previous interceptor did not come back: ${back.error}`);
     process.exit(1);
   }
 
@@ -366,6 +378,10 @@ async function turnOff(targetArg) {
     console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
     process.exit(1);
   }
+  if (result === 'not-ours') {
+    console.error(`[Error] Port ${port} is held by a process that did not prove it is this switcher. It was not stopped.`);
+    process.exit(1);
+  }
   console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
 }
@@ -404,11 +420,10 @@ async function showStatus() {
 async function openUI() {
   const port = getTargetPort();
   await ensureProxyRunning(port);
-  // The token travels in the fragment: the browser never sends it to the server in the URL,
-  // and the dashboard moves it to localStorage and clears the address bar.
+  // The browser gets a private file path, never the token: a command line is readable by every account.
   const url = `http://127.0.0.1:${port}/ui`;
   console.log(`Opening Web UI: ${url}`);
-  openBrowser(`${url}#token=${readAdminToken() || ''}`);
+  openBrowser(writeDashboardLauncher(url));
 }
 
 function xmlEscape(s) {
@@ -438,6 +453,27 @@ function installedService() {
   }
   if (process.platform === 'darwin') return fs.existsSync(LAUNCHD_PLIST) ? 'launchd' : null;
   return fs.existsSync(SYSTEMD_UNIT) ? 'systemd' : null;
+}
+
+function serviceStart(kind) {
+  try {
+    if (kind === 'systemd') systemctlUser(['start', 'llm-switcher'], { stdio: 'ignore' });
+    else if (kind === 'launchd') execFileSync('launchctl', ['load', LAUNCHD_PLIST], { stdio: 'ignore' });
+    else if (kind === 'schtasks') execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+  } catch {}
+}
+
+/** The port on the service's command line, or null when it cannot be read. */
+function servicePort(kind) {
+  try {
+    let text = '';
+    if (kind === 'systemd') text = fs.readFileSync(SYSTEMD_UNIT, 'utf8');
+    else if (kind === 'launchd') text = fs.readFileSync(LAUNCHD_PLIST, 'utf8').replace(/<\/?string>\s*/g, ' ');
+    else if (kind === 'schtasks') text = execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher', '/XML'], { encoding: 'utf8' });
+    return parsePort(/--port\s+(\d+)/.exec(text)?.[1]);
+  } catch {
+    return null;
+  }
 }
 
 // KeepAlive / Restart=always restart a killed gateway, so a service stops through its manager.

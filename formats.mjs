@@ -2152,12 +2152,12 @@ function createResponsesStream(emit, model, opts = {}) {
       closeReasoning();
       closeMessage();
       const incomplete = canonical === 'length';
-      // Codex runs a tool on output_item.done. After a length stop, drop a function call whose
-      // arguments do not parse instead of running it with truncated JSON.
+      // Codex runs a tool on output_item.done. After a length stop, drop any tool call whose arguments
+      // do not parse (upstream arguments are JSON for every tool kind) instead of running it cut off.
       if (incomplete) {
         for (const t of tools.values()) {
-          if (t.done || responsesToolItem(toolMeta, { name: t.name, args: t.args }).type !== 'function_call') continue;
-          try { JSON.parse(t.args); } catch { t.done = true; }
+          if (t.done) continue;
+          try { JSON.parse(t.args || '{}'); } catch { t.done = true; }
         }
       }
       closeTools();
@@ -2193,8 +2193,8 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
       args: typeof tc.args === 'string' ? tc.args : stringifyArgs(tc.args)
     });
     // Same rule as the stream: a length stop never hands Codex a call with truncated arguments.
-    if (incomplete && item.type === 'function_call') {
-      try { JSON.parse(item.arguments); } catch { continue; }
+    if (incomplete && typeof tc.args === 'string') {
+      try { JSON.parse(tc.args || '{}'); } catch { continue; }
     }
     output.push(item);
   }

@@ -16,7 +16,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken, identityProof, reconcileBlindfold
+  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget, forgetConfigCache
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -885,6 +885,12 @@ function reconcile(cfg) {
 
 // Returns what the caller must show: removed settings.json values, and a blindfold failure.
 async function commit(cfg) {
+  // Refuse before saving: a saved interceptor port that a squatter holds would route Codex through it.
+  const problem = await checkBlindfoldTarget(cfg, PORT);
+  if (problem) {
+    forgetConfigCache();
+    return { success: false, error: `Not saved: ${problem}` };
+  }
   saveConfig(cfg);
   const st = applyLaunchState(cfg, PORT);
   const removed = st.settings?.removed || [];
@@ -1045,7 +1051,10 @@ async function route(req, res) {
     return sendJson(res, 200, {
       status: 'ok',
       proxy: 'llm-switcher',
-      ...(challenge ? { proof: identityProof(challenge, ADMIN_TOKEN.toString()) } : {}),
+      ...(challenge ? {
+        pid: process.pid,
+        proof: identityProof(challenge, { role: 'gateway', port: PORT, pid: process.pid }, ADMIN_TOKEN.toString())
+      } : {}),
       port: PORT,
       configLoaded: Boolean(loadConfig()),
       activeProfile: profileKey || '(none)',
@@ -1231,7 +1240,7 @@ async function routeApi(req, res, method, pathname) {
     }
     if (err) return sendJson(res, 400, { error: err });
     const applied = await commit(cfg);
-    return sendJson(res, 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
+    return sendJson(res, applied.success === false ? 502 : 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/toggle  { target?, enabled }
@@ -1256,7 +1265,7 @@ async function routeApi(req, res, method, pathname) {
     }
     if (err) return sendJson(res, 400, { error: err });
     const applied = await commit(cfg);
-    return sendJson(res, 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
+    return sendJson(res, applied.success === false ? 502 : 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/save-profile  { key, profile }
@@ -1291,7 +1300,7 @@ async function routeApi(req, res, method, pathname) {
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
     const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg) : (saveConfig(cfg), {});
-    return sendJson(res, 200, { success: true, ...applied });
+    return sendJson(res, applied.success === false ? 502 : 200, { success: true, ...applied });
   }
 
   // POST /api/delete-profile  { key }
@@ -1299,7 +1308,7 @@ async function routeApi(req, res, method, pathname) {
     const err = deleteProfile(cfg, body.key);
     if (err) return sendJson(res, 404, { error: err });
     const applied = await commit(cfg);
-    return sendJson(res, 200, { success: true, ...applied });
+    return sendJson(res, applied.success === false ? 502 : 200, { success: true, ...applied });
   }
 
   // POST /api/blindfold/sync — the CLI asks the owner to bring the interceptor in line with config.json.

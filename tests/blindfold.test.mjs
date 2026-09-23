@@ -150,6 +150,15 @@ test('captures are written 0600 inside a 0700 directory, never into a foreign di
     assert.equal((fs.statSync(dir).mode & 0o777).toString(8), '700');
     assert.equal((fs.statSync(path.join(dir, 'a.json')).mode & 0o777).toString(8), '600');
 
+    // A symlink planted at the capture path must not redirect captures or re-mode its target.
+    const target = path.join(base, 'target');
+    fs.mkdirSync(target, { mode: 0o755 });
+    fs.chmodSync(target, 0o755);
+    fs.symlinkSync(target, path.join(base, 'linked'));
+    assert.equal(writeCaptureFile(path.join(base, 'linked'), 'c.json', { ok: true }), false);
+    assert.equal((fs.statSync(target).mode & 0o777).toString(8), '755', 'the symlink target keeps its mode');
+    assert.deepEqual(fs.readdirSync(target), []);
+
     const foreign = path.join(base, 'foreign');
     fs.mkdirSync(foreign, { mode: 0o777 });
     const otherUid = (process.getuid?.() ?? 0) + 4242;
@@ -173,6 +182,21 @@ test('make-certs.sh writes private files and refuses a directory it does not own
     for (const f of ['ca.key', 'leaf.key', 'ca.pem', 'leaf.pem']) {
       assert.equal((fs.statSync(path.join(out, f)).mode & 0o777).toString(8), '600', f);
     }
+    // A failed rebuild (here: no openssl on PATH) must leave the working set untouched.
+    const caBefore = fs.readFileSync(path.join(out, 'ca.pem'));
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-bin-'));
+    for (const tool of ['mkdir', 'stat', 'id', 'chmod', 'rm', 'cat', 'dirname', 'mv', 'mktemp']) {
+      const real = execFileSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim();
+      fs.symlinkSync(real, path.join(bin, tool));
+    }
+    let rebuildFailed = false;
+    try { execFileSync('/bin/bash', [script, 'example.test', out], { stdio: 'ignore', env: { ...process.env, PATH: bin } }); } catch { rebuildFailed = true; }
+    fs.rmSync(bin, { recursive: true, force: true });
+    assert.ok(rebuildFailed, 'the rebuild fails without openssl');
+    assert.deepEqual(fs.readFileSync(path.join(out, 'ca.pem')), caBefore, 'the previous CA survives a failed rebuild');
+    assert.ok(fs.existsSync(path.join(out, 'leaf.key')), 'the previous leaf key survives');
+    assert.deepEqual(fs.readdirSync(out).filter(f => f.startsWith('.build')), [], 'no build directory is left behind');
+
     // /usr/share/doc exists and belongs to root: the script must stop before writing.
     const rootOwned = '/usr/share/doc';
     let failed = false;

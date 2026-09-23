@@ -81,6 +81,18 @@ export function ensureAdminToken() {
   return token;
 }
 
+// `switch ui` must not put the token on a command line: /proc/<pid>/cmdline is readable by every
+// account. It opens this private file instead, which redirects to the dashboard with the token.
+export function writeDashboardLauncher(url) {
+  const file = path.join(path.dirname(configPath), 'ui-open.html');
+  const target = `${url}#token=${ensureAdminToken()}`;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, `<!doctype html><meta charset="utf-8"><title>LLM Switcher</title><script>location.replace(${JSON.stringify(target)})</script>\n`, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, file);
+  return file;
+}
+
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 export const claudeSettingsPath = path.join(claudeDir, 'settings.json');
 
@@ -121,6 +133,13 @@ export function loadConfig() {
     lastLoadError = err;
   }
   return cachedConfig;
+}
+
+// A caller that changed the cached object and then decided not to save drops it here, so the
+// next loadConfig reads config.json again instead of serving the unsaved change.
+export function forgetConfigCache() {
+  cachedConfig = null;
+  lastMtime = 0;
 }
 
 export function getConfigLoadError() {
@@ -604,13 +623,17 @@ export function redactConfig(cfg) {
 // ---------------- process identity ----------------
 // An answer on a port proves nothing: any local process can bind a free port and replay a /health
 // body. Only a process that can read admin.token can answer HMAC(token, nonce) for a fresh nonce.
-export function identityProof(nonce, token = readAdminToken()) {
-  return token ? crypto.createHmac('sha256', token).update(String(nonce)).digest('hex') : '';
+// The MAC covers role, listening port, pid and arguments: a proof relayed from the process on
+// another port, or a body with an edited pid, no longer verifies. blindfold.mjs signs the same fields.
+export function identityProof(nonce, { role, port, pid, gatewayPort = '', host = '', prefix = '' }, token = readAdminToken()) {
+  if (!token) return '';
+  return crypto.createHmac('sha256', token).update([role, port, pid, gatewayPort, host, prefix, nonce].join('|')).digest('hex');
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function getJson(port, pathname, timeoutMs = 1000) {
+// A busy but genuine process can take a moment; a squatter gains nothing from a longer wait.
+function getJson(port, pathname, timeoutMs = 3000) {
   return new Promise(resolve => {
     const req = http.get({ host: '127.0.0.1', port, path: pathname, timeout: timeoutMs }, res => {
       let data = '';
@@ -634,8 +657,10 @@ export async function probeGateway(port) {
   const nonce = newNonce();
   const r = await getJson(port, `/health?challenge=${nonce}`);
   if (r.state !== 'answered') return r.state;
-  const proof = identityProof(nonce);
-  return r.body?.proxy === 'llm-switcher' && proof && r.body.proof === proof ? 'ours' : 'foreign';
+  const b = r.body;
+  if (b?.proxy !== 'llm-switcher' || b.port !== port) return 'foreign';
+  const proof = identityProof(nonce, { role: 'gateway', port, pid: b.pid });
+  return proof && b.proof === proof ? 'ours' : 'foreign';
 }
 
 /** { state: 'ours', pid, gatewayPort, host, prefix } | { state: 'foreign' } | { state: 'free' } */
@@ -644,8 +669,9 @@ export async function probeBlindfold(port) {
   const r = await getJson(port, `/?challenge=${nonce}`);
   if (r.state !== 'answered') return { state: r.state };
   const b = r.body;
-  const proof = identityProof(nonce);
-  if (b?.proxy !== 'llm-switcher-blindfold' || !proof || b.proof !== proof) return { state: 'foreign' };
+  if (b?.proxy !== 'llm-switcher-blindfold' || b.port !== port) return { state: 'foreign' };
+  const proof = identityProof(nonce, { role: 'blindfold', port, pid: b.pid, gatewayPort: b.gatewayPort, host: b.host, prefix: b.prefix });
+  if (!proof || b.proof !== proof) return { state: 'foreign' };
   return { state: 'ours', pid: b.pid, gatewayPort: b.gatewayPort, host: b.host, prefix: b.prefix };
 }
 
@@ -721,6 +747,18 @@ function spawnBlindfold(desired, gatewayPort) {
   fs.closeSync(log);
 }
 
+/** null when the interceptor that cfg asks for can run, otherwise the reason. No side effects. */
+export async function checkBlindfoldTarget(cfg, gatewayPort) {
+  const desired = computeLaunchState(cfg, gatewayPort).blindfold;
+  if (!desired) return null;
+  const problem = blindfoldPreflight(desired);
+  if (problem) return problem;
+  if ((await probeBlindfold(desired.port)).state === 'foreign') {
+    return `Port ${desired.port} is held by another process, not by this switcher's interceptor.`;
+  }
+  return null;
+}
+
 const matches = (cur, desired, gatewayPort) =>
   cur.state === 'ours' && cur.gatewayPort === gatewayPort && cur.host === desired.host && cur.prefix === desired.prefix;
 
@@ -731,13 +769,15 @@ const matches = (cur, desired, gatewayPort) =>
 export async function reconcileBlindfold(cfg, gatewayPort) {
   const desired = computeLaunchState(cfg, gatewayPort).blindfold;
   const prev = readBlindfoldState();
-  if (prev?.port && (!desired || prev.port !== desired.port)) await stopRecordedBlindfold();
-  if (!desired) return { ok: true, action: 'none' };
-
-  const problem = blindfoldPreflight(desired);
+  if (!desired) {
+    if (prev?.port) await stopRecordedBlindfold();
+    return { ok: true, action: 'none' };
+  }
+  // Validate the new interceptor before the old one is stopped: a failed change keeps Codex working.
+  const problem = await checkBlindfoldTarget(cfg, gatewayPort);
   if (problem) return { ok: false, error: problem };
+  if (prev?.port && prev.port !== desired.port) await stopRecordedBlindfold();
   const cur = await probeBlindfold(desired.port);
-  if (cur.state === 'foreign') return { ok: false, error: `Port ${desired.port} is held by another process, not by this switcher's interceptor.` };
   if (matches(cur, desired, gatewayPort)) {
     writeBlindfoldState({ pid: cur.pid, port: desired.port, gatewayPort, host: desired.host, prefix: desired.prefix });
     return { ok: true, action: 'kept' };

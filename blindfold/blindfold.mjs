@@ -119,10 +119,17 @@ export function decodeBody(buffer, contentEncoding) {
 
 // A capture holds full prompts and answers, so the directory is 0700 and each file 0600. A
 // directory that another account owns is refused: it could read the files or plant symlinks.
+const refusedCaptureDirs = new Set();
+
 export function writeCaptureFile(dir, fileName, record, { uid = process.getuid?.() } = {}) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (uid !== undefined && fs.statSync(dir).uid !== uid) {
-    log('capture refused: directory is owned by another account:', dir);
+  // lstat: a symlink planted at the capture path would otherwise pass the owner test for its target.
+  const st = fs.lstatSync(dir);
+  if (st.isSymbolicLink() || (uid !== undefined && st.uid !== uid)) {
+    if (!refusedCaptureDirs.has(dir)) {
+      refusedCaptureDirs.add(dir);
+      console.error(`[blindfold] capture refused: ${dir} is a symlink or is owned by another account. Nothing is recorded.`);
+    }
     return false;
   }
   fs.chmodSync(dir, 0o700);
@@ -393,9 +400,11 @@ function relayUpgrade(req, clientSocket, head, target, readyEvent, headers, requ
     captureUpgrade(req, clientSocket, target);
   });
 
-  // Either side closing ends the other, in capture mode too, where no pipe carries it.
-  target.on('close', () => clientSocket.destroy());
-  clientSocket.on('close', () => target.destroy());
+  // Either side closing ends the other, in capture mode too, where no pipe carries it. end() lets the
+  // last buffered frames (a close frame, for one) reach the peer; destroy follows if it never closes.
+  const finish = (s) => { s.end(); setTimeout(() => s.destroy(), 5000).unref(); };
+  target.on('close', () => finish(clientSocket));
+  clientSocket.on('close', () => finish(target));
   target.on('error', (err) => {
     log('upgrade', route, 'failed:', err.code || err.message);
     if (!ready && clientSocket.writable) clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
@@ -428,15 +437,15 @@ mitm.on('clientError', (err, socket) => {
 export function identityAnswer(url) {
   const challenge = new URL(url || '/', 'http://blindfold.invalid').searchParams.get('challenge');
   if (!challenge) return null;
+  const fields = { role: 'blindfold', port: LISTEN_PORT, pid: process.pid, gatewayPort: GATEWAY_PORT, host: TARGET_HOST, prefix: API_PREFIX };
   let proof = '';
   try {
     const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
-    if (token) proof = crypto.createHmac('sha256', token).update(challenge).digest('hex');
+    // Same fields and order as identityProof in state.mjs.
+    const msg = [fields.role, fields.port, fields.pid, fields.gatewayPort, fields.host, fields.prefix, challenge].join('|');
+    if (token) proof = crypto.createHmac('sha256', token).update(msg).digest('hex');
   } catch {}
-  return {
-    proxy: 'llm-switcher-blindfold', proof, pid: process.pid,
-    port: LISTEN_PORT, gatewayPort: GATEWAY_PORT, host: TARGET_HOST, prefix: API_PREFIX
-  };
+  return { proxy: 'llm-switcher-blindfold', proof, ...fields };
 }
 
 const proxy = http.createServer((req, res) => {

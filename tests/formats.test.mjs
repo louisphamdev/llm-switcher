@@ -663,6 +663,17 @@ test('a length stop is never reported as a finished tool call', () => {
   r2.finish('length', { hasTools: true });
   assert.ok(ok.some(e => e.event === 'response.output_item.done' && e.data.item.type === 'function_call'), 'complete arguments still run');
 
+  // Every tool kind, not only function calls: apply_patch is a custom tool whose JSON arguments can be cut too.
+  const custom = [];
+  const r3 = createResponsesStream((event, data) => custom.push({ event, data }), 'm', { toolMeta: { apply_patch: { kind: 'custom', name: 'apply_patch' } } });
+  r3.start();
+  r3.tool({ index: 0, id: 'call_patch', name: 'apply_patch', args: '{"input":"*** Begin Patch\\n*** Upd' });
+  r3.tool({ index: 1, id: 'call_noargs', name: 'list_files', args: '' });
+  r3.finish('length', { hasTools: true });
+  const doneItems = custom.filter(e => e.event === 'response.output_item.done').map(e => e.data.item);
+  assert.ok(!doneItems.some(i => i.type === 'custom_tool_call'), 'a cut custom tool call is not emitted as done');
+  assert.ok(doneItems.some(i => i.type === 'function_call' && i.name === 'list_files'), 'a call with no arguments is complete, as in the non-stream builder');
+
   const msg = buildResponsesMessage({ model: 'm', text: [], tools: [{ id: 'c1', name: 'write_file', args: '{"a":"tru' }], finish: 'length' });
   assert.equal(msg.status, 'incomplete');
   assert.ok(!msg.output.some(i => i.type === 'function_call'), 'the non-stream builder applies the same rule');

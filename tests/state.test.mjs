@@ -450,3 +450,23 @@ test('an explicit blank Codex role stays blank and never shifts the other roles'
   const e2eFixture = { inFormat: 'responses', publicModels: ['gpt-5.6-sol', 'ag/mock-flash'], codexRoles: { main: 'gpt-5.6-sol', review: '', subagent: '' } };
   assert.equal(codexPublicModel(e2eFixture, 'review'), '', 'no upstream id reaches the CLI');
 });
+
+// /proc/<pid>/cmdline is readable by every account, so `switch ui` must never put the admin
+// token on a command line. It opens a private file that redirects to the dashboard instead.
+test('the dashboard launcher keeps the admin token off the command line', { skip: process.platform === 'win32' && 'posix modes' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-ui-'));
+  try {
+    const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+      `const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))});
+       const token = s.ensureAdminToken();
+       const file = s.writeDashboardLauncher('http://127.0.0.1:4000/ui');
+       const fs = await import('node:fs');
+       console.log(JSON.stringify({ token, file, mode: (fs.statSync(file).mode & 0o777).toString(8), html: fs.readFileSync(file, 'utf8') }));`
+    ], { env: { ...process.env, LLM_SWITCHER_CONFIG: path.join(dir, 'config.json') }, encoding: 'utf8' }).trim());
+    assert.ok(!out.file.includes(out.token), 'the path that reaches argv holds no token');
+    assert.equal(out.mode, '600');
+    assert.ok(out.html.includes(`http://127.0.0.1:4000/ui#token=${out.token}`));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

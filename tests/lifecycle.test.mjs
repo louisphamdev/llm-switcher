@@ -115,10 +115,30 @@ test('the gateway proves its identity to a fresh challenge; a replayed /health i
   const replayPort = await new Promise(r => replay.listen(0, '127.0.0.1', () => r(replay.address().port)));
   try {
     const body = await (await fetch(`http://127.0.0.1:${gwPort}/health?challenge=abc`)).json();
-    assert.equal(body.proof, crypto.createHmac('sha256', token(ws)).update('abc').digest('hex'));
+    // The proof binds the role, the port it answers on and its pid, so it cannot be relayed or edited.
+    assert.equal(body.port, gwPort);
+    assert.equal(body.proof, crypto.createHmac('sha256', token(ws)).update(['gateway', gwPort, body.pid, '', '', '', 'abc'].join('|')).digest('hex'));
     assert.equal(await probe(ws, `s.probeGateway(${gwPort})`), 'ours');
     assert.equal(await probe(ws, `s.probeGateway(${replayPort})`), 'foreign');
     assert.equal(await probe(ws, `s.probeGateway(${await freePort()})`), 'free');
+
+    // A squatter that relays the fresh challenge to the real gateway, or edits the pid it returns.
+    const relay = http.createServer(async (req, res) => {
+      const real = await (await fetch(`http://127.0.0.1:${gwPort}${req.url}`)).json();
+      res.end(JSON.stringify(req.headers['x-tamper'] ? { ...real, pid: 1 } : real));
+    });
+    const relayPort = await new Promise(r => relay.listen(0, '127.0.0.1', () => r(relay.address().port)));
+    const tamper = http.createServer(async (req, res) => {
+      const real = await (await fetch(`http://127.0.0.1:${gwPort}${req.url}`)).json();
+      res.end(JSON.stringify({ ...real, port: tamperPort, pid: 1 }));
+    });
+    const tamperPort = await new Promise(r => tamper.listen(0, '127.0.0.1', () => r(tamper.address().port)));
+    try {
+      assert.equal(await probe(ws, `s.probeGateway(${relayPort})`), 'foreign', 'a relayed proof names another port');
+      assert.equal(await probe(ws, `s.probeGateway(${tamperPort})`), 'foreign', 'an edited port or pid breaks the proof');
+    } finally {
+      relay.close(); tamper.close();
+    }
   } finally {
     gw.kill(); replay.close(); fs.rmSync(ws.dir, { recursive: true, force: true });
   }
@@ -219,10 +239,19 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
     const squatter = net.createServer(s => s.end());
     const squatPort = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
     try {
-      const bad = await api(ws, gwPort, '/api/save-profile', { key: 'bf', profile: { blindfoldPort: squatPort } });
+      const badRes = await fetch(`http://127.0.0.1:${gwPort}/api/save-profile`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': token(ws) },
+        body: JSON.stringify({ key: 'bf', profile: { blindfoldPort: squatPort } })
+      });
+      assert.equal(badRes.status, 502, 'a failure is not answered with 200');
+      const bad = await badRes.json();
       assert.equal(bad.success, false);
       assert.match(bad.error, /held by another process/);
-      assert.equal((await bfState()).state, 'free', 'the interceptor on the old port was stopped');
+      const onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8')).profiles.bf.blindfoldPort;
+      assert.equal(onDisk, bfPort, 'a refused change is not saved, so HTTPS_PROXY never points at the squatter');
+      assert.equal((await bfState()).state, 'ours', 'the working interceptor stays up');
+      const status = await fetch(`http://127.0.0.1:${gwPort}/api/status`, { headers: { 'x-llm-switcher-token': token(ws) } }).then(r => r.json());
+      assert.equal(status.config.profiles.bf.blindfoldPort, bfPort, 'the gateway does not keep the refused change in memory');
     } finally {
       squatter.close();
     }
