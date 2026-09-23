@@ -5,7 +5,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deleteProfile,
   computeLaunchState, findProfileKey, isValidProfileKey, resolvePort, redactConfig, MASKED_KEY,
   modelSlotsForProfile, modelForSlot, primaryModel, codexPublicModel, buildCodexCatalog,
-  certCoversHost, blindfoldPreflight, ROOT_DIR, openLog, probeGateway
+  certCoversHost, blindfoldPreflight, ROOT_DIR, openLog, probeGateway, isSafeModelName
 } from '../state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -593,4 +593,15 @@ test('a port that accepts but never answers probes as silent, not as foreign', a
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   t.after(() => server.close());
   assert.equal(await probeGateway(server.address().port), 'silent');
+});
+
+// Codex parses an unquoted --config value as TOML first. The Windows shim passes names unquoted, so a
+// name that TOML reads as a number, a boolean or a date would change type (audit N-3 residual).
+test('isSafeModelName refuses names that TOML reads as something other than a string', () => {
+  for (const bad of ['1.5', '42', 'true', 'false', 'inf', '-nan', '0x1F', '0o17', '0b101', '1e5', '1_000', '2024-01-01', '07:32:00']) {
+    assert.equal(isSafeModelName(bad), false, bad);
+  }
+  for (const good of ['gpt-5.2', 'o3', 'ag/gemini-3.8-flash', 'claude-opus-4-6', 'qwen3:32b', 'e5-large']) {
+    assert.equal(isSafeModelName(good), true, good);
+  }
 });

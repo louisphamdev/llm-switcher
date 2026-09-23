@@ -238,9 +238,12 @@ export function codexPublicModel(profile, slot) {
 // to the characters real model IDs use. An unsafe name is dropped, never escaped:
 // dropping it loses one override, escaping it correctly in two shells is a bet.
 const SAFE_MODEL_NAME = /^[A-Za-z0-9._:/-]{1,128}$/;
+// Codex parses a --config value as TOML before it falls back to a string, and the Windows shim passes
+// the name unquoted. A name that TOML reads as a number, a boolean or a date would change type.
+const TOML_NON_STRING = /^([+-]?(0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+|inf|nan|[\d_]+(\.[\d_]+)?(e[+-]?[\d_]+)?)|true|false|[^a-z]*)$/i;
 
 export function isSafeModelName(name) {
-  return typeof name === 'string' && SAFE_MODEL_NAME.test(name);
+  return typeof name === 'string' && SAFE_MODEL_NAME.test(name) && !TOML_NON_STRING.test(name);
 }
 
 /**
