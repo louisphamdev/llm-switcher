@@ -196,4 +196,4 @@ Read this section before you turn blindfold mode on.
 
 **The interceptor is a proxy.** It binds to loopback, so a remote machine cannot use it, but every process on this machine can. It refuses a CONNECT to a local or private address, so it cannot be used to reach a service that listens only on this machine.
 
-**Some `--config` keys still travel.** Blindfold mode removes the base URL override only. The switcher still passes `model_catalog_json` and the two context window keys, because those carry no address and no internal name.
+**Some `--config` keys still travel.** Blindfold mode removes the base URL override only. The switcher still passes `model_catalog_json`, the three role names (`model`, `review_model`, `agents.default_subagent_model`) and the two context window keys, because those carry no address and no internal name.

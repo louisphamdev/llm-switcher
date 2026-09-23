@@ -30,7 +30,7 @@ if (process.platform !== 'win32') {
 test.after(() => fs.rmSync(RENDER_DIR, { recursive: true, force: true }));
 
 // Run the shim with a fake PATH: fakeDir holds a mocked "real" binary.
-function runShim(name, args, { active, fakeDir, extraPath = '' }) {
+function runShim(name, args, { active, fakeDir, extraPath = '', env = {} }) {
   const flag = path.join(ROOT, 'active.flag');
   const envSh = path.join(ROOT, 'env.sh');
   const hadFlag = fs.existsSync(flag);
@@ -47,7 +47,7 @@ function runShim(name, args, { active, fakeDir, extraPath = '' }) {
     }
     const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin'].filter(Boolean).join(':');
     return execFileSync(path.join(RENDER_DIR, name), args, {
-      encoding: 'utf8', env: { ...process.env, PATH: PATH_ }, timeout: 15000
+      encoding: 'utf8', env: { ...process.env, ...env, PATH: PATH_ }, timeout: 15000
     }).trim();
   } finally {
     if (savedFlag !== null) fs.writeFileSync(flag, savedFlag);
@@ -148,4 +148,15 @@ test('Claude shim does not receive Codex config overrides', () => {
   assert.doesNotMatch(renderShim('claude', 'linux'), /agents\.default_subagent_model/);
   assert.doesNotMatch(renderShim('claude', 'win32'), /CODEX_SWITCHER_ARGS/);
   assert.doesNotMatch(renderShim('claude', 'win32'), /model_catalog_json/);
+});
+
+// README promises that the main role reaches Codex as the `model` override.
+test('Codex shim passes the main model as --config model', (t) => {
+  if (process.platform === 'win32') return t.skip('posix only');
+  const fake = makeFakeBin('codex');
+  const withModel = runShim('codex', ['exec'], { active: false, fakeDir: fake, env: { LLM_SWITCHER_CODEX_MAIN_MODEL: 'gpt-x' } });
+  assert.match(withModel, /--config model="gpt-x"/);
+  const without = runShim('codex', ['exec'], { active: false, fakeDir: fake, env: { LLM_SWITCHER_CODEX_MAIN_MODEL: '' } });
+  assert.doesNotMatch(without, /--config model=/);
+  assert.match(renderShim('codex', 'win32'), /if defined LLM_SWITCHER_CODEX_MAIN_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model=/);
 });
