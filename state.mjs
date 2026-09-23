@@ -155,9 +155,16 @@ export function saveConfig(cfg) {
   const tmp = `${configPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
+  const ino = fs.statSync(tmp).ino;
   fs.renameSync(tmp, configPath);
   cachedConfig = cfg;
-  try { lastSignature = fileSignature(fs.statSync(configPath)); } catch {}
+  // Another process can rename its own file in between; its signature must not be taken as ours.
+  try {
+    const st = fs.statSync(configPath);
+    lastSignature = st.ino === ino ? fileSignature(st) : '';
+  } catch {
+    lastSignature = '';
+  }
 }
 
 // ---------------- helpers ----------------
@@ -242,7 +249,7 @@ export function codexPublicModel(profile, slot) {
 const SAFE_MODEL_NAME = /^[A-Za-z0-9._:/-]{1,128}$/;
 // Codex parses a --config value as TOML before it falls back to a string, and the Windows shim passes
 // the name unquoted. A name that TOML reads as a number, a boolean or a date would change type.
-const TOML_NON_STRING = /^([+-]?(0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+|inf|nan|[\d_]+(\.[\d_]+)?(e[+-]?[\d_]+)?)|true|false|[^a-z]*)$/i;
+const TOML_NON_STRING = /^([+-]?(0x[0-9a-f_]+|0o[0-7_]+|0b[01_]+|inf|nan|[\d_]+(\.[\d_]+)?(e[+-]?[\d_]+)?)|true|false|\d{4}-\d{2}-\d{2}([t ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(z|[+-]\d{2}:\d{2})?)?|[^a-z]*)$/i;
 
 export function isSafeModelName(name) {
   return typeof name === 'string' && SAFE_MODEL_NAME.test(name) && !TOML_NON_STRING.test(name);
@@ -547,9 +554,9 @@ function writeAtomic(file, content) {
 const LAUNCH_LOCK = path.join(STATE_DIR, '.launch.lock');
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function lockHolderAlive(file) {
-  const pid = parseInt(fs.readFileSync(file, 'utf8'), 10);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+const readLock = () => { try { return fs.readFileSync(LAUNCH_LOCK, 'utf8'); } catch { return null; } };
+
+function pidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -560,24 +567,34 @@ function lockHolderAlive(file) {
 
 // The CLI and the gateway both write the launch files, one file at a time. Without turns, two writers
 // that overlap leave env.sh from one state and env-codex.sh from another. The writes take milliseconds,
-// so a holder that keeps the lock for 5 s, or no longer runs, is taken over.
+// so a holder that no longer runs, or that keeps the lock for 5 s, is taken over.
 function withLaunchLock(fn) {
-  for (let waited = 0; ; waited += 25) {
-    try {
-      fs.writeFileSync(LAUNCH_LOCK, String(process.pid), { flag: 'wx', mode: 0o600 });
-      break;
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-      let alive = true;
-      try { alive = lockHolderAlive(LAUNCH_LOCK); } catch {}
-      if (!alive || waited >= 5000) fs.rmSync(LAUNCH_LOCK, { force: true });
-      else pause(25);
+  const mine = String(process.pid);
+  const tmp = `${LAUNCH_LOCK}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, mine, { mode: 0o600 });
+  try {
+    for (let waited = 0; ; waited += 25) {
+      try {
+        // link, not create-then-write: the lock never exists without the holder's pid in it.
+        fs.linkSync(tmp, LAUNCH_LOCK);
+        break;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        const holder = readLock();
+        const pid = parseInt(holder, 10);
+        const stale = (Number.isInteger(pid) && pid > 0 && !pidAlive(pid)) || waited >= 5000;
+        // Remove only the lock that was judged stale; another taker may have replaced it already.
+        if (stale && readLock() === holder) fs.rmSync(LAUNCH_LOCK, { force: true });
+        else pause(25);
+      }
     }
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
   try {
     return fn();
   } finally {
-    fs.rmSync(LAUNCH_LOCK, { force: true });
+    if (readLock() === mine) fs.rmSync(LAUNCH_LOCK, { force: true });
   }
 }
 
@@ -707,21 +724,34 @@ export function identityProof(nonce, { role, port, pid, gatewayPort = '', host =
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // A busy but genuine process can take a moment; a squatter gains nothing from a longer wait.
+// Settles exactly once, on every path. A pending probe holds the gateway's admin chain, so an answer
+// that is too large, or one that trickles without end, must still end the probe.
 function getJson(port, pathname, timeoutMs = 3000) {
   return new Promise(resolve => {
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      req.destroy();
+      resolve(result);
+    };
+    // A listener that never answers can be a hung gateway of ours; the caller must not call it foreign.
+    // The socket timeout restarts on every byte, so the whole probe also has a deadline.
+    const deadline = setTimeout(() => done({ state: 'silent' }), timeoutMs);
     const req = http.get({ host: '127.0.0.1', port, path: pathname, timeout: timeoutMs }, res => {
       let data = '';
       res.setEncoding('utf8');
-      res.on('data', c => { data += c; if (data.length > 65536) req.destroy(); });
+      res.on('data', c => { data += c; if (data.length > 65536) done({ state: 'foreign' }); });
       res.on('end', () => {
         let body = null;
         try { body = JSON.parse(data); } catch {}
-        resolve({ state: 'answered', body });
+        done({ state: 'answered', body });
       });
+      res.on('error', () => done({ state: 'foreign' }));
     });
-    req.on('error', err => resolve({ state: err.code === 'ECONNREFUSED' ? 'free' : 'foreign' }));
-    // A listener that never answers can be a hung gateway of ours; the caller must not call it foreign.
-    req.on('timeout', () => { req.destroy(); resolve({ state: 'silent' }); });
+    req.on('error', err => done({ state: err.code === 'ECONNREFUSED' ? 'free' : 'foreign' }));
+    req.on('timeout', () => done({ state: 'silent' }));
   });
 }
 
@@ -875,19 +905,27 @@ export async function reconcileBlindfold(cfg, gatewayPort) {
   const desired = computeLaunchState(cfg, gatewayPort).blindfold;
   const prev = readBlindfoldState();
   if (!desired) {
-    if (prev?.port) await stopRecordedBlindfold();
+    if (prev?.port) {
+      const stopped = await stopRecordedBlindfold();
+      if (!stopped.ok) return stopped;
+    }
     return { ok: true, action: 'none' };
   }
   // Validate the new interceptor before the old one is stopped: a failed change keeps Codex working.
   const problem = await checkBlindfoldTarget(cfg, gatewayPort);
   if (problem) return { ok: false, error: problem };
-  if (prev?.port && prev.port !== desired.port) await stopRecordedBlindfold();
+  if (prev?.port && prev.port !== desired.port) {
+    const stopped = await stopRecordedBlindfold();
+    if (!stopped.ok) return stopped;
+  }
   const cur = await probeBlindfold(desired.port);
   if (matches(cur, desired, gatewayPort)) {
     writeBlindfoldState({ pid: cur.pid, port: desired.port, gatewayPort, host: desired.host, prefix: desired.prefix });
     return { ok: true, action: 'kept' };
   }
-  if (cur.state === 'ours') await stopBlindfoldAt(desired.port);
+  if (cur.state === 'ours' && !(await stopBlindfoldAt(desired.port))) {
+    return { ok: false, error: `the interceptor on port ${desired.port} did not stop` };
+  }
 
   spawnBlindfold(desired, gatewayPort);
   for (let i = 0; i < 20; i++) {

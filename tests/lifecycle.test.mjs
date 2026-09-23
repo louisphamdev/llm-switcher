@@ -314,3 +314,35 @@ test('concurrent admin changes: a refused change never reaches disk, and no acce
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
+
+// An interceptor that proves its identity but ignores SIGTERM. Reconcile used to report success and
+// forget it (follow-up breaker-2).
+test('reconcile reports an interceptor that does not stop instead of calling it done', { skip: !POSIX && 'posix' }, async () => {
+  const ws = makeWorkspace();
+  const gwPort = await freePort();
+  const bfPort = await freePort();
+  writeConfig(ws, gwPort, bfPort);
+  const fake = spawn(process.execPath, ['--input-type=module', '-e', `
+    const s = await import(${JSON.stringify(path.join(ROOT, 'state.mjs'))});
+    const http = await import('node:http');
+    s.ensureAdminToken();
+    process.on('SIGTERM', () => {});
+    const port = ${bfPort};
+    http.createServer((req, res) => {
+      const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
+      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, host: 'chatgpt.com', prefix: '/backend-api/codex' };
+      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, host: f.host, prefix: f.prefix, proof: s.identityProof(nonce, f) }));
+    }).listen(port, '127.0.0.1');
+  `], { env: envFor(ws), stdio: 'ignore' });
+  try {
+    await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
+    fs.writeFileSync(path.join(ws.dir, 'blindfold.json'), JSON.stringify({ pid: fake.pid, port: bfPort, gatewayPort: gwPort, host: 'chatgpt.com', prefix: '/backend-api/codex' }));
+    const r = await probe(ws, `s.reconcileBlindfold(s.loadConfig(), ${gwPort})`);
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.error, /did not stop/);
+    assert.ok(fs.existsSync(path.join(ws.dir, 'blindfold.json')), 'the record stays while the interceptor runs');
+  } finally {
+    fake.kill('SIGKILL');
+    fs.rmSync(ws.dir, { recursive: true, force: true });
+  }
+});

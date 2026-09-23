@@ -630,3 +630,46 @@ test('launch-file writers take turns through a lock, and a dead holder does not 
   assert.ok(quick < 1000, `a stale lock blocked for ${quick} ms`);
   assert.equal(fs.existsSync(lock), false);
 });
+
+// A probe that never settles held the gateway's admin chain for good (follow-up RACER-1): a listener
+// that answers with more than 64 KB, or one that trickles bytes without end.
+test('probes settle within their deadline for an oversized or a never-ending answer', async (t) => {
+  const http = await import('node:http');
+  const big = http.createServer((req, res) => res.end(Buffer.alloc(100 * 1024, 'x')));
+  const trickle = http.createServer((req, res) => {
+    res.writeHead(200);
+    const timer = setInterval(() => res.write('x'), 500);
+    res.on('close', () => clearInterval(timer));
+  });
+  for (const s of [big, trickle]) await new Promise(r => s.listen(0, '127.0.0.1', r));
+  t.after(() => { big.close(); trickle.close(); big.closeAllConnections?.(); trickle.closeAllConnections?.(); });
+  for (const [s, want] of [[big, 'foreign'], [trickle, 'silent']]) {
+    const started = Date.now();
+    const state = await Promise.race([probeGateway(s.address().port), new Promise(r => setTimeout(() => r('pending'), 5000))]);
+    assert.equal(state, want);
+    assert.ok(Date.now() - started < 3600, `settled after ${Date.now() - started} ms`);
+  }
+});
+
+test('isSafeModelName refuses TOML date-times with T and Z', () => {
+  for (const bad of ['2024-01-01T00:00:00Z', '1979-05-27T07:32:00', '1979-05-27 07:32:00+07:00', '1979-05-27t07:32:00.5z']) {
+    assert.equal(isSafeModelName(bad), false, bad);
+  }
+});
+
+// An empty lock file is a writer between create and write. Taking it over let two writers in
+// (follow-up RACER-2).
+test('an empty launch lock is held, not taken over', async (t) => {
+  const { dir, env } = tmpDirs(t);
+  const lock = path.join(dir, '.launch.lock');
+  fs.writeFileSync(lock, '');
+  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
+  const waited = await new Promise((resolve, reject) => {
+    execFileCb(process.execPath, ['--input-type=module', '-e',
+      `const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))}); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
+    { env: { ...process.env, LLM_SWITCHER_PORT: '', ...env }, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(Number(out.trim()))));
+  });
+  // Taken over at once, the write would take a few ms.
+  assert.ok(waited >= 100 && waited < 4000, `the writer waited ${waited} ms`);
+  assert.equal(fs.existsSync(lock), false);
+});
