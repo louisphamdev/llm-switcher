@@ -391,3 +391,26 @@ test('a dashboard change never overwrites a config.json that another process sav
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
+
+// An interceptor that comes up after the 5 s wait was neither recorded nor stopped, so it ran on with
+// nothing able to find it (follow-up racer, next-time note).
+test('reconcile stops an interceptor that comes up too late instead of leaving it unrecorded', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
+  const ws = makeWorkspace({ certs: true });
+  const gwPort = await freePort();
+  const bfPort = await freePort();
+  writeConfig(ws, gwPort, bfPort, 'bf');
+  const slow = `--import=data:text/javascript,${encodeURIComponent("if ((process.argv[1] || '').endsWith('blindfold.mjs')) { const end = Date.now() + 7000; while (Date.now() < end) {} }")}`;
+  const gw = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(gwPort)], { env: { ...envFor(ws), NODE_OPTIONS: slow }, stdio: 'ignore' });
+  try {
+    await new Promise(r => setTimeout(r, 13000));
+    const state = await probe(ws, `s.probeBlindfold(${bfPort})`);
+    assert.equal(state.state, 'free', 'no interceptor runs unrecorded on the port');
+  } finally {
+    gw.kill();
+    try {
+      const st = await probe(ws, `s.probeBlindfold(${bfPort})`);
+      if (st.state === 'ours') process.kill(st.pid, 'SIGKILL');
+    } catch {}
+    fs.rmSync(ws.dir, { recursive: true, force: true });
+  }
+});

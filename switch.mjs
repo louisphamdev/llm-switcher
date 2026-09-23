@@ -266,9 +266,12 @@ async function changePort(newPortStr) {
   if (process.env.LLM_SWITCHER_PORT) {
     console.log(`[WARN] LLM_SWITCHER_PORT env var is set and overrides config.json.`);
   }
-  // A gateway that does not come up on the new port puts config.json and the gateway back.
+  // A gateway that does not come up on the new port puts config.json and the gateway back. A detached
+  // gateway that was started for the new port is stopped first: it may still come up after the wait.
+  let startedPid = null;
   const rollBack = async (why) => {
     console.error(`[Error] ${why}`);
+    if (startedPid) killPid(startedPid);
     const back = loadConfig() || fresh;
     back.port = oldPort;
     saveConfig(back);
@@ -288,7 +291,7 @@ async function changePort(newPortStr) {
     if (!up) await rollBack(`The ${svc} service did not come up on port ${p}. See ${proxyLogPath}.`);
   } else if (wasRunning) {
     console.log(`Restarting gateway on new port ${p}...`);
-    startProxyBackground(p);
+    startedPid = startProxyBackground(p);
     let up = false;
     for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(p); }
     if (!up) await rollBack(`The gateway did not come up on port ${p}. See ${proxyLogPath}.`);

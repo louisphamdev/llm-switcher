@@ -34,9 +34,9 @@ function workspace(t, port, profiles) {
 }
 
 // onLine lets a test act at a precise moment of the run, for example while the CLI waits.
-function run(ws, args, { onLine } = {}) {
+function run(ws, args, { onLine, env = {} } = {}) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [path.join(ROOT, 'switch.mjs'), ...args], { env: ws.env });
+    const child = spawn(process.execPath, [path.join(ROOT, 'switch.mjs'), ...args], { env: { ...ws.env, ...env } });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', d => {
@@ -133,4 +133,24 @@ test('switch on installs no shims when the launch files live outside the checkou
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\[Shim\] Not installed automatically/);
   assert.equal(fs.existsSync(path.join(ws.home, '.llm-switcher', 'bin', 'claude')), false);
+});
+
+// Only the named script starts late: the CLI itself runs at normal speed.
+const slowStart = (script, ms) => ({ NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(`if ((process.argv[1] || '').endsWith('${script}')) { const end = Date.now() + ${ms}; while (Date.now() < end) {} }`)}` });
+
+// A gateway that comes up after the 5 s wait must not stay on the new port after the rollback
+// (follow-up RACER-5).
+test('switch port stops the new gateway it started when it rolls back', { skip: !POSIX && 'posix' }, async (t) => {
+  const port = await freePort();
+  const next = await freePort();
+  const ws = workspace(t, port);
+  assert.equal((await run(ws, ['on', 'plain'])).status, 0);
+  const r = await run(ws, ['port', String(next)], { env: slowStart('proxy.mjs', 7000) });
+  assert.notEqual(r.status, 0, r.stdout);
+  await new Promise(res => setTimeout(res, 8000));
+  const probe = await new Promise(res => {
+    const s = net.connect(next, '127.0.0.1', () => { s.destroy(); res('listening'); });
+    s.on('error', () => res('free'));
+  });
+  assert.equal(probe, 'free', 'nothing listens on the abandoned port');
 });

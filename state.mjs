@@ -880,6 +880,7 @@ function spawnBlindfold(desired, gatewayPort) {
   ], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
   child.unref();
   fs.closeSync(log);
+  return child.pid;
 }
 
 /** null when the interceptor that cfg asks for can run, otherwise the reason. No side effects. */
@@ -927,7 +928,7 @@ export async function reconcileBlindfold(cfg, gatewayPort) {
     return { ok: false, error: `the interceptor on port ${desired.port} did not stop` };
   }
 
-  spawnBlindfold(desired, gatewayPort);
+  const pid = spawnBlindfold(desired, gatewayPort);
   for (let i = 0; i < 20; i++) {
     await sleep(250);
     const now = await probeBlindfold(desired.port);
@@ -936,5 +937,7 @@ export async function reconcileBlindfold(cfg, gatewayPort) {
       return { ok: true, action: 'started' };
     }
   }
+  // Stop the child it started: coming up later, it would run with no record that could find it.
+  killVerified(pid);
   return { ok: false, error: `The interceptor did not come up on port ${desired.port}. See blindfold.log.` };
 }
