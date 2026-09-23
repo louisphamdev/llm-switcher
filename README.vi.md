@@ -431,7 +431,7 @@ switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) v�
 ```
 
 
-Service chạy không qua shell của anh. Vì vậy `switch service install` chép `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
+Service không chạy trong shell của bạn. Vì vậy `switch service install` chép `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
 ### Phiên mở lại (`--resume`) và cơ chế shim — quan trọng
 
 `switch on` ghi `env.sh` / `env.cmd` và **chủ động xoá** các biến proxy khỏi
