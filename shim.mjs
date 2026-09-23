@@ -34,7 +34,7 @@ export const SHIM_DIR = path.join(os.homedir(), '.llm-switcher', 'bin');
 // publicModels, so it holds official OpenAI slugs only. It gives Codex the metadata
 // for the names it requests (otherwise the CLI falls back to full-context mode) and
 // it is what the /model picker renders — the picker never calls /v1/models.
-// Forward slashes: safe for both `if exist` and TOML strings.
+// Forward slashes for the TOML value. The Windows `if exist` test uses the native path instead.
 export const CODE_X_CATALOG_PATH = ROOT_DIR.replace(/\\/g, '/') + '/model-catalog.json';
 
 // CLIs to wrap. `claude` is the most important case (--resume), codex included for completeness.
@@ -110,7 +110,7 @@ ${name === 'codex' ? `REM Codex-only variables (blindfold proxy + CA). The claud
 if exist "%SWITCHER_DIR%\\active.flag" if exist "%SWITCHER_DIR%\\env-codex.cmd" call "%SWITCHER_DIR%\\env-codex.cmd"
 set "CODEX_SWITCHER_ARGS="
 if defined LLM_SWITCHER_CODEX_BASE_URL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config openai_base_url=%LLM_SWITCHER_CODEX_BASE_URL%"
-if exist "${CODE_X_CATALOG_PATH}" set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model_catalog_json=${CODE_X_CATALOG_PATH}"
+if exist "%SWITCHER_DIR%\\model-catalog.json" set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model_catalog_json=${CODE_X_CATALOG_PATH}"
 if defined LLM_SWITCHER_CODEX_MAIN_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model=%LLM_SWITCHER_CODEX_MAIN_MODEL%"
 if defined LLM_SWITCHER_CODEX_REVIEW_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config review_model=%LLM_SWITCHER_CODEX_REVIEW_MODEL%"
 if defined LLM_SWITCHER_CODEX_SUBAGENT_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config agents.default_subagent_model=%LLM_SWITCHER_CODEX_SUBAGENT_MODEL%"

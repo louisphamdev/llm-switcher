@@ -172,3 +172,10 @@ test('Windows PATH advice never uses setx or %PATH%, and names no POSIX rc file'
   assert.ok(line.includes(SHIM_DIR));
   assert.deepEqual(suggestedRcFiles('win32'), []);
 });
+
+// cmd.exe `if exist` is only sure to work with the native backslash path; the TOML value keeps '/'.
+test('the Windows shim tests the catalog with a native path', () => {
+  const body = renderShim('codex', 'win32');
+  assert.match(body, /if exist "%SWITCHER_DIR%\\model-catalog\.json"/);
+  assert.match(body, /--config model_catalog_json=[^\r\n]*\/model-catalog\.json/);
+});
