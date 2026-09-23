@@ -522,7 +522,8 @@ trong `PATH`.
 ## Mô hình Bảo mật
 
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
-- API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới.
+- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. `switch ui` mở dashboard kèm token này, MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
+- API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được dùng với `baseURL` đã lưu của chính profile đó.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream; chỉ các header tracing (`x-*`, `traceparent`) được passthrough.
 - `config.json` được ghi atomic; `~/.claude/settings.json` chỉ bị ghi lại khi thực sự còn biến proxy cũ.
 

@@ -8,7 +8,7 @@ import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState, certCoversHost,
-  modelSlotsForProfile, modelForSlot, model1MForSlot
+  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken
 } from './state.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
@@ -394,9 +394,11 @@ async function showStatus() {
 async function openUI() {
   const port = getTargetPort();
   await ensureProxyRunning(port);
+  // The token travels in the fragment: the browser never sends it to the server in the URL,
+  // and the dashboard moves it to localStorage and clears the address bar.
   const url = `http://127.0.0.1:${port}/ui`;
   console.log(`Opening Web UI: ${url}`);
-  openBrowser(url);
+  openBrowser(`${url}#token=${readAdminToken() || ''}`);
 }
 
 function xmlEscape(s) {

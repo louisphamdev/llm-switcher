@@ -51,6 +51,34 @@ export const configPath = process.env.LLM_SWITCHER_CONFIG
   ? path.resolve(process.env.LLM_SWITCHER_CONFIG)
   : path.join(ROOT_DIR, 'config.json');
 
+// Any local process can reach loopback, so /api/* needs a secret that only the owner can read.
+// It lives next to config.json so a test config in a temp dir gets its own token.
+export const adminTokenPath = path.join(path.dirname(configPath), 'admin.token');
+
+export function readAdminToken() {
+  try {
+    return fs.readFileSync(adminTokenPath, 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function ensureAdminToken() {
+  const current = readAdminToken();
+  if (current) {
+    try { fs.chmodSync(adminTokenPath, 0o600); } catch {}
+    return current;
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(adminTokenPath, `${token}\n`, { mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if (err.code === 'EEXIST') return readAdminToken();
+    throw err;
+  }
+  return token;
+}
+
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 export const claudeSettingsPath = path.join(claudeDir, 'settings.json');
 

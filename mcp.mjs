@@ -11,7 +11,10 @@
 // ============================================================
 
 import fs from 'node:fs';
-import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort } from './state.mjs';
+import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken } from './state.mjs';
+
+// /api/* requires the per-install token that the gateway writes next to config.json.
+const adminHeaders = (extra = {}) => ({ 'x-llm-switcher-token': readAdminToken() || '', ...extra });
 
 function loadConfig() {
   return loadSharedConfig() || { port: 3456, activeProfile: '', profiles: {} };
@@ -23,7 +26,7 @@ function getMcpPort() {
 
 async function fetchStatus(port) {
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: adminHeaders(), signal: AbortSignal.timeout(1500) });
     if (r.ok) return await r.json();
   } catch {}
   return null;
@@ -31,7 +34,7 @@ async function fetchStatus(port) {
 
 async function fetchLogs(port) {
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/api/logs`, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`http://127.0.0.1:${port}/api/logs`, { headers: adminHeaders(), signal: AbortSignal.timeout(1500) });
     if (r.ok) return (await r.json()).logs || [];
   } catch {}
   return [];
@@ -40,7 +43,7 @@ async function fetchLogs(port) {
 async function postSwitch(port, target, profile) {
   const r = await fetch(`http://127.0.0.1:${port}/api/switch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ target, profile: profile || null }),
     signal: AbortSignal.timeout(5000)
   });

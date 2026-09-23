@@ -1156,6 +1156,24 @@
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
+    // /api/* needs the per-install admin token. `switch ui` passes it in the URL fragment, which
+    // the browser never sends to the server; keep it here and clear the address bar.
+    const ADMIN_TOKEN_KEY = 'llmSwitcherAdminToken';
+    (() => {
+      const m = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
+      if (m) {
+        localStorage.setItem(ADMIN_TOKEN_KEY, m[1]);
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+    })();
+
+    async function api(path, opts = {}) {
+      const headers = { ...(opts.headers || {}), 'x-llm-switcher-token': localStorage.getItem(ADMIN_TOKEN_KEY) || '' };
+      const res = await fetch(path, { ...opts, headers });
+      if (res.status === 401) showToast('Not authorized. Open the dashboard with `switch ui`.', true);
+      return res;
+    }
+
     let state = {
       config: null,
       activeProfile: '',
@@ -1432,7 +1450,7 @@
 
     async function loadStatus() {
       try {
-        const res = await fetch('/api/status');
+        const res = await api('/api/status');
         const data = await res.json();
         if (!res.ok) {
           showToast(data.error || `Gateway error HTTP ${res.status}`, true);
@@ -1616,7 +1634,7 @@
     async function switchCliTarget(target, profileKey) {
       showToast(`Setting ${target} active profile...`);
       try {
-        const res = await fetch('/api/switch', {
+        const res = await api('/api/switch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ target, profile: profileKey || null })
@@ -1637,7 +1655,7 @@
       if (isChecked) {
         showToast(`Activating provider "${key}"...`);
         try {
-          const res = await fetch('/api/switch', {
+          const res = await api('/api/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ profile: key })
@@ -1657,7 +1675,7 @@
       } else {
         showToast(`Deactivating provider "${key}"...`);
         try {
-          const res = await fetch('/api/switch', {
+          const res = await api('/api/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ deactivate: key })
@@ -1851,7 +1869,7 @@
       btn.disabled = true;
 
       try {
-        const res = await fetch('/api/fetch-models', {
+        const res = await api('/api/fetch-models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ baseURL, apiKey, key: formLoadedKey })
@@ -1949,7 +1967,7 @@
       const nextState = !isAnyTargetActive();
       showToast(nextState ? 'Activating compatible routes...' : 'Restoring official endpoints...');
       try {
-        const res = await fetch('/api/toggle', {
+        const res = await api('/api/toggle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: nextState })
@@ -1991,7 +2009,7 @@
       collectCodexValues(profile);
 
       try {
-        const res = await fetch('/api/save-profile', {
+        const res = await api('/api/save-profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, profile })
@@ -2017,7 +2035,7 @@
       if (!confirm(`Are you sure you want to delete provider "${key}"?`)) return;
 
       try {
-        const res = await fetch('/api/delete-profile', {
+        const res = await api('/api/delete-profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key })
@@ -2056,7 +2074,7 @@
         const modelInput = document.getElementById(`p-${primarySlotId}`) || document.getElementById('p-sonnet') || document.getElementById('p-opus');
         const testModel = (modelInput?.value || '').trim() || 'default';
 
-        const res = await fetch('/api/test-upstream', {
+        const res = await api('/api/test-upstream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2116,7 +2134,7 @@
 
     async function loadInspectorLogs() {
       try {
-        const res = await fetch('/api/logs');
+        const res = await api('/api/logs');
         const data = await res.json();
         const container = document.getElementById('inspector-logs-container');
         if (!container) return;
@@ -2172,7 +2190,7 @@
 
     async function clearInspectorLogs() {
       try {
-        await fetch('/api/logs/clear', { method: 'POST' });
+        await api('/api/logs/clear', { method: 'POST' });
         loadInspectorLogs();
         showToast('Logs cleared');
       } catch (err) {

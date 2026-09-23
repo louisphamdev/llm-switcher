@@ -11,6 +11,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
+const MASKED = '__LLM_SWITCHER_KEEP_KEY__';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let upstream, upstreamPort, proxy, proxyPort, tmpDir;
@@ -147,7 +149,10 @@ after(() => {
 });
 
 const url = (p) => `http://127.0.0.1:${proxyPort}${p}`;
-const post = (p, body, headers = {}) => fetch(url(p), { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+// The admin API requires the per-install token that the gateway writes next to config.json.
+const adminToken = () => fs.readFileSync(path.join(tmpDir, 'admin.token'), 'utf8').trim();
+const withToken = (p, headers) => (p.startsWith('/api/') ? { 'x-llm-switcher-token': adminToken(), ...headers } : headers);
+const post = (p, body, headers = {}) => fetch(url(p), { method: 'POST', headers: withToken(p, { 'Content-Type': 'application/json', ...headers }), body: JSON.stringify(body) });
 
 function parseSSE(text) {
   return text.split(/\n\n/).filter(Boolean).map(block => {
@@ -468,12 +473,55 @@ test('Security: foreign Host / Origin are rejected (DNS rebinding & CSRF)', asyn
   assert.equal(csrf.status, 403);
   const otherLocalApp = await rawRequest({ path: '/api/status', headers: { origin: 'http://localhost:5173' } });
   assert.equal(otherLocalApp.status, 403);
-  const ok = await rawRequest({ path: '/api/status', headers: { origin: `http://127.0.0.1:${proxyPort}` } });
+  const ok = await rawRequest({ path: '/api/status', headers: { origin: `http://127.0.0.1:${proxyPort}`, 'x-llm-switcher-token': adminToken() } });
   assert.equal(ok.status, 200);
 });
 
+// Any local process can reach loopback. Without a token it must get nothing from /api/*,
+// and a masked key must never be resolved for a baseURL the profile does not have.
+test('Security: the admin API refuses a caller without the token and changes nothing', async () => {
+  const hits = [];
+  const sink = http.createServer((req, res) => { hits.push(req.headers); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[]}'); });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  const sinkURL = `http://127.0.0.1:${sink.address().port}`;
+  try {
+    const before = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8');
+    const calls = [
+      ['GET', '/api/status'], ['GET', '/api/logs'], ['POST', '/api/logs/clear', {}],
+      ['POST', '/api/switch', { profile: 'chat' }], ['POST', '/api/toggle', { enabled: false }],
+      ['POST', '/api/save-profile', { key: 'chat', profile: { baseURL: sinkURL, apiKey: MASKED } }],
+      ['POST', '/api/delete-profile', { key: 'chat' }],
+      ['POST', '/api/test-upstream', { key: 'chat', apiKey: MASKED, baseURL: sinkURL }],
+      ['POST', '/api/fetch-models', { key: 'chat', apiKey: MASKED, baseURL: sinkURL }]
+    ];
+    for (const [method, p, body] of calls) {
+      for (const token of [undefined, 'wrong-token']) {
+        const headers = { 'Content-Type': 'application/json', ...(token ? { 'x-llm-switcher-token': token } : {}) };
+        const r = await fetch(url(p), { method, headers, body: body ? JSON.stringify(body) : undefined });
+        assert.equal(r.status, 401, `${method} ${p} token=${token}`);
+      }
+    }
+    assert.equal(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8'), before, 'config.json is unchanged');
+    assert.equal(hits.length, 0, 'no request reached the sink');
+
+    // With the token, a masked key still stays home when the baseURL is not the stored one.
+    await post('/api/fetch-models', { key: 'chat', apiKey: MASKED, baseURL: sinkURL });
+    assert.equal(hits.length, 1);
+    assert.ok(!JSON.stringify(hits[0]).includes('sk-secret-chat'), 'the stored key is not sent to a foreign baseURL');
+
+    for (const p of ['/', '/ui']) {
+      const page = await (await fetch(url(p))).text();
+      assert.ok(!page.includes(adminToken()), `${p} must not embed the token`);
+    }
+    assert.equal((await fetch(url('/health'))).status, 200, '/health needs no token');
+    assert.equal((fs.statSync(path.join(tmpDir, 'admin.token')).mode & 0o777).toString(8), '600');
+  } finally {
+    sink.close();
+  }
+});
+
 test('Admin API: keys are redacted and invalid switch input is rejected', async () => {
-  const status = await (await fetch(url('/api/status'))).json();
+  const status = await (await fetch(url('/api/status'), { headers: withToken('/api/status', {}) })).json();
   assert.ok(!JSON.stringify(status).includes('sk-secret'));
   assert.equal(status.config.profiles.chat.hasApiKey, true);
 

@@ -524,7 +524,8 @@ re-opened from a shell where the shim is on `PATH`.
 ## Security Model
 
 - The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
-- API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one.
+- The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. `switch ui` opens the dashboard with this token, and the MCP server reads the file. `/v1/*` and `/health` need no token.
+- API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key is used only with the stored `baseURL` of that profile.
 - Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams; only tracing headers (`x-*`, `traceparent`) are passed through.
 - `config.json` is written atomically; `~/.claude/settings.json` is only rewritten when it actually contains stale proxy variables.
 

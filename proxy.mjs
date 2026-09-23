@@ -15,7 +15,8 @@ import {
   TARGETS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
-  modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS
+  modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
+  ensureAdminToken
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -185,6 +186,15 @@ function checkRequestOrigin(req) {
     }
   }
   return null;
+}
+
+// The Host/Origin guard stops browser pages only. A local process that is not the owner must
+// also present the token from admin.token (mode 0600) to use /api/*.
+const ADMIN_TOKEN = Buffer.from(ensureAdminToken());
+
+function isAdminRequest(req) {
+  const given = Buffer.from(String(req.headers['x-llm-switcher-token'] || ''));
+  return given.length === ADMIN_TOKEN.length && crypto.timingSafeEqual(given, ADMIN_TOKEN);
 }
 
 function readBody(req, limit) {
@@ -902,9 +912,15 @@ function validateProfileInput(p) {
 }
 
 // API keys are masked with MASKED_KEY in the UI; if the client sends back the masked value, reuse the stored real key.
-function resolveApiKey(cfg, profileKey, apiKey) {
-  if (apiKey === MASKED_KEY) return hasProfile(cfg, profileKey) ? (cfg.profiles[profileKey].apiKey || '') : '';
-  return apiKey || '';
+// Only for the stored baseURL: otherwise the masked value would send the real key to any host the caller names.
+const sameBaseURL = (a, b) => String(a || '').replace(/\/+$/, '') === String(b || '').replace(/\/+$/, '');
+
+function resolveApiKey(cfg, profileKey, apiKey, baseURL) {
+  if (apiKey !== MASKED_KEY) return apiKey || '';
+  if (!hasProfile(cfg, profileKey)) return '';
+  const stored = cfg.profiles[profileKey];
+  if (baseURL !== undefined && !sameBaseURL(baseURL, stored.baseURL)) return '';
+  return stored.apiKey || '';
 }
 
 function upstreamTimeout(ms) {
@@ -914,7 +930,7 @@ function upstreamTimeout(ms) {
 async function testUpstream(body, cfg) {
   const baseURL = String(body.baseURL || '').replace(/\/+$/, '');
   if (!baseURL) return { status: 400, json: { ok: false, error: 'Missing baseURL' } };
-  const apiKey = resolveApiKey(cfg, body.key, body.apiKey);
+  const apiKey = resolveApiKey(cfg, body.key, body.apiKey, baseURL);
   const model = body.model || 'default';
   const profile = { baseURL, apiKey, mode: body.mode, outFormat: body.outFormat || undefined };
   const outFormat = resolveOutFormat(profile, model);
@@ -934,7 +950,7 @@ async function testUpstream(body, cfg) {
 async function fetchModels(body, cfg) {
   const baseURL = String(body.baseURL || '').replace(/\/+$/, '');
   if (!baseURL) return { status: 400, json: { ok: false, error: 'Missing baseURL' } };
-  const apiKey = resolveApiKey(cfg, body.key, body.apiKey);
+  const apiKey = resolveApiKey(cfg, body.key, body.apiKey, baseURL);
   const headers = {};
   if (apiKey) {
     headers['Authorization'] = `Bearer ${apiKey}`;
@@ -1072,6 +1088,10 @@ async function route(req, res) {
   }
 
   if (pathname.startsWith('/api/')) {
+    if (!isAdminRequest(req)) {
+      req.resume();
+      return sendJson(res, 401, { error: 'Unauthorized: send the x-llm-switcher-token header. Open the dashboard with `switch ui`.' });
+    }
     return routeApi(req, res, method, pathname);
   }
 
@@ -1220,7 +1240,8 @@ async function routeApi(req, res, method, pathname) {
     const existing = hasProfile(cfg, key) ? cfg.profiles[key] : {};
     // Merge so unmanaged UI fields are not lost (e.g. `endpoints`).
     const merged = { ...existing, ...profile };
-    merged.apiKey = resolveApiKey(cfg, key, profile.apiKey);
+    // A payload without apiKey keeps the stored key; only an explicit value replaces it.
+    merged.apiKey = Object.hasOwn(profile, 'apiKey') ? resolveApiKey(cfg, key, profile.apiKey, profile.baseURL) : (existing.apiKey || '');
     for (const k of ['outFormat', 'optimizerURL', 'thinkingMode']) {
       if (Object.hasOwn(profile, k) && !profile[k]) delete merged[k];
     }
