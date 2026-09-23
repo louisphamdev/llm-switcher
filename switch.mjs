@@ -38,16 +38,21 @@ const TARGET_ALIASES = {
   vertex: 'vertex', gemini: 'vertex'
 };
 
-// Strip --port/-p flags from positional args.
+// Strip --port/-p and their value from positional args. -p is the global option everywhere, as in
+// resolvePort; `switch port <n>` is the command that changes the port.
 function positionalArgs() {
   const out = [];
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--port' || (argv[i] === '-p' && i > 0)) { i++; continue; }
+    if (argv[i] === '--port' || argv[i] === '-p') { i++; continue; }
     out.push(argv[i]);
   }
   return out;
 }
+
+// config.json is edited by hand and through the dashboard, so its strings reach the terminal
+// untrusted. A control character could rewrite the screen or the window title.
+const show = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 
 function getTargetPort() {
   return resolvePort(process.argv.slice(2), config);
@@ -128,14 +133,13 @@ async function requestBlindfoldSync(port) {
 }
 
 // With the gateway up it reconciles; with it down only a stop is safe, and stopping never spawns.
-async function syncOrStopBlindfold(port) {
+// When the sync fails and no target wants an interceptor any more, the CLI stops it itself.
+async function syncOrStopBlindfold(port, cfg) {
   if (await checkProxyRunning(port)) {
     const r = await requestBlindfoldSync(port);
-    if (!r.ok) console.warn(`[Blindfold] ${r.error}`);
-    return r;
+    if (r.ok || computeLaunchState(cfg, port).blindfold) return r;
   }
-  await stopRecordedBlindfold();
-  return { ok: true };
+  return stopRecordedBlindfold();
 }
 
 // Same atomic, private write as saveConfig, for bytes that must come back unchanged.
@@ -242,6 +246,9 @@ async function changePort(newPortStr) {
     process.exit(1);
   }
   const oldPort = resolvePort([], config);
+  // Refuse before anything stops: the old gateway keeps running when the new port is taken.
+  const target = await probeGateway(p);
+  if (isHeld(target)) refuseForeignPort(p, 'this switcher', target);
   const svc = installedService();
   const wasRunning = await checkProxyRunning(oldPort);
   // Stop the old gateway even when a service is installed: it may be a copy started outside the unit.
@@ -259,19 +266,32 @@ async function changePort(newPortStr) {
   if (process.env.LLM_SWITCHER_PORT) {
     console.log(`[WARN] LLM_SWITCHER_PORT env var is set and overrides config.json.`);
   }
+  // A gateway that does not come up on the new port puts config.json and the gateway back.
+  const rollBack = async (why) => {
+    console.error(`[Error] ${why}`);
+    const back = loadConfig() || fresh;
+    back.port = oldPort;
+    saveConfig(back);
+    if (svc) installService(oldPort);
+    else if (wasRunning) startProxyBackground(oldPort);
+    let up = !svc && !wasRunning;
+    for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(oldPort); }
+    console.error(`        config.json is back on port ${oldPort}${up ? '' : `, but no gateway answers there. See ${proxyLogPath}`}.`);
+    process.exit(1);
+  };
   if (svc) {
     // The unit fixes the port on its command line, so it is rewritten and restarted, not fought.
     console.log(`Reinstalling the ${svc} service on port ${p}...`);
-    if (!installService(p)) process.exit(1);
+    if (!installService(p)) await rollBack(`The ${svc} service could not be installed for port ${p}.`);
     let up = false;
     for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(p); }
-    if (!up) {
-      console.error(`[Error] The ${svc} service did not come up on port ${p}. See ${proxyLogPath}.`);
-      process.exit(1);
-    }
+    if (!up) await rollBack(`The ${svc} service did not come up on port ${p}. See ${proxyLogPath}.`);
   } else if (wasRunning) {
     console.log(`Restarting gateway on new port ${p}...`);
-    await ensureProxyRunning(p);
+    startProxyBackground(p);
+    let up = false;
+    for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(p); }
+    if (!up) await rollBack(`The gateway did not come up on port ${p}. See ${proxyLogPath}.`);
   }
   reportSettings(applyLaunchState(fresh, p).settings);
   if (await checkProxyRunning(p)) {
@@ -285,20 +305,40 @@ async function changePort(newPortStr) {
 }
 
 function printProfile(profile) {
-  console.log(`Input Target: ${(profile.inFormat || 'auto').toUpperCase()}`);
-  console.log(`Routing:      ${profile.outFormat ? `out=${profile.outFormat}` : `mode=${profile.mode || 'hybrid'}`}`);
-  console.log(`Upstream:     ${profile.baseURL || '(not set)'}`);
+  console.log(`Input Target: ${show(profile.inFormat || 'auto').toUpperCase()}`);
+  console.log(`Routing:      ${profile.outFormat ? `out=${show(profile.outFormat)}` : `mode=${show(profile.mode || 'hybrid')}`}`);
+  console.log(`Upstream:     ${show(profile.baseURL || '(not set)')}`);
   for (const slot of modelSlotsForProfile(profile)) {
     const model = modelForSlot(profile, slot);
-    if (model) console.log(`${(slot[0].toUpperCase() + slot.slice(1) + ':').padEnd(14)}${model}${model1MForSlot(profile, slot) ? '  [1M]' : ''}`);
+    if (model) console.log(`${(slot[0].toUpperCase() + slot.slice(1) + ':').padEnd(14)}${show(model)}${model1MForSlot(profile, slot) ? '  [1M]' : ''}`);
   }
 }
 
 function printTargets(activeMap) {
   const labels = { anthropic: 'Claude Code', responses: 'Codex', 'openai-chat': 'OpenAI Chat', vertex: 'Vertex' };
   for (const t of TARGETS) {
-    console.log(`  ${labels[t].padEnd(12)} (${t.padEnd(11)}) -> ${activeMap[t] || 'OFF (official)'}`);
+    console.log(`  ${labels[t].padEnd(12)} (${t.padEnd(11)}) -> ${activeMap[t] ? show(activeMap[t]) : 'OFF (official)'}`);
   }
+}
+
+// Applies the switch to a copy of `base`. Exits on an error; nothing is written here.
+function planSwitch(base, key, cliTarget) {
+  const planned = structuredClone(base);
+  const err = cliTarget ? setTargetProfile(planned, cliTarget, key) : activateProfile(planned, key);
+  if (err) {
+    console.error(`[Error] ${show(err)}`);
+    process.exit(1);
+  }
+  return planned;
+}
+
+function refuseBlindfoldProblem(planned, port) {
+  const bf = computeLaunchState(planned, port).blindfold;
+  const problem = bf && blindfoldPreflight(bf);
+  if (!problem) return bf;
+  console.error(`[Error] ${problem}`);
+  console.error('        Or set "blindfold": false in the profile. Nothing was changed.');
+  process.exit(1);
 }
 
 async function turnOn(profileName, cliTarget) {
@@ -306,48 +346,52 @@ async function turnOn(profileName, cliTarget) {
   const wanted = profileName || config.activeProfile || Object.keys(config.profiles)[0];
   const key = findProfileKey(config, wanted);
   if (!key) {
-    console.error(`[Error] Profile "${wanted}" not found in config.json!`);
-    console.error(`Available profiles: ${Object.keys(config.profiles).join(', ') || '(none)'}`);
+    console.error(`[Error] Profile "${show(wanted)}" not found in config.json!`);
+    console.error(`Available profiles: ${show(Object.keys(config.profiles).join(', ')) || '(none)'}`);
     process.exit(1);
   }
 
   // Plan on a copy. Nothing is written until every check below passes.
-  const planned = structuredClone(config);
-  const err = cliTarget ? setTargetProfile(planned, cliTarget, key) : activateProfile(planned, key);
-  if (err) {
-    console.error(`[Error] ${err}`);
-    process.exit(1);
-  }
-  const profile = planned.profiles[key];
-  console.log(`Activating profile: [${profile.name || key}] (${key})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
+  let planned = planSwitch(config, key, cliTarget);
+  console.log(`Activating profile: [${show(planned.profiles[key].name || key)}] (${show(key)})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
 
   const gatewayState = await probeGateway(port);
   if (isHeld(gatewayState)) refuseForeignPort(port, 'this switcher', gatewayState);
-  const plannedState = computeLaunchState(planned, port);
-  if (plannedState.blindfold) {
-    const problem = blindfoldPreflight(plannedState.blindfold);
-    if (problem) {
-      console.error(`[Error] ${problem}`);
-      console.error('        Or set "blindfold": false in the profile. Nothing was changed.');
-      process.exit(1);
-    }
-    const held = (await probeBlindfold(plannedState.blindfold.port)).state;
-    if (isHeld(held)) refuseForeignPort(plannedState.blindfold.port, "this switcher's blindfold interceptor", held);
+  const plannedBlindfold = refuseBlindfoldProblem(planned, port);
+  if (plannedBlindfold) {
+    const held = (await probeBlindfold(plannedBlindfold.port)).state;
+    if (isHeld(held)) refuseForeignPort(plannedBlindfold.port, "this switcher's blindfold interceptor", held);
   }
   await ensureProxyRunning(port);
 
+  // Plan again on the file as it is now: a dashboard save made while the gateway started must survive.
+  const current = loadConfig();
+  if (!current || getConfigLoadError()) {
+    console.error(`[Error] config.json does not parse any more: ${getConfigLoadError()?.message}. Nothing was changed.`);
+    process.exit(1);
+  }
+  planned = planSwitch(current, key, cliTarget);
+  refuseBlindfoldProblem(planned, port);
+  const profile = planned.profiles[key];
+
   const previousBytes = fs.readFileSync(configPath);
   saveConfig(planned);
+  const savedBytes = fs.readFileSync(configPath);
   const st = applyLaunchState(planned, port);
   reportSettings(st.settings);
   const bf = await requestBlindfoldSync(port);
   if (!bf.ok) {
-    // Put back exactly what was there. clearLaunchState would also switch off unrelated targets
+    console.error(`[Error] ${bf.error}`);
+    // Put back exactly what was there, unless another writer saved in the meantime: then its
+    // change wins and nothing is restored. clearLaunchState would also switch off unrelated targets
     // and run the settings.json cleaner, so the previous state is re-applied instead.
+    if (!fs.readFileSync(configPath).equals(savedBytes)) {
+      console.error('        config.json changed while the interceptor started, so it is not restored. Check it, then run the command again.');
+      process.exit(1);
+    }
     restoreConfigBytes(previousBytes);
     applyLaunchState(JSON.parse(previousBytes.toString('utf8')), port, { cleanSettings: false });
     const back = await requestBlindfoldSync(port);
-    console.error(`[Error] ${bf.error}`);
     console.error('        The previous config.json and launcher files are restored.');
     if (!back.ok) console.error(`        The previous interceptor did not come back: ${back.error}`);
     process.exit(1);
@@ -356,7 +400,8 @@ async function turnOn(profileName, cliTarget) {
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
   try {
-    const { installed } = installShims();
+    const { installed, error } = installShims();
+    if (error) console.warn(`[Shim] ${error}`);
     const sh = shimStatus();
     if (installed.length) console.log(`\n[Shim] Installed launcher shims: ${installed.join(', ')}`);
     if (!sh.onPath) {
@@ -365,9 +410,11 @@ async function turnOn(profileName, cliTarget) {
       console.log(rc ? `       Add this line to ${rc} and open a new terminal:` : '       Run this command once, then open a new terminal:');
       console.log(`           ${pathExportLine()}`);
     }
-  } catch {}
+  } catch (err) {
+    console.warn(`[Shim] ${err.message}`);
+  }
 
-  console.log(`\n[SUCCESS] Switched to profile "${profile.name || key}".`);
+  console.log(`\n[SUCCESS] Switched to profile "${show(profile.name || key)}".`);
   printProfile(profile);
   console.log('\nActive targets:');
   printTargets(getActiveMap(planned));
@@ -387,7 +434,11 @@ async function turnOff(targetArg) {
     saveConfig(config);
     const st = applyLaunchState(config, port);
     reportSettings(st.settings);
-    await syncOrStopBlindfold(port);
+    const bf = await syncOrStopBlindfold(port, config);
+    if (!bf.ok) {
+      console.error(`[Error] ${target} is switched back, but the blindfold interceptor is not in line: ${bf.error}`);
+      process.exit(1);
+    }
     console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
     printTargets(getActiveMap(config));
     return;
@@ -397,7 +448,8 @@ async function turnOff(targetArg) {
   deactivateAll(config);
   saveConfig(config);
   reportSettings(clearLaunchState(port));
-  await syncOrStopBlindfold(port);
+  const bf = await syncOrStopBlindfold(port, config);
+  if (!bf.ok) console.error(`[Error] The blindfold interceptor did not stop: ${bf.error}`);
   const result = await stopProxy(port);
   if (result === 'still-running') {
     console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
@@ -410,6 +462,7 @@ async function turnOff(targetArg) {
     process.exit(1);
   }
   console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
+  if (!bf.ok) process.exit(1);
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
 }
 
@@ -447,7 +500,7 @@ async function showStatus() {
   console.log('\nAvailable profiles:');
   for (const [key, p] of Object.entries(config.profiles)) {
     const mark = Object.values(activeMap).includes(key) ? '* ' : '  ';
-    console.log(`${mark}${key.padEnd(20)} : [${p.inFormat || 'auto'}->${p.outFormat || p.mode || 'hybrid'}] ${p.name || ''} (${p.baseURL || 'no baseURL'})`);
+    console.log(`${mark}${show(key).padEnd(20)} : [${show(p.inFormat || 'auto')}->${show(p.outFormat || p.mode || 'hybrid')}] ${show(p.name)} (${show(p.baseURL || 'no baseURL')})`);
   }
 }
 
@@ -636,9 +689,12 @@ async function manageShim(action = 'status') {
   }
 
   if (act === 'uninstall' || act === 'off' || act === 'remove') {
-    const { removed } = uninstallShims();
-    console.log(removed.length ? `[OK] Removed shims: ${removed.join(', ')}` : '[INFO] No switcher shims found.');
+    const { removed, failed } = uninstallShims();
+    if (removed.length) console.log(`[OK] Removed shims: ${removed.join(', ')}`);
+    for (const f of failed) console.error(`[Error] Could not remove the ${f.name} shim: ${f.reason}`);
+    if (!removed.length && !failed.length) console.log('[INFO] No switcher shims found.');
     console.log(`You may also remove the PATH line for ${SHIM_DIR} from your shell rc.`);
+    if (failed.length) process.exit(1);
     return;
   }
 
@@ -685,8 +741,8 @@ async function runDoctor() {
   for (const [t, key] of Object.entries(activeMap)) {
     if (!key) continue;
     const p = config.profiles[key];
-    if (!p) warn(`[WARN] Target ${t} points to missing profile "${key}".`);
-    else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${key}" (${t}) still has placeholder baseURL/apiKey.`);
+    if (!p) warn(`[WARN] Target ${t} points to missing profile "${show(key)}".`);
+    else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${show(key)}" (${t}) still has placeholder baseURL/apiKey.`);
   }
 
   // 3. Launcher flags match proxy state
@@ -767,7 +823,7 @@ const cmd = rawCmd.toLowerCase();
 
 if (cmd === 'off' || cmd === 'stop') {
   await turnOff(subArg);
-} else if (cmd === 'port' || cmd === '-p') {
+} else if (cmd === 'port') {
   await changePort(subArg);
 } else if (cmd === 'doctor' || cmd === 'audit') {
   await runDoctor();

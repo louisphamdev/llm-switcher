@@ -1,0 +1,124 @@
+// CLI tests: switch.mjs runs as a child with its own config, launch files and Claude dir
+// (audit F06, BR-02, F27, F30, F46).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const POSIX = process.platform !== 'win32';
+
+const freePort = () => new Promise(r => {
+  const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); });
+});
+
+function workspace(t, port, profiles) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cli-'));
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({
+    port, activeProfiles: { anthropic: null, responses: null, 'openai-chat': null, vertex: null },
+    profiles: profiles || { plain: { name: 'Plain', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } } }
+  }, null, 2), { mode: 0o600 });
+  const ws = { dir, cfgPath, env: { ...process.env, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: path.join(dir, 'claude'), LLM_SWITCHER_PORT: '', PORT: '' } };
+  t.after(async () => {
+    await run(ws, ['off']).catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return ws;
+}
+
+// onLine lets a test act at a precise moment of the run, for example while the CLI waits.
+function run(ws, args, { onLine } = {}) {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [path.join(ROOT, 'switch.mjs'), ...args], { env: ws.env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => {
+      stdout += d;
+      if (onLine) for (const line of String(d).split('\n')) onLine(line);
+    });
+    child.stderr.on('data', d => { stderr += d; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30000);
+    child.on('close', code => { clearTimeout(timer); resolve({ status: code, stdout, stderr }); });
+  });
+}
+
+const readCfg = (ws) => JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+
+test('profile names are printed without terminal control sequences', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = workspace(t, await freePort(), {
+    evil: { name: 'Evil\u001b[2J\u001b]0;pwned\u0007', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1\u001b[31m', apiKey: 'k', defaultModels: { opus: 'o' } }
+  });
+  const r = await run(ws, ['status']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(r.stdout), JSON.stringify(r.stdout));
+  assert.match(r.stdout, /Evil/);
+});
+
+test('-p is the global port option at any position, never the port command', { skip: !POSIX && 'posix' }, async (t) => {
+  const port = await freePort();
+  const other = await freePort();
+  const ws = workspace(t, port);
+  const r = await run(ws, ['-p', String(other), 'status']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /=== LLM Switcher Status ===/);
+  assert.match(r.stdout, new RegExp(`/ui`));
+  assert.ok(r.stdout.includes(`:${other}/ui`), r.stdout);
+  assert.equal(readCfg(ws).port, port, 'config.json keeps its port');
+});
+
+test('switch on keeps a change that another writer saved while it waited for the gateway', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = workspace(t, await freePort());
+  let edited = false;
+  const r = await run(ws, ['on', 'plain'], {
+    onLine: (line) => {
+      if (edited || !line.startsWith('Starting proxy service')) return;
+      edited = true;
+      const cfg = readCfg(ws);
+      cfg.profiles.plain.name = 'Renamed while waiting';
+      fs.writeFileSync(`${ws.cfgPath}.x`, JSON.stringify(cfg));
+      fs.renameSync(`${ws.cfgPath}.x`, ws.cfgPath);
+    }
+  });
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.ok(edited, 'the CLI started a gateway');
+  const cfg = readCfg(ws);
+  assert.equal(cfg.profiles.plain.name, 'Renamed while waiting');
+  assert.equal(cfg.activeProfiles.anthropic, 'plain');
+});
+
+test('switch port refuses a port that another process holds and leaves the gateway where it was', { skip: !POSIX && 'posix' }, async (t) => {
+  const port = await freePort();
+  const ws = workspace(t, port);
+  assert.equal((await run(ws, ['on', 'plain'])).status, 0);
+  const squatter = net.createServer(s => s.end('HTTP/1.1 200 OK\r\n\r\nnot the switcher'));
+  const held = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
+  t.after(() => squatter.close());
+  const r = await run(ws, ['port', String(held)]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /held by another process/);
+  assert.equal(readCfg(ws).port, port);
+  const status = await run(ws, ['status']);
+  assert.match(status.stdout, new RegExp(`RUNNING \\(port ${port}\\)`));
+});
+
+test('switch port puts config.json and the gateway back when the new gateway does not come up', { skip: !POSIX && 'posix' }, async (t) => {
+  const port = await freePort();
+  const next = await freePort();
+  const ws = workspace(t, port);
+  assert.equal((await run(ws, ['on', 'plain'])).status, 0);
+  // The new port is free at the check and taken right after the old gateway stops.
+  const squatter = net.createServer(s => s.destroy());
+  t.after(() => squatter.close());
+  const r = await run(ws, ['port', String(next)], {
+    onLine: (line) => { if (line.startsWith('Stopping gateway')) squatter.listen(next, '127.0.0.1'); }
+  });
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.match(r.stderr, new RegExp(`back on port ${port}`));
+  assert.equal(readCfg(ws).port, port);
+  assert.match((await run(ws, ['status'])).stdout, new RegExp(`RUNNING \\(port ${port}\\)`));
+});

@@ -727,21 +727,24 @@ function writeBlindfoldState(st) {
   fs.writeFileSync(blindfoldStatePath, JSON.stringify(st), { encoding: 'utf8', mode: 0o600 });
 }
 
+/** true when no interceptor of ours answers on the port any more. */
 async function stopBlindfoldAt(port) {
   const cur = await probeBlindfold(port);
-  if (cur.state !== 'ours') return;
+  if (cur.state !== 'ours') return true;
   killVerified(cur.pid);
   for (let i = 0; i < 20; i++) {
     await sleep(100);
-    if ((await probeBlindfold(port)).state !== 'ours') return;
+    if ((await probeBlindfold(port)).state !== 'ours') return true;
   }
+  return false;
 }
 
 /** Stop the interceptor recorded in blindfold.json, if a probe confirms it is ours. Never starts one. */
 export async function stopRecordedBlindfold() {
   const prev = readBlindfoldState();
-  if (prev?.port) await stopBlindfoldAt(prev.port);
-  try { fs.unlinkSync(blindfoldStatePath); } catch {}
+  const stopped = prev?.port ? await stopBlindfoldAt(prev.port) : true;
+  if (stopped) try { fs.unlinkSync(blindfoldStatePath); } catch {}
+  return { ok: stopped, ...(stopped ? {} : { error: `the interceptor on port ${prev.port} did not stop` }) };
 }
 
 /** null when the interceptor can start, otherwise the reason and the command that fixes it. */
