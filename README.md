@@ -306,7 +306,7 @@ The shim does not edit `~/.codex/config.toml`. When the gateway is active, it pa
 
 **Codex never receives an internal name.** The slot aliases `main`, `review` and `subagent` stay inside the gateway. The CLI receives the official model names from `publicModels`, and `mapModel` resolves each one back to its slot. Set `codexRoles` in the profile when you want a different pairing than the order of that list.
 
-The shim also passes `model_catalog_json`. That file is generated from `publicModels` on every profile change, and the `/model` picker reads it. The picker never calls `/v1/models`.
+The shim also passes `model_catalog_json`. That file is generated from `publicModels` on every profile change, and the `/model` picker reads it. The picker never calls `/v1/models`. `/v1/models` serves the same entries, and each window follows `model1M` for its slot.
 
 It also passes `openai_base_url` for local routing. If 1M context is enabled for `main`, it passes `model_context_window=1000000` and `model_auto_compact_token_limit=900000`. Command-line overrides have higher precedence than user and project configuration. Re-run `switch shim install` after upgrading an older checkout.
 
@@ -526,7 +526,7 @@ re-opened from a shell where the shim is on `PATH`.
 - The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
 - The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. `switch ui` opens the dashboard with this token, and the MCP server reads the file. `/v1/*` and `/health` need no token.
 - API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key is used only with the stored `baseURL` of that profile.
-- Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams; only tracing headers (`x-*`, `traceparent`) are passed through.
+- Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams. Other `x-*` headers, `traceparent` and `tracestate` pass through. The gateway drops its own control headers (`x-profile`, `x-llm-profile`) and the network identity headers (`x-forwarded-*`, `x-real-ip`).
 - `config.json` is written atomically with mode 0600. `~/.claude/settings.json` is rewritten only to remove values that the switcher wrote itself. `ANTHROPIC_AUTH_TOKEN`, `*_MODEL_NAME` and your own model or URL values stay, and `switch` prints the name of every value it removes.
 
 ## Compatibility Notes

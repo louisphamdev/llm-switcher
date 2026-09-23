@@ -20,7 +20,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let upstream, upstreamPort, proxy, proxyPort, tmpDir;
 const received = []; // { url, headers, body }
-const hangState = { closed: false };
+const hangState = { closed: false, slowAborted: false };
+const bigState = { finishedAt: 0 };
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -68,6 +69,7 @@ function startUpstream() {
           return;
         }
         if (lastUser.includes('SLOW_TURN')) {
+          res.on('close', () => { if (!res.writableEnded) hangState.slowAborted = true; });
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
           res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'slow ' } }] })}\n\n`);
           return setTimeout(() => {
@@ -110,6 +112,37 @@ function startUpstream() {
         return res.end(JSON.stringify({ input_tokens: 4242 }));
       }
 
+      const antSse = (events) => events.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+      const antStart = ['message_start', { type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: json.model, content: [], usage: { input_tokens: 11, output_tokens: 1 } } }];
+      const antEnd = [['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } }], ['message_stop', { type: 'message_stop' }]];
+      if (req.url.startsWith('/ant/messages') && lastUser.includes('DIRECT_STREAM')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        return res.end(antSse([antStart, ...antEnd]));
+      }
+      if (req.url.startsWith('/ant/messages') && lastUser.includes('DIRECT_BREAK')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(antSse([antStart]));
+        return setTimeout(() => res.destroy(), 50);
+      }
+      if (req.url.startsWith('/ant/messages') && lastUser.includes('DIRECT_SLOW')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(antSse([antStart]));
+        return setTimeout(() => res.end(antSse(antEnd)), 600);
+      }
+      if (req.url.startsWith('/ant/messages') && lastUser.includes('DIRECT_BIG')) {
+        // 32 MB, written with this server's own backpressure; bigState records when the last byte left.
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const chunk = Buffer.alloc(64 * 1024, 'a');
+        let left = 512;
+        const pump = () => {
+          while (left > 0) {
+            left--;
+            if (!res.write(chunk)) return res.once('drain', pump);
+          }
+          res.end(() => { bigState.finishedAt = Date.now(); });
+        };
+        return pump();
+      }
       if (req.url.startsWith('/ant/messages')) {
         res.writeHead(200, { 'Content-Type': 'application/json', 'transfer-encoding': 'chunked', connection: 'keep-alive' });
         return res.end(JSON.stringify({ id: 'msg_1', type: 'message', role: 'assistant', model: json.model, content: [{ type: 'text', text: 'direct ok' }], stop_reason: 'end_turn', usage: { input_tokens: 3, output_tokens: 2 } }));
@@ -136,7 +169,7 @@ before(async () => {
       chat: { name: 'Mock Chat', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-chat', defaultModels: models },
       vtx: { name: 'Mock Vertex', mode: 'convert', inFormat: 'auto', outFormat: 'vertex', baseURL: `${base}/vtx`, apiKey: 'sk-secret-vtx', defaultModels: models },
       agmock: { name: 'Mock AG via chat', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-ag', defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
-      pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' } },
+      pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' }, model1M: { main: true } },
       roles: { name: 'Mock Public Roles', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-roles', publicModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       native: { name: 'Mock Strict OpenAI', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', thinkingMode: 'native', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-native', defaultModels: models },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
@@ -794,4 +827,74 @@ test('An in-band upstream error closes the upstream connection instead of leavin
   const r = await post('/v1/chat/completions', { model: 'main', stream: true, messages: [{ role: 'user', content: 'ERROR_THEN_HANG' }] });
   await r.text();
   assert.ok(await until(() => hangState.closed, 3000), 'the upstream response is still open');
+});
+
+// ---- Request path: passthrough logging, backpressure, WS half-close, model windows (F21, F36, F51, G09, racer-M4) ----
+
+const logsNow = async () => (await (await fetch(url('/api/logs'), { headers: withToken('/api/logs', {}) })).json()).logs;
+const ant = (content) => post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 10, stream: true, messages: [{ role: 'user', content }] }, { 'x-llm-profile': 'ant' });
+
+test('Direct passthrough logs the real token counts', async () => {
+  await (await ant('DIRECT_STREAM')).text();
+  const entry = (await logsNow()).find(l => l.profile === 'ant');
+  assert.deepEqual(entry.tokens, { prompt: 11, completion: 7 });
+  const plain = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }, { 'x-llm-profile': 'ant' });
+  await plain.json();
+  assert.deepEqual((await logsNow()).find(l => l.profile === 'ant').tokens, { prompt: 3, completion: 2 });
+});
+
+test('Direct passthrough logs a mid-stream failure as 502 and a client abort as 499', async () => {
+  await (await ant('DIRECT_BREAK')).text().catch(() => {});
+  await new Promise(r => setTimeout(r, 100));
+  const broken = (await logsNow()).find(l => l.profile === 'ant');
+  assert.equal(broken.status, 502);
+  assert.ok(broken.error, 'the failure is named');
+
+  const ac = new AbortController();
+  const r = await fetch(url('/v1/messages'), { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/json', 'x-llm-profile': 'ant' },
+    body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 10, stream: true, messages: [{ role: 'user', content: 'DIRECT_SLOW' }] }) });
+  const reader = r.body.getReader();
+  await reader.read();
+  ac.abort();
+  await new Promise(res => setTimeout(res, 800));
+  assert.equal((await logsNow()).find(l => l.profile === 'ant').status, 499);
+});
+
+test('Direct passthrough waits for a slow client instead of buffering the whole upstream stream', async () => {
+  bigState.finishedAt = 0;
+  const resumedAt = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: proxyPort, path: '/v1/messages', method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-profile': 'ant' } }, res => {
+      res.pause();
+      setTimeout(() => {
+        const at = Date.now();
+        res.resume();
+        res.on('end', () => resolve(at));
+      }, 1500);
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 10, stream: true, messages: [{ role: 'user', content: 'DIRECT_BIG' }] }));
+  });
+  assert.ok(bigState.finishedAt >= resumedAt, `upstream finished ${resumedAt - bigState.finishedAt} ms before the client read anything`);
+});
+
+test('Codex WS: a client half-close aborts the running turn', async () => {
+  hangState.slowAborted = false;
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'SLOW_TURN half close' })));
+  await new Promise(r => setTimeout(r, 100));
+  ws.socket.end();
+  assert.ok(await until(() => hangState.slowAborted, 2000), 'the upstream turn kept running');
+});
+
+test('/v1/models windows follow model1M and the entry comes from codex-catalog-template.json', async () => {
+  const template = JSON.parse(fs.readFileSync(path.join(ROOT, 'codex-catalog-template.json'), 'utf8'));
+  const pub = await (await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'pub' } })).json();
+  const win = Object.fromEntries(pub.models.map(m => [m.slug, m.context_window]));
+  assert.deepEqual(win, { 'gpt-5.6-sol': 1000000, 'gpt-5.2': template.context_window });
+  for (const m of pub.models) assert.equal(m.description, template.description);
+  const one = await (await fetch(url('/v1/models/gpt-5.2'), { headers: { 'x-llm-profile': 'pub' } })).json();
+  assert.equal(one.context_window, template.context_window);
+  assert.equal(one.id, 'gpt-5.2');
+  const main = await (await fetch(url('/v1/models/gpt-5.6-sol'), { headers: { 'x-llm-profile': 'pub' } })).json();
+  assert.equal(main.context_window, 1000000);
 });

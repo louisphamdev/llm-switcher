@@ -283,29 +283,35 @@ function codexCatalogTemplate() {
  * own built-in catalog, which is leak-free too.
  */
 export function buildCodexCatalog(profile) {
-  const template = codexCatalogTemplate();
-  if (!template) return null;
-
-  // The catalog is what the picker reads, so its window must match the profile. When
-  // two slots publish the same name the smaller window wins: overstating it makes
-  // Codex size a session and its auto-compact point against space it does not have.
-  const windows = new Map();
-  for (const slot of CODEX_MODEL_SLOTS) {
-    const name = codexPublicModel(profile, slot);
-    if (!name) continue;
-    const is1M = model1MForSlot(profile, slot);
-    if (!windows.has(name) || !is1M) windows.set(name, is1M);
-  }
+  if (!codexCatalogTemplate()) return null;
+  const windows = publicModelWindows(profile);
   if (!windows.size) return null;
+  return { models: [...windows].map(([name, is1M]) => codexModelEntry(name, is1M)) };
+}
 
+// One catalog entry. The catalog file and the gateway's /v1/models both use it, so they cannot drift.
+export function codexModelEntry(name, is1M) {
   return {
-    models: [...windows].map(([name, is1M]) => ({
-      ...structuredClone(template),
-      slug: name,
-      display_name: name,
-      ...(is1M ? { context_window: 1000000, max_context_window: 1000000 } : {})
-    }))
+    ...structuredClone(codexCatalogTemplate() || {}),
+    slug: name,
+    display_name: name,
+    ...(is1M ? { context_window: 1000000, max_context_window: 1000000 } : {})
   };
+}
+
+// name -> is1M. The picker sizes a session from this window, so when two slots share a name the
+// smaller window wins: overstating it makes Codex plan against space it does not have.
+export function smallestWindows(pairs) {
+  const windows = new Map();
+  for (const [name, is1M] of pairs) {
+    if (!name) continue;
+    if (!windows.has(name) || !is1M) windows.set(name, Boolean(is1M));
+  }
+  return windows;
+}
+
+export function publicModelWindows(profile) {
+  return smallestWindows(CODEX_MODEL_SLOTS.map(slot => [codexPublicModel(profile, slot), model1MForSlot(profile, slot)]));
 }
 
 export function parsePort(value) {

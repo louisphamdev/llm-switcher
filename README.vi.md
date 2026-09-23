@@ -306,7 +306,7 @@ Shim không sửa `~/.codex/config.toml`. Khi gateway hoạt động, shim truy�
 
 **Codex không bao giờ nhận tên nội bộ.** Alias `main`, `review`, `subagent` chỉ tồn tại bên trong gateway. CLI nhận tên model chính thức từ `publicModels`, và `mapModel` phân giải ngược từng tên về đúng slot. Đặt `codexRoles` trong profile nếu muốn ghép khác thứ tự danh sách đó.
 
-Shim còn truyền `model_catalog_json`. File này được sinh lại từ `publicModels` mỗi lần đổi profile, và màn `/model` đọc chính nó. Màn `/model` không gọi `/v1/models`.
+Shim còn truyền `model_catalog_json`. File này được sinh lại từ `publicModels` mỗi lần đổi profile, và màn `/model` đọc chính nó. Màn `/model` không gọi `/v1/models`. `/v1/models` trả cùng các mục đó, và context window của mỗi mục theo `model1M` của slot.
 
 Shim cũng truyền `openai_base_url` để route qua gateway cục bộ. Nếu `main` bật context 1M, shim truyền `model_context_window=1000000` và `model_auto_compact_token_limit=900000`. Override dòng lệnh có độ ưu tiên cao hơn cấu hình người dùng và dự án. Hãy chạy lại `switch shim install` sau khi nâng cấp từ bản cũ.
 
@@ -524,7 +524,7 @@ trong `PATH`.
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
 - Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. `switch ui` mở dashboard kèm token này, MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
 - API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được dùng với `baseURL` đã lưu của chính profile đó.
-- Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream; chỉ các header tracing (`x-*`, `traceparent`) được passthrough.
+- Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream. Các header `x-*` khác, `traceparent` và `tracestate` được chuyển tiếp. Gateway bỏ header điều khiển của chính nó (`x-profile`, `x-llm-profile`) và header định danh mạng (`x-forwarded-*`, `x-real-ip`).
 - `config.json` được ghi atomic với mode 0600. `~/.claude/settings.json` chỉ bị ghi lại để gỡ các giá trị do chính switcher ghi. `ANTHROPIC_AUTH_TOKEN`, các key `*_MODEL_NAME` và giá trị model/URL của bạn được giữ nguyên, và `switch` in tên từng giá trị đã gỡ.
 
 ## Ghi chú Tương thích
