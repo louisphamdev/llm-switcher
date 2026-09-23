@@ -276,7 +276,7 @@ async function changePort(newPortStr) {
     console.log(`Restarting gateway on new port ${p}...`);
     await ensureProxyRunning(p);
   }
-  applyLaunchState(config, p);
+  reportSettings(applyLaunchState(config, p).settings);
 }
 
 function printProfile(profile) {
@@ -318,6 +318,7 @@ async function turnOn(profileName, cliTarget) {
   assertBlindfoldUsable(port);
   await ensureProxyRunning(port);
   const st = applyLaunchState(config, port);
+  reportSettings(st.settings);
   await syncBlindfold(st, port);
 
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
@@ -351,7 +352,9 @@ async function turnOff(targetArg) {
     }
     setTargetProfile(config, target, null);
     saveConfig(config);
-    await syncBlindfold(applyLaunchState(config, port), port);
+    const st = applyLaunchState(config, port);
+    reportSettings(st.settings);
+    await syncBlindfold(st, port);
     console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
     printTargets(getActiveMap(config));
     return;
@@ -360,11 +363,17 @@ async function turnOff(targetArg) {
   console.log('Deactivating Proxy and restoring official endpoints...');
   deactivateAll(config);
   saveConfig(config);
-  clearLaunchState();
+  reportSettings(clearLaunchState(port));
   stopBlindfold();
   const stopped = await stopProxy(port);
   console.log(stopped ? 'Stopped local proxy service.' : 'Proxy service was not running.');
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
+}
+
+// settings.json edits are never silent: name every value the switcher removed.
+function reportSettings(result) {
+  if (result?.removed?.length) console.log(`[settings.json] Removed switcher-written values: ${result.removed.join(', ')}`);
+  if (result?.error) console.warn(`[settings.json] Not cleaned: ${result.error}`);
 }
 
 async function showStatus() {

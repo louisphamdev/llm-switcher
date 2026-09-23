@@ -185,7 +185,7 @@ flowchart LR
   - Tự động bù lại tham số `thinking` nếu tool ngoài cắt mất trên các reasoning model.
   - Gộp các turn cùng role liên tiếp để đáp ứng nghiêm ngặt luật xen kẽ lượt nói của Anthropic.
 - **Mở khoá Context 1,000,000 Tokens (1M):** Đi theo `model1M` của profile cho từng tier: tier nào bật 1M thì được `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (nên `/model sonnet`, đổi tier hay subagent vẫn giữ 1M; tier không bật thì ở 200K), kèm cửa sổ nén `CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000`, tích hợp badge cảnh báo trực quan cho model không hỗ trợ.
-- **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu endpoint hay key vào `~/.claude/settings.json` (chỉ gỡ các biến proxy cũ nếu có). Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
+- **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu endpoint hay key vào `~/.claude/settings.json` (chỉ gỡ đúng các giá trị do chính switcher ghi: `ANTHROPIC_BASE_URL` trỏ vào cổng của nó và `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]`). Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
 - **Live Request / Response Inspector:** Bảng theo dõi thời gian thực ngay trên Web UI: xem độ trễ, token prompt/output, preview prompt câu hỏi và khối suy luận thinking.
 - **Cài đặt Daemon Service nền:** Cung cấp lệnh cài đặt gateway chạy ngầm tự khởi động cùng hệ điều hành trên Windows (Task Scheduler), macOS (launchd) và Linux (systemd).
 
@@ -525,7 +525,7 @@ trong `PATH`.
 - Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. `switch ui` mở dashboard kèm token này, MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
 - API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được dùng với `baseURL` đã lưu của chính profile đó.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream; chỉ các header tracing (`x-*`, `traceparent`) được passthrough.
-- `config.json` được ghi atomic; `~/.claude/settings.json` chỉ bị ghi lại khi thực sự còn biến proxy cũ.
+- `config.json` được ghi atomic với mode 0600. `~/.claude/settings.json` chỉ bị ghi lại để gỡ các giá trị do chính switcher ghi. `ANTHROPIC_AUTH_TOKEN`, các key `*_MODEL_NAME` và giá trị model/URL của bạn được giữ nguyên, và `switch` in tên từng giá trị đã gỡ.
 
 ## Ghi chú Tương thích
 

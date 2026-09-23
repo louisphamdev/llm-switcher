@@ -392,3 +392,46 @@ test('saveConfig writes config.json 0600, also over an existing 0644 file', { sk
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// settings.json belongs to Claude Code and to the user. The switcher may remove only the
+// values it would itself write: its own base URL and the `<tier>[1m]` aliases.
+test('cleanClaudeSettings removes only switcher-written values and keeps the file identity', { skip: process.platform === 'win32' && 'posix symlink' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-claude-'));
+  try {
+    const real = path.join(dir, 'real-settings.json');
+    const userEnv = {
+      ANTHROPIC_AUTH_TOKEN: 'tok-user',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'my-opus',
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: 'x',
+      ANTHROPIC_BASE_URL: 'https://other.example'
+    };
+    fs.writeFileSync(real, JSON.stringify({ env: userEnv, theme: 'dark' }, null, 2), { mode: 0o640 });
+    fs.chmodSync(real, 0o640);
+    fs.symlinkSync(real, path.join(dir, 'settings.json'));
+    const run = (port) => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+      `const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))}); console.log(JSON.stringify(s.cleanClaudeSettings(${port})));`
+    ], { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, encoding: 'utf8' }).trim());
+
+    const before = fs.readFileSync(real, 'utf8');
+    assert.deepEqual(run(3456).removed || [], []);
+    assert.equal(fs.readFileSync(real, 'utf8'), before, 'user-owned values leave the file byte-identical');
+
+    // Switcher-written values are removed; the user's values stay.
+    const mixed = { ...userEnv, ANTHROPIC_BASE_URL: 'http://127.0.0.1:3456', ANTHROPIC_DEFAULT_SONNET_MODEL: 'sonnet[1m]' };
+    fs.writeFileSync(real, JSON.stringify({ env: mixed }, null, 2));
+    const out = run(3456);
+    assert.deepEqual(out.removed.sort(), ['ANTHROPIC_BASE_URL', 'ANTHROPIC_DEFAULT_SONNET_MODEL']);
+    const env = JSON.parse(fs.readFileSync(real, 'utf8')).env;
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'tok-user');
+    assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'my-opus');
+    assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME, 'x');
+    assert.ok(fs.lstatSync(path.join(dir, 'settings.json')).isSymbolicLink(), 'the symlink survives');
+    assert.equal((fs.statSync(real).mode & 0o777).toString(8), '640', 'the target keeps its mode');
+
+    // A local gateway on another port (for example 9router) is not the switcher's.
+    fs.writeFileSync(real, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:20128' } }));
+    assert.deepEqual(run(3456).removed || [], []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

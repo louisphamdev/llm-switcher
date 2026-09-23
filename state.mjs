@@ -497,7 +497,7 @@ export function computeLaunchState(cfg, port) {
 }
 
 // Write flags + env.cmd/env.sh from activeProfiles, and clean up Claude Code settings.json.
-export function applyLaunchState(cfg, port) {
+export function applyLaunchState(cfg, port, { cleanSettings = true } = {}) {
   const st = computeLaunchState(cfg, port);
   writeOrRemove(paths.activeFlag, st.active ? 'active' : null);
   writeOrRemove(paths.flag1M, st.claude1M);
@@ -513,13 +513,13 @@ export function applyLaunchState(cfg, port) {
     try {
       fs.writeFileSync(paths.envCmd, renderCmd(st.env), 'utf8');
       fs.writeFileSync(paths.envSh, renderSh(st.env), 'utf8');
-    } catch {}
-    // Written even when empty, so a stale Codex-only file from a previous profile
-    // can never survive a switch.
-    try {
+      // Written even when empty, so a stale Codex-only file from a previous profile
+      // can never survive a switch.
       fs.writeFileSync(paths.envCodexCmd, renderCmd(st.envCodex), 'utf8');
       fs.writeFileSync(paths.envCodexSh, renderSh(st.envCodex), 'utf8');
-    } catch {}
+    } catch (err) {
+      st.envWriteError = err.message;
+    }
   } else {
     writeOrRemove(paths.envCmd, null);
     writeOrRemove(paths.envSh, null);
@@ -534,16 +534,17 @@ export function applyLaunchState(cfg, port) {
   const catalog = st.active && codexProfile ? buildCodexCatalog(codexProfile) : null;
   writeOrRemove(paths.codexCatalog, catalog ? JSON.stringify(catalog) : null);
 
-  cleanClaudeSettings();
+  // Clean only after the env files are in place: a failed write must not also touch settings.json.
+  if (cleanSettings && !st.envWriteError) st.settings = cleanClaudeSettings(port);
   return st;
 }
 
-export function clearLaunchState() {
+export function clearLaunchState(port) {
   for (const f of [paths.activeFlag, paths.flag1M, paths.flagCodex1M, paths.flagOpenAI1M,
     paths.envCmd, paths.envSh, paths.envCodexCmd, paths.envCodexSh, paths.codexCatalog]) {
     writeOrRemove(f, null);
   }
-  cleanClaudeSettings();
+  return cleanClaudeSettings(port);
 }
 
 export function readLaunchFlags() {
@@ -556,28 +557,31 @@ export function readLaunchFlags() {
   };
 }
 
-const MANAGED_CLAUDE_ENV = [
-  'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME',
-  'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL_NAME'
-];
+// settings.json belongs to Claude Code and to the user. Remove a value only when it is exactly what
+// the switcher itself would write: its own base URL, or a `<tier>[1m]` alias. Everything else,
+// including ANTHROPIC_AUTH_TOKEN and *_MODEL_NAME, is someone else's and stays.
+function isSwitcherValue(key, value, port) {
+  if (key === 'ANTHROPIC_BASE_URL') {
+    return /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d+)\/?$/.exec(String(value))?.[2] === String(port);
+  }
+  const tier = /^ANTHROPIC_DEFAULT_(OPUS|SONNET|HAIKU|FABLE)_MODEL$/.exec(key)?.[1];
+  return Boolean(tier) && value === `${tier.toLowerCase()}[1m]`;
+}
 
-// Remove stale proxy vars from ~/.claude/settings.json. Only writes when something actually changed,
-// and never throws (leaves malformed settings.json untouched for the user to fix).
-export function cleanClaudeSettings() {
+// Only writes when a value is removed; the write goes through the path, so a symlinked
+// settings.json stays a symlink and keeps its mode. Never throws.
+export function cleanClaudeSettings(port) {
   try {
-    if (!fs.existsSync(claudeSettingsPath)) return { changed: false };
+    if (!fs.existsSync(claudeSettingsPath)) return { changed: false, removed: [] };
     const settings = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
-    if (!settings?.env || typeof settings.env !== 'object') return { changed: false };
-    const removed = MANAGED_CLAUDE_ENV.filter(k => Object.hasOwn(settings.env, k));
-    if (!removed.length) return { changed: false };
+    if (!settings?.env || typeof settings.env !== 'object') return { changed: false, removed: [] };
+    const removed = Object.keys(settings.env).filter(k => isSwitcherValue(k, settings.env[k], port));
+    if (!removed.length) return { changed: false, removed: [] };
     for (const k of removed) delete settings.env[k];
     fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
     return { changed: true, removed };
   } catch (err) {
-    return { changed: false, error: err.message };
+    return { changed: false, removed: [], error: err.message };
   }
 }
 

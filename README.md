@@ -185,7 +185,7 @@ flowchart LR
   - Automatically restores thinking parameters if an intermediary tool stripped them.
   - Merges consecutive same-role turns to enforce strict alternating turn requirements.
 - **1M Context Window Unlocker:** Follows the profile's `model1M` map per tier: every tier marked 1M gets `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (so `/model sonnet`, tier switches and subagents keep 1M, while unmarked tiers stay at 200K), plus auto-compact at `900000`, with built-in visual risk warnings for unsupported models.
-- **Zero Config Mutation:** Never writes endpoints or keys into `~/.claude/settings.json` (it only removes stale proxy variables, and only when present). Uses launcher flags and environment injection to prevent annoying provider warning banners.
+- **Zero Config Mutation:** Never writes endpoints or keys into `~/.claude/settings.json` (it removes only values it wrote itself: `ANTHROPIC_BASE_URL` for its own port and `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]`). Uses launcher flags and environment injection to prevent annoying provider warning banners.
 - **Live Request / Response Inspector:** Built-in dashboard tab displaying real-time requests, latency, token consumption, prompt previews, and thinking blocks.
 - **Native Background Service:** Install and run as an OS background daemon on Windows (Task Scheduler), macOS (launchd), or Linux (systemd).
 
@@ -527,7 +527,7 @@ re-opened from a shell where the shim is on `PATH`.
 - The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. `switch ui` opens the dashboard with this token, and the MCP server reads the file. `/v1/*` and `/health` need no token.
 - API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key is used only with the stored `baseURL` of that profile.
 - Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams; only tracing headers (`x-*`, `traceparent`) are passed through.
-- `config.json` is written atomically; `~/.claude/settings.json` is only rewritten when it actually contains stale proxy variables.
+- `config.json` is written atomically with mode 0600. `~/.claude/settings.json` is rewritten only to remove values that the switcher wrote itself. `ANTHROPIC_AUTH_TOKEN`, `*_MODEL_NAME` and your own model or URL values stay, and `switch` prints the name of every value it removes.
 
 ## Compatibility Notes
 

@@ -862,9 +862,13 @@ function requireConfig(res) {
   return cfg;
 }
 
+// Returns the names of the settings.json values the switcher removed, so the caller can show them.
 function commit(cfg) {
   saveConfig(cfg);
-  applyLaunchState(cfg, PORT);
+  const st = applyLaunchState(cfg, PORT);
+  const removed = st.settings?.removed || [];
+  if (removed.length) console.log(`[llm-switcher] settings.json: removed switcher-written values: ${removed.join(', ')}`);
+  return { settingsRemoved: removed, ...(st.envWriteError ? { envWriteError: st.envWriteError } : {}) };
 }
 
 const VALID_MODES = ['hybrid', 'convert', 'direct'];
@@ -1199,8 +1203,8 @@ async function routeApi(req, res, method, pathname) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    commit(cfg);
-    return sendJson(res, 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles });
+    const applied = commit(cfg);
+    return sendJson(res, 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/toggle  { target?, enabled }
@@ -1224,8 +1228,8 @@ async function routeApi(req, res, method, pathname) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    commit(cfg);
-    return sendJson(res, 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles });
+    const applied = commit(cfg);
+    return sendJson(res, 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/save-profile  { key, profile }
@@ -1259,17 +1263,16 @@ async function routeApi(req, res, method, pathname) {
     }
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
-    if (isProfileActive(cfg, key) || unassigned) commit(cfg);
-    else saveConfig(cfg);
-    return sendJson(res, 200, { success: true });
+    const applied = isProfileActive(cfg, key) || unassigned ? commit(cfg) : (saveConfig(cfg), {});
+    return sendJson(res, 200, { success: true, ...applied });
   }
 
   // POST /api/delete-profile  { key }
   if (pathname === '/api/delete-profile') {
     const err = deleteProfile(cfg, body.key);
     if (err) return sendJson(res, 404, { error: err });
-    commit(cfg);
-    return sendJson(res, 200, { success: true });
+    const applied = commit(cfg);
+    return sendJson(res, 200, { success: true, ...applied });
   }
 
   // POST /api/test-upstream

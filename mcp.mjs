@@ -140,7 +140,7 @@ async function handleToolCall(name, args) {
       try {
         const s = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
         if (s.env?.ANTHROPIC_BASE_URL) {
-          findings.push(`[WARNING] ~/.claude/settings.json has hardcoded ANTHROPIC_BASE_URL="${s.env.ANTHROPIC_BASE_URL}". This can trigger warning banners in Claude Code. Run 'switch off' or remove it to rely on zero-mutation launcher flags.`);
+          findings.push(`[WARNING] ~/.claude/settings.json has hardcoded ANTHROPIC_BASE_URL="${s.env.ANTHROPIC_BASE_URL}". This can trigger warning banners in Claude Code. The switcher removes this value only when it points at its own port; otherwise edit settings.json yourself if you want the launcher flags to apply.`);
           isClean = false;
         } else {
           findings.push(`[PASS] ~/.claude/settings.json is clean (zero-mutation compliant).`);
