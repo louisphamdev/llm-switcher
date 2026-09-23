@@ -942,3 +942,58 @@ test('a kept API key is never pointed at a new baseURL or new endpoints', async 
     await post('/api/delete-profile', { key: 'keydest' });
   }
 });
+
+// ---- Routes no test reached before (audit F46) ----
+
+test('OPTIONS answers a loopback preflight and refuses a foreign origin', async () => {
+  const ok = await fetch(url('/v1/messages'), { method: 'OPTIONS', headers: { Origin: `http://127.0.0.1:${proxyPort}` } });
+  assert.equal(ok.status, 204);
+  assert.equal(ok.headers.get('access-control-allow-origin'), `http://127.0.0.1:${proxyPort}`);
+  const foreign = await fetch(url('/v1/messages'), { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } });
+  assert.equal(foreign.status, 403);
+});
+
+test('/ui serves the dashboard with anti-framing headers', async () => {
+  const r = await fetch(url('/ui'));
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /text\/html/);
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.match(await r.text(), /LLM Switcher/);
+});
+
+test('Vertex routes: streaming action, full resource path, and an unknown action', async () => {
+  const stream = await post('/v1beta/models/claude-opus-like:streamGenerateContent?alt=sse', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+  const frames = parseSSE(await stream.text()).filter(f => f.data);
+  assert.ok(frames.some(f => f.data.candidates?.[0]?.content?.parts?.some(p => p.text)), 'a text part is streamed');
+  const full = await post('/v1/projects/p1/locations/us-central1/publishers/google/models/claude-opus-like:generateContent', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
+  assert.equal(full.status, 200);
+  assert.equal(received.at(-1).body.model, 'up-opus');
+  const bad = await post('/v1beta/models/x:explode', { contents: [] });
+  assert.equal(bad.status, 404);
+});
+
+test('Codex WS: conversation.item.create is echoed and response.cancel stops the running turn', async () => {
+  hangState.slowAborted = false;
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'conversation.item.create', item: { id: 'i1' } })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'conversation.item.created')));
+  assert.equal(ws.messages.find(m => m.type === 'conversation.item.created').item.id, 'i1');
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'SLOW_TURN cancel me' })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.created')));
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.cancel' })));
+  assert.ok(await until(() => hangState.slowAborted, 2000), 'the upstream turn kept running');
+  assert.ok(!ws.messages.some(m => m.type === 'response.completed'));
+  ws.socket.destroy();
+});
+
+test('Admin test-upstream reports latency and a sample from the upstream', async () => {
+  const r = await post('/api/test-upstream', { baseURL: `http://127.0.0.1:${upstreamPort}/chat/v1`, apiKey: 'k', model: 'm', mode: 'convert' });
+  assert.equal(r.status, 200);
+  const json = await r.json();
+  assert.equal(json.ok, true);
+  assert.equal(json.outFormat, 'openai-chat');
+  assert.match(json.sample, /Final answer/);
+  assert.equal(typeof json.latency, 'number');
+});
