@@ -285,10 +285,14 @@ test('the generated catalog states the 1M window only for a slot the profile mar
 
 // Changing blindfoldHost without rebuilding the leaf gives a TLS failure that reads
 // like a network fault. The launcher compares the two and says what to run instead.
-test('certCoversHost reads the leaf subject alternative names', () => {
-  const leaf = path.join(ROOT_DIR, 'blindfold', 'certs', 'leaf.pem');
-  if (!fs.existsSync(leaf)) return;
-  const pem = fs.readFileSync(leaf, 'utf8');
+// The test builds its own leaf: blindfold/certs is gitignored, and a test that returns early
+// on a clean checkout passes with no assertion at all.
+test('certCoversHost reads the leaf subject alternative names', (t) => {
+  if (process.platform === 'win32' || !fs.existsSync('/usr/bin/openssl')) return t.skip('needs bash and openssl to build a leaf');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-leaf-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  execFileSync('bash', [path.join(ROOT_DIR, 'blindfold', 'make-certs.sh'), 'chatgpt.com', path.join(dir, 'certs')], { stdio: 'ignore' });
+  const pem = fs.readFileSync(path.join(dir, 'certs', 'leaf.pem'), 'utf8');
   assert.equal(certCoversHost(pem, 'chatgpt.com'), true);
   assert.equal(certCoversHost(pem, 'sub.chatgpt.com'), true, 'the wildcard entry must count');
   assert.equal(certCoversHost(pem, 'api.openai.com'), false);

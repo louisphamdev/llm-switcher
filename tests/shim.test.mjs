@@ -18,6 +18,17 @@ const ROOT = path.resolve(__dirname, '..');
 const { SHIM_DIR, SHIMMED, pathExportLine, suggestedRcFiles, shimStatus, renderShim } =
   await import(pathToFileURL(path.join(ROOT, 'shim.mjs')).href);
 
+// The behavioural tests run the CURRENT template, rendered into a temp dir. Running the copy
+// installed in SHIM_DIR tested whatever an earlier release wrote there, or skipped.
+const RENDER_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'shimrender-'));
+if (process.platform !== 'win32') {
+  for (const name of SHIMMED) {
+    fs.writeFileSync(path.join(RENDER_DIR, name), renderShim(name, 'linux'));
+    fs.chmodSync(path.join(RENDER_DIR, name), 0o755);
+  }
+}
+test.after(() => fs.rmSync(RENDER_DIR, { recursive: true, force: true }));
+
 // Run the shim with a fake PATH: fakeDir holds a mocked "real" binary.
 function runShim(name, args, { active, fakeDir, extraPath = '' }) {
   const flag = path.join(ROOT, 'active.flag');
@@ -34,8 +45,8 @@ function runShim(name, args, { active, fakeDir, extraPath = '' }) {
     } else {
       if (fs.existsSync(flag)) fs.unlinkSync(flag);
     }
-    const PATH_ = [SHIM_DIR, fakeDir, extraPath || '/usr/bin:/bin'].filter(Boolean).join(':');
-    return execFileSync(path.join(SHIM_DIR, name), args, {
+    const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin'].filter(Boolean).join(':');
+    return execFileSync(path.join(RENDER_DIR, name), args, {
       encoding: 'utf8', env: { ...process.env, PATH: PATH_ }, timeout: 15000
     }).trim();
   } finally {
@@ -56,7 +67,6 @@ function makeFakeBin(name) {
 
 test('shim injects gateway env when the gateway is ON (the --resume fix)', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
-  if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
   const out = runShim('claude', ['--resume', 'abc'], { active: true, fakeDir: fake });
   assert.match(out, /BASE=http:\/\/127\.0\.0\.1:3456/, 'env must be injected');
@@ -65,7 +75,6 @@ test('shim injects gateway env when the gateway is ON (the --resume fix)', (t) =
 
 test('shim stays transparent when the gateway is OFF', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
-  if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
   const out = runShim('claude', ['--resume'], { active: false, fakeDir: fake });
   assert.match(out, /BASE=NONE/, 'gateway off must not force route');
@@ -74,7 +83,6 @@ test('shim stays transparent when the gateway is OFF', (t) => {
 
 test('shim never recurses into itself', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
-  if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const fake = makeFakeBin('claude');
   // If the shim called itself, the command would hang until timeout and throw.
   const out = runShim('claude', ['x'], { active: true, fakeDir: fake });
@@ -83,7 +91,6 @@ test('shim never recurses into itself', (t) => {
 
 test('shim fails loudly (127) when the real binary is missing', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
-  if (!fs.existsSync(path.join(SHIM_DIR, 'claude'))) return t.skip('shim not installed');
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'shimempty-'));
   assert.throws(
     () => runShim('claude', [], { active: true, fakeDir: empty }),
