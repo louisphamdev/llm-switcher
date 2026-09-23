@@ -430,6 +430,8 @@ switch shim uninstall          # Remove the launcher shims
 switch off [target]            # Deactivate gateway (or specific target) and restore official
 ```
 
+The service runs without your shell. `switch service install` therefore copies `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
+
 ### Resumed sessions & the shim (important)
 
 `switch on` writes `env.sh` / `env.cmd` and deliberately **removes** proxy variables from

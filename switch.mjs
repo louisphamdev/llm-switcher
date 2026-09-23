@@ -13,6 +13,9 @@ import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
   suggestedRcFiles, auditRunningProcesses
 } from './shim.mjs';
+import {
+  serviceEnv, systemdUnit, launchdPlist, scheduledTaskXml, decodeConsoleText, portFromServiceText, writeServiceFile
+} from './service.mjs';
 
 const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
 const proxyLogPath = path.join(ROOT_DIR, 'proxy.log');
@@ -89,9 +92,11 @@ async function ensureProxyRunning(port) {
   }
   if (isHeld(state)) refuseForeignPort(port, 'this switcher', state);
   // An installed service owns the gateway: a detached copy next to it would be a second gateway.
+  // A service whose port cannot be read is started too, never doubled.
   const svc = installedService();
-  if (svc && servicePort(svc) === port) {
-    console.log(`Starting the ${svc} service on port ${port}...`);
+  const svcPort = svc ? servicePort(svc) : null;
+  if (svc && (svcPort === port || svcPort === null)) {
+    console.log(`Starting the ${svc} service${svcPort ? ` on port ${port}` : ''}...`);
     serviceStart(svc);
   } else {
     console.log(`Starting proxy service on port ${port}...`);
@@ -102,6 +107,7 @@ async function ensureProxyRunning(port) {
     if ((await probeGateway(port)) === 'ours') return;
   }
   console.error(`[Error] Proxy did not come up on port ${port}. See ${proxyLogPath} for details.`);
+  if (svc && svcPort === null) console.error(`        The ${svc} service definition could not be read. Run \`switch service install\` again.`);
   process.exit(1);
 }
 
@@ -195,9 +201,6 @@ function listeningPids(port) {
 // listens on the port, right after the identity probe confirmed that listener is this switcher.
 async function stopProxy(port) {
   const state = await probeGateway(port);
-  if (state === 'free') return 'not-running';
-  if (state === 'foreign') return 'not-ours';
-  if (state === 'silent') return 'silent';
   // Gone means the port is free; a slow answer is not proof that the gateway stopped.
   const waitGone = async () => {
     for (let i = 0; i < 20; i++) {
@@ -206,8 +209,24 @@ async function stopProxy(port) {
     }
     return false;
   };
-  // A supervisor restarts what we kill, so a service is stopped through its manager first.
+  // Our own unit needs no identity proof: its manager stops it. That also covers a unit that is
+  // still starting (the port is free) and a hung gateway under the unit (the probe is silent).
   const svc = installedService();
+  const ownUnit = svc && [port, null].includes(servicePort(svc));
+  if (state === 'free') {
+    if (!ownUnit) return 'not-running';
+    serviceStop(svc);
+    return 'stopped';
+  }
+  if (state === 'foreign') return 'not-ours';
+  if (state === 'silent') {
+    if (ownUnit) {
+      serviceStop(svc);
+      if (await waitGone()) return 'stopped';
+    }
+    return 'silent';
+  }
+  // A supervisor restarts what we kill, so a service is stopped through its manager first.
   if (svc) {
     serviceStop(svc);
     if (await waitGone()) return 'stopped';
@@ -441,10 +460,6 @@ async function openUI() {
   openBrowser(writeDashboardLauncher(url));
 }
 
-function xmlEscape(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 const SYSTEMD_UNIT = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
 const LAUNCHD_PLIST = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
 
@@ -481,14 +496,15 @@ function serviceStart(kind) {
 /** The port on the service's command line, or null when it cannot be read. */
 function servicePort(kind) {
   try {
-    let text = '';
-    if (kind === 'systemd') text = fs.readFileSync(SYSTEMD_UNIT, 'utf8');
-    else if (kind === 'launchd') text = fs.readFileSync(LAUNCHD_PLIST, 'utf8').replace(/<\/?string>\s*/g, ' ');
-    else if (kind === 'schtasks') text = execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher', '/XML'], { encoding: 'utf8' });
-    return parsePort(/--port\s+(\d+)/.exec(text)?.[1]);
-  } catch {
-    return null;
-  }
+    if (kind === 'systemd') return portFromServiceText(fs.readFileSync(SYSTEMD_UNIT, 'utf8'));
+    if (kind === 'launchd') return portFromServiceText(fs.readFileSync(LAUNCHD_PLIST, 'utf8'));
+    if (kind === 'schtasks') return portFromServiceText(decodeConsoleText(execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher', '/XML'])));
+  } catch {}
+  return null;
+}
+
+function reportBackup(backup) {
+  if (backup) console.log(`[Service] The previous definition differed and is kept as ${backup}.`);
 }
 
 // KeepAlive / Restart=always restart a killed gateway, so a service stops through its manager.
@@ -503,77 +519,48 @@ function serviceStop(kind) {
 // Writes the service for `port` and (re)starts it, so a running unit picks up the new command line.
 function installService(port) {
   const nodeBin = process.execPath;
+  const env = serviceEnv();
   if (process.platform === 'win32') {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-switcher-task-'));
     try {
-      // execFileSync quotes correctly for schtasks; no /RL HIGHEST needed (gateway needs no admin rights).
-      execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/TR', `"${nodeBin}" "${proxyScript}" --port ${port}`, '/SC', 'ONLOGON', '/F'], { stdio: 'inherit' });
+      const userId = process.env.USERDOMAIN && process.env.USERNAME ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : os.userInfo().username;
+      const xmlPath = path.join(dir, 'task.xml');
+      // Task Scheduler reads the XML as UTF-16, the encoding it declares.
+      fs.writeFileSync(xmlPath, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(scheduledTaskXml({ nodeBin, script: proxyScript, port, userId }), 'utf16le')]));
+      execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/XML', xmlPath, '/F'], { stdio: 'inherit' });
       try { execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' }); } catch {}
       execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+      if (env.length) console.log(`[WARN] The scheduled task does not receive ${env.map(([k]) => k).join(', ')}. Set them as User environment variables.`);
       console.log('[SUCCESS] Installed and started Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
       return true;
     } catch (err) {
-      console.error('[Error] Failed to register task (ONLOGON tasks may require an elevated terminal):', err.message);
+      console.error('[Error] Failed to register the scheduled task:', err.message);
       return false;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   }
   if (process.platform === 'darwin') {
-    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.llmswitcher.gateway</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${xmlEscape(nodeBin)}</string>
-    <string>${xmlEscape(proxyScript)}</string>
-    <string>--port</string>
-    <string>${port}</string>
-  </array>
-  <key>StandardOutPath</key>
-  <string>${xmlEscape(proxyLogPath)}</string>
-  <key>StandardErrorPath</key>
-  <string>${xmlEscape(proxyLogPath)}</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>`;
-    fs.mkdirSync(path.dirname(LAUNCHD_PLIST), { recursive: true });
-    fs.writeFileSync(LAUNCHD_PLIST, plistContent, 'utf8');
     try {
+      reportBackup(writeServiceFile(LAUNCHD_PLIST, launchdPlist({ nodeBin, script: proxyScript, port, logPath: proxyLogPath, env })));
       try { execFileSync('launchctl', ['unload', LAUNCHD_PLIST], { stdio: 'ignore' }); } catch {}
       execFileSync('launchctl', ['load', LAUNCHD_PLIST], { stdio: 'inherit' });
       console.log('[SUCCESS] Installed and started macOS launchd service.');
       return true;
     } catch (e) {
-      console.error('[Error] Failed to load launchd service:', e.message);
+      console.error('[Error] Failed to install the launchd service:', e.message);
       return false;
     }
   }
-  const q = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"`;
-  const serviceContent = `[Unit]
-Description=LLM Switcher Local Gateway
-After=network.target
-
-[Service]
-ExecStart=${q(nodeBin)} ${q(proxyScript)} --port ${port}
-Restart=always
-
-[Install]
-WantedBy=default.target
-`;
-  fs.mkdirSync(path.dirname(SYSTEMD_UNIT), { recursive: true });
-  fs.writeFileSync(SYSTEMD_UNIT, serviceContent, 'utf8');
   try {
+    reportBackup(writeServiceFile(SYSTEMD_UNIT, systemdUnit({ nodeBin, script: proxyScript, port, env })));
     systemctlUser(['daemon-reload'], { stdio: 'inherit' });
     systemctlUser(['enable', 'llm-switcher'], { stdio: 'inherit' });
     systemctlUser(['restart', 'llm-switcher'], { stdio: 'inherit' });
     console.log('[SUCCESS] Installed and started systemd user service.');
     return true;
   } catch (e) {
-    console.error('[Error] Failed to start systemd service:', e.message);
+    console.error('[Error] Failed to install the systemd service:', e.message);
     return false;
   }
 }
@@ -588,24 +575,32 @@ async function manageService(action) {
 
   if (action === 'uninstall') {
     const kind = installedService();
-    serviceStop(kind);
-    if (process.platform === 'win32') {
-      try {
-        execFileSync('schtasks', ['/Delete', '/TN', 'LLMSwitcher', '/F'], { stdio: 'inherit' });
-        console.log('[SUCCESS] Removed Windows Scheduled Task "LLMSwitcher".');
-      } catch (err) {
-        console.error('Failed to delete task (may not exist):', err.message);
-      }
-    } else if (process.platform === 'darwin') {
-      try { fs.unlinkSync(LAUNCHD_PLIST); } catch {}
-      console.log('[SUCCESS] Removed macOS launchd service.');
-    } else {
-      try { systemctlUser(['disable', '--now', 'llm-switcher'], { stdio: 'ignore' }); } catch {}
-      try { if (fs.existsSync(SYSTEMD_UNIT)) fs.unlinkSync(SYSTEMD_UNIT); } catch {}
-      try { systemctlUser(['daemon-reload'], { stdio: 'ignore' }); } catch {}
-      console.log('[SUCCESS] Removed systemd user service.');
+    // Running uninstall twice is a successful no-op.
+    if (!kind) {
+      console.log('[INFO] No LLM Switcher service is installed.');
+      return;
     }
-    return stopProxy(port);
+    serviceStop(kind);
+    let removed = true;
+    try {
+      if (kind === 'schtasks') {
+        execFileSync('schtasks', ['/Delete', '/TN', 'LLMSwitcher', '/F'], { stdio: 'inherit' });
+      } else if (kind === 'launchd') {
+        fs.unlinkSync(LAUNCHD_PLIST);
+      } else {
+        try { systemctlUser(['disable', '--now', 'llm-switcher'], { stdio: 'ignore' }); } catch {}
+        fs.unlinkSync(SYSTEMD_UNIT);
+        try { systemctlUser(['daemon-reload'], { stdio: 'ignore' }); } catch {}
+      }
+    } catch (err) {
+      removed = false;
+      console.error(`[Error] Could not remove the ${kind} service: ${err.message}`);
+    }
+    if (removed) console.log(`[SUCCESS] Removed the ${kind} service.`);
+    const stopped = await stopProxy(port);
+    if (stopped === 'still-running') console.error(`[Error] The gateway on port ${port} is still running.`);
+    if (!removed || stopped === 'still-running') process.exit(1);
+    return;
   }
 
   console.log('Usage: switch service [install|uninstall]');
