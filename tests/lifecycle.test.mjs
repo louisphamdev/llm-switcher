@@ -21,15 +21,16 @@ const HAS_OPENSSL = POSIX && fs.existsSync('/usr/bin/openssl');
 
 // switch.mjs writes the launcher files into the repository root; keep whatever was there.
 const LAUNCH_FILES = ['active.flag', '1m.flag', 'codex-1m.flag', 'openai-1m.flag', 'env.sh', 'env.cmd', 'env-codex.sh', 'env-codex.cmd', 'model-catalog.json'];
-function snapshotLaunchFiles() {
+// Every child runs with LLM_SWITCHER_STATE_DIR = ws.dir, so the launch files of the checkout stay untouched.
+function snapshotLaunchFiles(dir) {
   return Object.fromEntries(LAUNCH_FILES.map(f => {
-    const p = path.join(ROOT, f);
+    const p = path.join(dir, f);
     return [f, fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null];
   }));
 }
-function restoreLaunchFiles(snap) {
+function restoreLaunchFiles(snap, dir) {
   for (const [f, content] of Object.entries(snap)) {
-    const p = path.join(ROOT, f);
+    const p = path.join(dir, f);
     if (content === null) fs.rmSync(p, { force: true });
     else fs.writeFileSync(p, content);
   }
@@ -47,7 +48,7 @@ function makeWorkspace({ certs = false } = {}) {
 }
 
 function envFor(ws) {
-  return { ...process.env, LLM_SWITCHER_CONFIG: ws.cfgPath, LLM_SWITCHER_BLINDFOLD_CERTS: ws.certDir, CLAUDE_CONFIG_DIR: ws.claudeDir, LLM_SWITCHER_PORT: '', PORT: '' };
+  return { ...process.env, LLM_SWITCHER_CONFIG: ws.cfgPath, LLM_SWITCHER_STATE_DIR: ws.dir, LLM_SWITCHER_BLINDFOLD_CERTS: ws.certDir, CLAUDE_CONFIG_DIR: ws.claudeDir, LLM_SWITCHER_PORT: '', PORT: '' };
 }
 
 function writeConfig(ws, gwPort, bfPort, activeResponses = null) {
@@ -151,20 +152,19 @@ test('switch on refuses a foreign gateway port and changes nothing', { skip: !PO
   const replay = http.createServer((req, res) => res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher' })));
   await new Promise(r => replay.listen(gwPort, '127.0.0.1', r));
   const before = fs.readFileSync(ws.cfgPath);
-  const launch = snapshotLaunchFiles();
+  const launch = snapshotLaunchFiles(ws.dir);
   try {
     const r = await runSwitch(ws, ['on', 'plain']);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /held by another process/);
     assert.deepEqual(fs.readFileSync(ws.cfgPath), before);
-    assert.deepEqual(snapshotLaunchFiles(), launch, 'no launcher file changed');
+    assert.deepEqual(snapshotLaunchFiles(ws.dir), launch, 'no launcher file changed');
   } finally {
-    replay.close(); restoreLaunchFiles(launch); fs.rmSync(ws.dir, { recursive: true, force: true });
+    replay.close(); restoreLaunchFiles(launch, ws.dir); fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
 
 test('switch codex <blindfold profile> refuses missing certificates, a missing leaf.key and a foreign interceptor port, changing nothing', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
-  const launch = snapshotLaunchFiles();
   const cases = [];
   try {
     // 1. no certificates at all
@@ -182,18 +182,18 @@ test('switch codex <blindfold profile> refuses missing certificates, a missing l
     try {
       for (const [ws, why] of [[a, /missing/], [b, /leaf\.key is missing/], [c, /held by another process/]]) {
         const before = fs.readFileSync(ws.cfgPath);
+        const launch = snapshotLaunchFiles(ws.dir);
         const r = await runSwitch(ws, ['codex', 'bf']);
         assert.notEqual(r.status, 0, r.stdout);
         assert.match(r.stderr, why);
         assert.deepEqual(fs.readFileSync(ws.cfgPath), before, 'config.json is byte-identical');
         assert.ok(!fs.existsSync(path.join(ws.dir, 'blindfold.json')));
+        assert.deepEqual(snapshotLaunchFiles(ws.dir), launch, 'no launcher file changed');
       }
-      assert.deepEqual(snapshotLaunchFiles(), launch, 'no launcher file changed');
     } finally {
       squatter.close();
     }
   } finally {
-    restoreLaunchFiles(launch);
     for (const ws of cases) fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
@@ -203,7 +203,7 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
   const gwPort = await freePort();
   const bfPort = await freePort();
   writeConfig(ws, gwPort, bfPort);
-  const launch = snapshotLaunchFiles();
+  const launch = snapshotLaunchFiles(ws.dir);
   let gw = await startGateway(ws, gwPort);
   const bfState = () => probe(ws, `s.probeBlindfold(${bfPort})`);
   try {
@@ -264,7 +264,7 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
   } finally {
     try { const s = await bfState(); if (s.state === 'ours') process.kill(s.pid, 'SIGTERM'); } catch {}
     gw.kill();
-    restoreLaunchFiles(launch);
+    restoreLaunchFiles(launch, ws.dir);
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
@@ -275,7 +275,7 @@ test('concurrent admin changes: a refused change never reaches disk, and no acce
   const gwPort = await freePort();
   const bfPort = await freePort();
   writeConfig(ws, gwPort, bfPort, 'bf');
-  const launch = snapshotLaunchFiles();
+  const launch = snapshotLaunchFiles(ws.dir);
   const gw = await startGateway(ws, gwPort);
   // A squatter that accepts and never answers keeps the identity probe waiting.
   const silent = net.createServer(() => {});
@@ -309,7 +309,7 @@ test('concurrent admin changes: a refused change never reaches disk, and no acce
     silent.close();
     try { const st = await probe(ws, `s.probeBlindfold(${bfPort})`); if (st.state === 'ours') process.kill(st.pid, 'SIGTERM'); } catch {}
     gw.kill();
-    restoreLaunchFiles(launch);
+    restoreLaunchFiles(launch, ws.dir);
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });

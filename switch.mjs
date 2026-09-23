@@ -6,7 +6,7 @@ import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
-  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken,
+  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, openLog,
   probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher
 } from './state.mjs';
 import {
@@ -59,7 +59,7 @@ async function checkProxyRunning(port) {
 }
 
 function startProxyBackground(port) {
-  const log = fs.openSync(proxyLogPath, 'a', 0o600);
+  const log = openLog(proxyLogPath);
   const child = spawn(process.execPath, [proxyScript, '--port', String(port)], {
     detached: true,
     stdio: ['ignore', log, log],
@@ -70,8 +70,13 @@ function startProxyBackground(port) {
   return child.pid;
 }
 
-function refuseForeignPort(port, owner) {
-  console.error(`[Error] Port ${port} is held by another process, not by ${owner}.`);
+// 'silent' is a listener that never answered: a hung gateway of ours, or another program.
+const isHeld = (state) => state === 'foreign' || state === 'silent';
+
+function refuseForeignPort(port, owner, state = 'foreign') {
+  console.error(state === 'silent'
+    ? `[Error] Port ${port} accepts connections but does not answer. A hung ${owner} or another program holds it.`
+    : `[Error] Port ${port} is held by another process, not by ${owner}.`);
   console.error('        Stop that process, or choose another port with `switch port <n>`. Nothing was changed.');
   process.exit(1);
 }
@@ -82,7 +87,7 @@ async function ensureProxyRunning(port) {
     console.log(`Proxy is running on port ${port} (config reloaded dynamically).`);
     return;
   }
-  if (state === 'foreign') refuseForeignPort(port, 'this switcher');
+  if (isHeld(state)) refuseForeignPort(port, 'this switcher', state);
   // An installed service owns the gateway: a detached copy next to it would be a second gateway.
   const svc = installedService();
   if (svc && servicePort(svc) === port) {
@@ -186,12 +191,13 @@ function listeningPids(port) {
   return [...pids];
 }
 
-// Returns 'stopped', 'not-running', 'not-ours' or 'still-running'. The kill targets the process that
+// Returns 'stopped', 'not-running', 'not-ours', 'silent' or 'still-running'. The kill targets the process that
 // listens on the port, right after the identity probe confirmed that listener is this switcher.
 async function stopProxy(port) {
   const state = await probeGateway(port);
   if (state === 'free') return 'not-running';
   if (state === 'foreign') return 'not-ours';
+  if (state === 'silent') return 'silent';
   // Gone means the port is free; a slow answer is not proof that the gateway stopped.
   const waitGone = async () => {
     for (let i = 0; i < 20; i++) {
@@ -231,8 +237,8 @@ async function changePort(newPortStr) {
   const fresh = loadConfig() || config;
   fresh.port = p;
   saveConfig(fresh);
-  if (process.env.PORT || process.env.LLM_SWITCHER_PORT) {
-    console.log(`[WARN] PORT / LLM_SWITCHER_PORT env var is set and overrides config.json.`);
+  if (process.env.LLM_SWITCHER_PORT) {
+    console.log(`[WARN] LLM_SWITCHER_PORT env var is set and overrides config.json.`);
   }
   if (svc) {
     // The unit fixes the port on its command line, so it is rewritten and restarted, not fought.
@@ -296,7 +302,8 @@ async function turnOn(profileName, cliTarget) {
   const profile = planned.profiles[key];
   console.log(`Activating profile: [${profile.name || key}] (${key})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
 
-  if ((await probeGateway(port)) === 'foreign') refuseForeignPort(port, 'this switcher');
+  const gatewayState = await probeGateway(port);
+  if (isHeld(gatewayState)) refuseForeignPort(port, 'this switcher', gatewayState);
   const plannedState = computeLaunchState(planned, port);
   if (plannedState.blindfold) {
     const problem = blindfoldPreflight(plannedState.blindfold);
@@ -305,9 +312,8 @@ async function turnOn(profileName, cliTarget) {
       console.error('        Or set "blindfold": false in the profile. Nothing was changed.');
       process.exit(1);
     }
-    if ((await probeBlindfold(plannedState.blindfold.port)).state === 'foreign') {
-      refuseForeignPort(plannedState.blindfold.port, "this switcher's blindfold interceptor");
-    }
+    const held = (await probeBlindfold(plannedState.blindfold.port)).state;
+    if (isHeld(held)) refuseForeignPort(plannedState.blindfold.port, "this switcher's blindfold interceptor", held);
   }
   await ensureProxyRunning(port);
 
@@ -346,7 +352,7 @@ async function turnOn(profileName, cliTarget) {
   printProfile(profile);
   console.log('\nActive targets:');
   printTargets(getActiveMap(planned));
-  console.log(`\nClaude 1M:    ${st.claude1M ? `ACTIVE (${st.claude1M})` : 'OFF'}`);
+  console.log(`\nClaude 1M:    ${describeClaude1M(st)}`);
   console.log(`Codex 1M:     ${st.codex1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
 }
 
@@ -378,12 +384,20 @@ async function turnOff(targetArg) {
     console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
     process.exit(1);
   }
-  if (result === 'not-ours') {
-    console.error(`[Error] Port ${port} is held by a process that did not prove it is this switcher. It was not stopped.`);
+  if (result === 'not-ours' || result === 'silent') {
+    console.error(result === 'silent'
+      ? `[Error] Port ${port} accepts connections but does not answer, so it is not proven to be this switcher. It was not stopped.`
+      : `[Error] Port ${port} is held by a process that did not prove it is this switcher. It was not stopped.`);
     process.exit(1);
   }
   console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
+}
+
+// The flag carries the main session model only; haiku 1M reaches Claude Code through its tier variable.
+function describeClaude1M(st) {
+  if (!st.claude1MTiers?.length) return 'OFF';
+  return `ACTIVE (${st.claude1MTiers.map(t => `${t}[1m]`).join(', ')})${st.claude1M ? `, main session ${st.claude1M}` : ''}`;
 }
 
 // settings.json edits are never silent: name every value the switcher removed.
@@ -400,13 +414,14 @@ async function showStatus() {
   const flagged = fs.existsSync(paths.activeFlag);
 
   console.log('=== LLM Switcher Status ===');
-  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : gateway === 'foreign' ? `PORT ${port} HELD BY ANOTHER PROCESS` : 'STOPPED'}`);
+  const held = { foreign: `PORT ${port} HELD BY ANOTHER PROCESS`, silent: `PORT ${port} DOES NOT ANSWER (hung gateway or another program)` };
+  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : held[gateway] || 'STOPPED'}`);
   console.log(`Web UI:         http://127.0.0.1:${port}/ui`);
   console.log(`Launcher Flag:  ${flagged ? 'active.flag present' : 'absent (launchers use official endpoints)'}`);
   if (flagged && !isRunning) {
     console.log(`[WARN] active.flag exists but proxy is STOPPED -> launched CLIs will fail to connect. Run 'switch on' or 'switch off'.`);
   }
-  console.log(`Claude 1M Flag: ${fs.existsSync(paths.flag1M) ? `ACTIVE (${fs.readFileSync(paths.flag1M, 'utf8').trim()})` : 'OFF'}`);
+  console.log(`Claude 1M:      ${flagged ? describeClaude1M(computeLaunchState(config, port)) : 'OFF'}`);
   console.log(`Codex 1M Flag:  ${fs.existsSync(paths.flagCodex1M) ? 'ACTIVE' : 'OFF'}`);
   console.log('\nActive targets:');
   printTargets(activeMap);
@@ -714,7 +729,7 @@ async function runDoctor() {
     console.log(`[INFO] ANTHROPIC_BASE_URL is not set in current shell (launcher wrapper will inject on demand).`);
   }
 
-  console.log(`[INFO] Active flags: Claude 1M=${fs.existsSync(paths.flag1M) ? 'YES' : 'NO'}, Codex 1M=${fs.existsSync(paths.flagCodex1M) ? 'YES' : 'NO'}`);
+  console.log(`[INFO] Claude 1M: ${describeClaude1M(computeLaunchState(config, port))}. Codex 1M flag: ${fs.existsSync(paths.flagCodex1M) ? 'YES' : 'NO'}`);
   console.log(`[INFO] Universal environment loader: env.cmd=${fs.existsSync(paths.envCmd) ? 'READY' : 'PENDING'}`);
   if (fs.existsSync(proxyLogPath)) console.log(`[INFO] Background proxy log: ${proxyLogPath}`);
 

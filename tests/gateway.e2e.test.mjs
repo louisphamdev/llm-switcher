@@ -177,7 +177,7 @@ before(async () => {
   };
   fs.writeFileSync(path.join(tmpDir, 'config.json'), JSON.stringify(cfg, null, 2));
   proxy = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(proxyPort)], {
-    env: { ...process.env, LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'), LLM_SWITCHER_PORT: '' },
+    env: { ...process.env, LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'), LLM_SWITCHER_STATE_DIR: tmpDir, CLAUDE_CONFIG_DIR: path.join(tmpDir, 'claude'), LLM_SWITCHER_PORT: '' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let log = '';

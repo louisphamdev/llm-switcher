@@ -5,7 +5,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deleteProfile,
   computeLaunchState, findProfileKey, isValidProfileKey, resolvePort, redactConfig, MASKED_KEY,
   modelSlotsForProfile, modelForSlot, primaryModel, codexPublicModel, buildCodexCatalog,
-  certCoversHost, blindfoldPreflight, ROOT_DIR
+  certCoversHost, blindfoldPreflight, ROOT_DIR, openLog, probeGateway
 } from '../state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -362,6 +362,11 @@ test('helpers: case-insensitive lookup, key validation, port resolution, redacti
     assert.equal(resolvePort(['on'], cfg), 4000);
     process.env.LLM_SWITCHER_PORT = '4500';
     assert.equal(resolvePort(['on'], cfg), 4500);
+    // A generic PORT belongs to other tools (dev servers) and must not move the gateway (audit F32).
+    delete process.env.LLM_SWITCHER_PORT;
+    process.env.PORT = '3000';
+    assert.equal(resolvePort(['on'], cfg), 4000);
+    delete process.env.PORT;
   } finally {
     if (saved.a === undefined) delete process.env.LLM_SWITCHER_PORT; else process.env.LLM_SWITCHER_PORT = saved.a;
     if (saved.b !== undefined) process.env.PORT = saved.b;
@@ -510,4 +515,82 @@ test('make-certs.sh builds a CA that can sign only for its host', (t) => {
   ossl('x509', '-req', '-in', 'evil.csr', '-CA', path.join(certs, 'ca.pem'), '-CAkey', path.join(certs, 'ca.key'),
     '-CAcreateserial', '-days', '1', '-extfile', 'evil.ext', '-out', 'evil.pem');
   assert.throws(() => ossl('verify', '-CAfile', path.join(certs, 'ca.pem'), 'evil.pem'), /permitted subtree violation/);
+});
+
+// ---- Launch state, config cache, logs, probes (audit F28, F31, F42, M5, racer "blocked gateway") ----
+
+// Paths are computed at import, so each scenario runs state.mjs in a child with its own dirs.
+function runState(env, code) {
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e',
+    `const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))}); const fs = await import('node:fs'); const path = await import('node:path');
+     const result = await (async () => { ${code} })(); console.log(JSON.stringify(result));`],
+  { env: { ...process.env, LLM_SWITCHER_PORT: '', ...env }, encoding: 'utf8' });
+  return JSON.parse(out.trim().split('\n').pop());
+}
+
+function tmpDirs(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-state-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cfg = path.join(dir, 'config.json');
+  fs.writeFileSync(cfg, JSON.stringify(makeCfg()), { mode: 0o600 });
+  return { dir, env: { LLM_SWITCHER_CONFIG: cfg, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: path.join(dir, 'claude') } };
+}
+
+test('launch files follow LLM_SWITCHER_STATE_DIR, so tests never touch the real ones', (t) => {
+  const { dir, env } = tmpDirs(t);
+  const r = runState(env, `const st = s.applyLaunchState(s.loadConfig(), 4000); return { active: fs.existsSync(path.join(${JSON.stringify(dir)}, 'active.flag')), flag: s.paths.activeFlag };`);
+  assert.equal(r.active, true);
+  assert.equal(r.flag, path.join(dir, 'active.flag'));
+});
+
+test('a failed env write leaves the flags alone, so no launcher sources a missing env file', (t) => {
+  const { dir, env } = tmpDirs(t);
+  fs.mkdirSync(path.join(dir, 'env-codex.sh'));
+  const r = runState(env, `const st = s.applyLaunchState(s.loadConfig(), 4000); return { err: st.envWriteError || null, active: fs.existsSync(s.paths.activeFlag), envSh: fs.existsSync(s.paths.envSh) };`);
+  assert.ok(r.err, 'the failure is reported');
+  assert.equal(r.active, false, 'active.flag is not written when the env files are not');
+});
+
+test('a haiku-only 1M profile reports its 1M tier and keeps the main session model', () => {
+  const cfg = makeCfg();
+  cfg.profiles.router.model1M = { haiku: true };
+  const st = computeLaunchState(cfg, 4000);
+  assert.equal(st.claude1M, null, 'the main session does not move to Haiku');
+  assert.deepEqual(st.claude1MTiers, ['haiku']);
+  assert.equal(Object.fromEntries(st.env).ANTHROPIC_DEFAULT_HAIKU_MODEL, 'haiku[1m]');
+});
+
+test('loadConfig sees a rewrite that keeps the same mtime', (t) => {
+  const { dir, env } = tmpDirs(t);
+  const cfgPath = path.join(dir, 'config.json');
+  const r = runState(env, `
+    const first = s.loadConfig().activeProfile;
+    const st = fs.statSync(${JSON.stringify(cfgPath)});
+    const next = JSON.parse(fs.readFileSync(${JSON.stringify(cfgPath)}, 'utf8'));
+    next.activeProfile = 'codexOnly';
+    fs.writeFileSync(${JSON.stringify(cfgPath)} + '.new', JSON.stringify(next));
+    fs.renameSync(${JSON.stringify(cfgPath)} + '.new', ${JSON.stringify(cfgPath)});
+    fs.utimesSync(${JSON.stringify(cfgPath)}, st.atime, st.mtime);
+    return { first, second: s.loadConfig().activeProfile };`);
+  assert.equal(r.first, 'router');
+  assert.equal(r.second, 'codexOnly');
+});
+
+test('openLog rotates a log above the size limit', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-log-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'proxy.log');
+  fs.writeFileSync(file, Buffer.alloc(11 * 1024 * 1024, 'a'));
+  fs.closeSync(openLog(file));
+  assert.equal(fs.statSync(file).size, 0);
+  assert.equal(fs.statSync(`${file}.1`).size, 11 * 1024 * 1024);
+  if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+});
+
+test('a port that accepts but never answers probes as silent, not as foreign', async (t) => {
+  const net = await import('node:net');
+  const server = net.createServer(() => {});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  assert.equal(await probeGateway(server.address().port), 'silent');
 });

@@ -96,37 +96,44 @@ export function writeDashboardLauncher(url) {
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 export const claudeSettingsPath = path.join(claudeDir, 'settings.json');
 
+// The shims read the launch files from the checkout. LLM_SWITCHER_STATE_DIR moves them for tests,
+// which must not rewrite the launch state of a switcher that is in use.
+const STATE_DIR = process.env.LLM_SWITCHER_STATE_DIR ? path.resolve(process.env.LLM_SWITCHER_STATE_DIR) : ROOT_DIR;
+
 export const paths = {
-  activeFlag: path.join(ROOT_DIR, 'active.flag'),
-  flag1M: path.join(ROOT_DIR, '1m.flag'),            // Claude Code launcher flag
-  flagCodex1M: path.join(ROOT_DIR, 'codex-1m.flag'),  // Codex launcher flag
-  flagOpenAI1M: path.join(ROOT_DIR, 'openai-1m.flag'), // OpenAI launcher flag
-  envCmd: path.join(ROOT_DIR, 'env.cmd'),
-  envSh: path.join(ROOT_DIR, 'env.sh'),
-  envCodexCmd: path.join(ROOT_DIR, 'env-codex.cmd'),
-  envCodexSh: path.join(ROOT_DIR, 'env-codex.sh'),
-  codexCatalog: path.join(ROOT_DIR, 'model-catalog.json'),
+  activeFlag: path.join(STATE_DIR, 'active.flag'),
+  flag1M: path.join(STATE_DIR, '1m.flag'),            // Claude Code launcher flag
+  flagCodex1M: path.join(STATE_DIR, 'codex-1m.flag'),  // Codex launcher flag
+  flagOpenAI1M: path.join(STATE_DIR, 'openai-1m.flag'), // OpenAI launcher flag
+  envCmd: path.join(STATE_DIR, 'env.cmd'),
+  envSh: path.join(STATE_DIR, 'env.sh'),
+  envCodexCmd: path.join(STATE_DIR, 'env-codex.cmd'),
+  envCodexSh: path.join(STATE_DIR, 'env-codex.sh'),
+  codexCatalog: path.join(STATE_DIR, 'model-catalog.json'),
   codexCatalogTemplate: path.join(ROOT_DIR, 'codex-catalog-template.json'),
-  blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(ROOT_DIR, 'blindfold', 'certs'), 'ca.pem'),
-  pidFile: path.join(ROOT_DIR, 'proxy.pid')
+  blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(ROOT_DIR, 'blindfold', 'certs'), 'ca.pem')
 };
 
 // ---------------- config IO ----------------
 
 let cachedConfig = null;
-let lastMtime = 0;
+let lastSignature = '';
 let lastLoadError = null;
 
-// Cached config read keyed by mtime. If the file is half-written (invalid JSON), keep the old cached copy.
+// mtime alone misses a rewrite inside the same timestamp tick. Every save renames a new file into
+// place, so the inode changes even then.
+const fileSignature = (st) => `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
+
+// Cached config read. If the file is half-written (invalid JSON), keep the old cached copy.
 export function loadConfig() {
   try {
     const stat = fs.statSync(configPath);
-    if (!cachedConfig || stat.mtimeMs !== lastMtime) {
+    if (!cachedConfig || fileSignature(stat) !== lastSignature) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (!parsed || typeof parsed !== 'object') throw new Error('config root must be an object');
       if (!parsed.profiles || typeof parsed.profiles !== 'object') parsed.profiles = {};
       cachedConfig = parsed;
-      lastMtime = stat.mtimeMs;
+      lastSignature = fileSignature(stat);
     }
     lastLoadError = null;
   } catch (err) {
@@ -135,8 +142,6 @@ export function loadConfig() {
   return cachedConfig;
 }
 
-// A caller that changed the cached object and then decided not to save drops it here, so the
-// next loadConfig reads config.json again instead of serving the unsaved change.
 export function getConfigLoadError() {
   return lastLoadError;
 }
@@ -150,7 +155,7 @@ export function saveConfig(cfg) {
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, configPath);
   cachedConfig = cfg;
-  try { lastMtime = fs.statSync(configPath).mtimeMs; } catch {}
+  try { lastSignature = fileSignature(fs.statSync(configPath)); } catch {}
 }
 
 // ---------------- helpers ----------------
@@ -319,7 +324,8 @@ export function parsePort(value) {
   return Number.isInteger(p) && p > 0 && p <= 65535 ? p : null;
 }
 
-// Precedence: --port / -p > PORT / LLM_SWITCHER_PORT > config.port > 3456
+// Precedence: --port / -p > LLM_SWITCHER_PORT > config.port > 3456. A generic PORT is ignored: other
+// tools (dev servers) set it, and it would move the gateway in silence.
 export function resolvePort(argv = process.argv.slice(2), cfg = loadConfig()) {
   for (let i = 0; i < argv.length; i++) {
     if ((argv[i] === '--port' || argv[i] === '-p') && argv[i + 1]) {
@@ -327,7 +333,7 @@ export function resolvePort(argv = process.argv.slice(2), cfg = loadConfig()) {
       if (p) return p;
     }
   }
-  const envP = parsePort(process.env.LLM_SWITCHER_PORT || process.env.PORT);
+  const envP = parsePort(process.env.LLM_SWITCHER_PORT);
   if (envP) return envP;
   return parsePort(cfg?.port) || DEFAULT_PORT;
 }
@@ -416,6 +422,8 @@ function writeOrRemove(file, content) {
   }
 }
 
+// The main session model. Haiku is left out on purpose: a haiku-only 1M profile would otherwise
+// move the main session to Haiku. claude1MTiers reports every tier, haiku included.
 function claudeTier1M(profile) {
   const m = profile?.model1M || {};
   return m.opus ? 'opus[1m]' : m.sonnet ? 'sonnet[1m]' : m.fable ? 'fable[1m]' : null;
@@ -447,6 +455,7 @@ export function computeLaunchState(cfg, port) {
   const state = {
     active: Boolean(claude || codex || openai || vertex),
     claude1M: claude ? claudeTier1M(claude) : null,
+    claude1MTiers: claude ? CLAUDE_MODEL_SLOTS.filter(slot => model1MForSlot(claude, slot)) : [],
     codex1M: codex && model1MForSlot(codex, 'main') ? (primaryModel(codex) || '1000000') : null,
     openai1M: openai && anyTier1M(openai) ? (primaryModel(openai) || '1000000') : null,
     // host and prefix travel with the port: an account that signs in with an API key
@@ -518,31 +527,47 @@ export function computeLaunchState(cfg, port) {
   return state;
 }
 
-// Write flags + env.cmd/env.sh from activeProfiles, and clean up Claude Code settings.json.
+// tmp + rename: a launcher never sources a half-written env file.
+function writeAtomic(file, content) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+// Write env.cmd/env.sh and the flags from activeProfiles, and clean up Claude Code settings.json.
 export function applyLaunchState(cfg, port, { cleanSettings = true } = {}) {
   const st = computeLaunchState(cfg, port);
-  writeOrRemove(paths.activeFlag, st.active ? 'active' : null);
-  writeOrRemove(paths.flag1M, st.claude1M);
-  writeOrRemove(paths.flagCodex1M, st.codex1M);
-  writeOrRemove(paths.flagOpenAI1M, st.openai1M);
 
   const renderCmd = (pairs) => ['@echo off', 'REM Auto-generated by LLM Switcher for active profiles',
     ...pairs.map(([k, v]) => `SET "${k}=${v}"`)].join('\r\n') + '\r\n';
   const renderSh = (pairs) => ['#!/usr/bin/env sh', '# Auto-generated by LLM Switcher for active profiles',
     ...pairs.map(([k, v]) => `export ${k}='${String(v).replace(/'/g, `'\\''`)}'`)].join('\n') + '\n';
 
+  // The env files come first and the flags last: a flag that says "active" while its env file is
+  // missing or stale makes the launcher bypass the gateway. A failed write leaves the flags as they were.
   if (st.active) {
     try {
-      fs.writeFileSync(paths.envCmd, renderCmd(st.env), 'utf8');
-      fs.writeFileSync(paths.envSh, renderSh(st.env), 'utf8');
+      writeAtomic(paths.envCmd, renderCmd(st.env));
+      writeAtomic(paths.envSh, renderSh(st.env));
       // Written even when empty, so a stale Codex-only file from a previous profile
       // can never survive a switch.
-      fs.writeFileSync(paths.envCodexCmd, renderCmd(st.envCodex), 'utf8');
-      fs.writeFileSync(paths.envCodexSh, renderSh(st.envCodex), 'utf8');
+      writeAtomic(paths.envCodexCmd, renderCmd(st.envCodex));
+      writeAtomic(paths.envCodexSh, renderSh(st.envCodex));
     } catch (err) {
       st.envWriteError = err.message;
+      return st;
     }
-  } else {
+  }
+  writeOrRemove(paths.activeFlag, st.active ? 'active' : null);
+  writeOrRemove(paths.flag1M, st.claude1M);
+  writeOrRemove(paths.flagCodex1M, st.codex1M);
+  writeOrRemove(paths.flagOpenAI1M, st.openai1M);
+  if (!st.active) {
     writeOrRemove(paths.envCmd, null);
     writeOrRemove(paths.envSh, null);
     writeOrRemove(paths.envCodexCmd, null);
@@ -556,8 +581,8 @@ export function applyLaunchState(cfg, port, { cleanSettings = true } = {}) {
   const catalog = st.active && codexProfile ? buildCodexCatalog(codexProfile) : null;
   writeOrRemove(paths.codexCatalog, catalog ? JSON.stringify(catalog) : null);
 
-  // Clean only after the env files are in place: a failed write must not also touch settings.json.
-  if (cleanSettings && !st.envWriteError) st.settings = cleanClaudeSettings(port);
+  // Clean only after the env files are in place: a failed write returned above, before settings.json.
+  if (cleanSettings) st.settings = cleanClaudeSettings(port);
   return st;
 }
 
@@ -647,13 +672,14 @@ function getJson(port, pathname, timeoutMs = 3000) {
       });
     });
     req.on('error', err => resolve({ state: err.code === 'ECONNREFUSED' ? 'free' : 'foreign' }));
-    req.on('timeout', () => { req.destroy(); resolve({ state: 'foreign' }); });
+    // A listener that never answers can be a hung gateway of ours; the caller must not call it foreign.
+    req.on('timeout', () => { req.destroy(); resolve({ state: 'silent' }); });
   });
 }
 
 const newNonce = () => crypto.randomBytes(16).toString('hex');
 
-/** 'ours' | 'foreign' | 'free' */
+/** 'ours' | 'foreign' | 'silent' | 'free'. Treat 'silent' like 'foreign' in every decision. */
 export async function probeGateway(port) {
   const nonce = newNonce();
   const r = await getJson(port, `/health?challenge=${nonce}`);
@@ -664,7 +690,7 @@ export async function probeGateway(port) {
   return proof && b.proof === proof ? 'ours' : 'foreign';
 }
 
-/** { state: 'ours', pid, gatewayPort, host, prefix } | { state: 'foreign' } | { state: 'free' } */
+/** { state: 'ours', pid, gatewayPort, host, prefix } | { state: 'foreign' | 'silent' | 'free' } */
 export async function probeBlindfold(port) {
   const nonce = newNonce();
   const r = await getJson(port, `/?challenge=${nonce}`);
@@ -746,9 +772,22 @@ export function blindfoldPreflight(desired) {
   return null;
 }
 
+const LOG_LIMIT = 10 * 1024 * 1024;
+
+// Opens a private log for appending. A log above LOG_LIMIT moves to <file>.1 first, so the two
+// files together stay near twice the limit.
+export function openLog(file) {
+  try {
+    if (fs.statSync(file).size > LOG_LIMIT) fs.renameSync(file, `${file}.1`);
+  } catch {}
+  const fd = fs.openSync(file, 'a', 0o600);
+  try { fs.fchmodSync(fd, 0o600); } catch {}
+  return fd;
+}
+
 // The single place that starts an interceptor.
 function spawnBlindfold(desired, gatewayPort) {
-  const log = fs.openSync(path.join(ROOT_DIR, 'blindfold.log'), 'a', 0o600);
+  const log = openLog(path.join(ROOT_DIR, 'blindfold.log'));
   const child = spawn(process.execPath, [
     blindfoldScript,
     '--port', String(desired.port),
@@ -768,9 +807,9 @@ export async function checkBlindfoldTarget(cfg, gatewayPort) {
   if (!desired) return null;
   const problem = blindfoldPreflight(desired);
   if (problem) return problem;
-  if ((await probeBlindfold(desired.port)).state === 'foreign') {
-    return `Port ${desired.port} is held by another process, not by this switcher's interceptor.`;
-  }
+  const held = (await probeBlindfold(desired.port)).state;
+  if (held === 'foreign') return `Port ${desired.port} is held by another process, not by this switcher's interceptor.`;
+  if (held === 'silent') return `Port ${desired.port} accepts connections but does not answer. A hung interceptor or another program holds it.`;
   return null;
 }
 
