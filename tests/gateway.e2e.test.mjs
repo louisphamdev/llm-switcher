@@ -635,3 +635,18 @@ test('Admin API refuses to write while config.json does not parse, and keeps the
     fs.writeFileSync(cfgPath, good);
   }
 });
+
+// Codex role handling follows the protocol the client speaks, not the profile's inFormat:
+// an `auto` profile serves /v1/responses too, and a bare OpenAI id has no credentials upstream.
+test('an auto profile maps Codex names by client protocol and leaves Claude mapping unchanged', async () => {
+  const upstreamModel = async (p, body) => {
+    const before = received.length;
+    const r = await post(p, body, { 'x-llm-profile': 'chat' });
+    await r.text();
+    return received.slice(before).at(-1)?.body?.model;
+  };
+  assert.equal(await upstreamModel('/v1/responses', { model: 'gpt-5.5', stream: false, input: 'hi' }), 'up-opus');
+  assert.equal(await upstreamModel('/v1/responses', { model: 'main', stream: false, input: 'hi' }), 'up-opus');
+  assert.equal(await upstreamModel('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-opus');
+  assert.equal(await upstreamModel('/v1/chat/completions', { model: 'default', messages: [{ role: 'user', content: 'hi' }] }), 'up-sonnet');
+});

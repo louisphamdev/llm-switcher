@@ -308,7 +308,9 @@ function getFirstActiveProfile(preferred, req) {
   return { cfg: loadConfig(), profileKey: null, profile: null };
 }
 
-function mapModel(requestedModel, profile) {
+// clientFormat is the protocol the request arrived in. An `auto` profile serves every protocol,
+// so the profile's inFormat cannot tell a Codex request from a Claude one.
+function mapModel(requestedModel, profile, clientFormat) {
   if (!requestedModel) return primaryModel(profile);
   const clean = requestedModel.replace(/\[1m\]/gi, '').trim();
   // If the client specified a model with a provider prefix (e.g. ag/..., gh/..., cf/...), keep it as-is
@@ -316,7 +318,7 @@ function mapModel(requestedModel, profile) {
     return clean;
   }
   const m = clean.toLowerCase();
-  if (profile?.inFormat === 'responses') {
+  if (clientFormat === 'responses') {
     // Aliases for the real Codex roles in the docs (model / review_model /
     // agents.default_subagent_model). Unknown names pass through unchanged.
     const aliases = {
@@ -341,7 +343,7 @@ function mapModel(requestedModel, profile) {
     if (/^(gpt|o\d|codex)([-/]|$)/i.test(clean)) return modelForSlot(profile, 'main') || clean;
     return clean || requestedModel;
   }
-  if (profile?.inFormat === 'openai-chat' || profile?.inFormat === 'vertex') {
+  if (clientFormat === 'openai-chat' || clientFormat === 'vertex') {
     if (m === 'default' || m === 'main' || !clean) return modelForSlot(profile, 'default') || clean;
   }
   if (m.includes('fable')) return modelForSlot(profile, 'fable') || clean;
@@ -657,7 +659,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   const reqStartTime = Date.now();
   const requestPreview = previewOf(ir);
   const requestedModel = ir.model || payload.model || '';
-  const mappedModel = mapModel(requestedModel, profile);
+  const mappedModel = mapModel(requestedModel, profile, clientFormat);
   const outFormat = resolveOutFormat(profile, mappedModel);
   console.log(`[llm-switcher] ${clientFormat} -> ${outFormat} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
 
@@ -830,7 +832,7 @@ async function handleCountTokens(req, res, buf) {
   }
   const { profile } = getActiveProfile('anthropic', req);
   if (profile) {
-    const mappedModel = mapModel(payload.model || '', profile);
+    const mappedModel = mapModel(payload.model || '', profile, 'anthropic');
     if (resolveOutFormat(profile, mappedModel) === 'anthropic') {
       const { url, headers } = upstreamEndpoint(profile, 'anthropic', mappedModel, false, req);
       const countUrl = profile.endpoints?.countTokens || url.replace(/\/messages$/, '/messages/count_tokens');
@@ -1081,8 +1083,6 @@ async function route(req, res) {
   if (method === 'GET' && (pathname.startsWith('/v1/models/') || pathname.startsWith('/models/'))) {
     const modelId = decodeURIComponent(pathname.replace(/^\/(v1\/)?models\//, ''));
     if (modelId) {
-      const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex'], req);
-      const resolvedId = profile ? (mapModel(modelId, profile) || modelId) : modelId;
       const created = Math.floor(Date.now() / 1000);
       return sendJson(res, 200, {
         ...CODEX_MODEL_TEMPLATE,
@@ -1428,7 +1428,7 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
   const reqStartTime = Date.now();
   const requestPreview = previewOf(ir);
   const requestedModel = ir.model || payload.model || '';
-  const mappedModel = mapModel(requestedModel, profile);
+  const mappedModel = mapModel(requestedModel, profile, clientFormat);
   const outFormat = resolveOutFormat(profile, mappedModel);
 
   console.log(`[llm-switcher:ws] ${clientFormat} -> ${outFormat} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
