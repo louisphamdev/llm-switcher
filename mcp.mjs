@@ -11,7 +11,7 @@
 // ============================================================
 
 import fs from 'node:fs';
-import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken } from './state.mjs';
+import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken, TARGETS } from './state.mjs';
 
 const VERSION = (() => {
   try { return JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version; } catch { return '0.0.0'; }
@@ -92,7 +92,7 @@ const TOOLS = [
         target: {
           type: 'string',
           description: 'CLI target to switch: "anthropic" (Claude Code), "responses" (Codex), "openai-chat", or "vertex"',
-          enum: ['anthropic', 'responses', 'openai-chat', 'vertex']
+          enum: TARGETS
         },
         profile: {
           type: 'string',

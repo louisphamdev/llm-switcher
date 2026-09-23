@@ -1126,7 +1126,6 @@ async function route(req, res) {
   // erroring out.
   if (method === 'GET' && (pathname === '/v1/responses' || pathname === '/responses' || pathname.startsWith('/v1/responses/') || pathname.startsWith('/responses/'))) {
     req.resume();
-    const { profile } = getActiveProfile('responses', req);
     if (pathname === '/v1/responses' || pathname === '/responses') {
       // Model metadata / list — return an empty list
       return sendJson(res, 200, { object: 'list', data: [] });

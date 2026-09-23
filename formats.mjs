@@ -28,35 +28,6 @@ export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
 
 // ---------------- stop reasons ----------------
 
-function mapStopReason(finishReason) {
-  const r = String(finishReason || '').toLowerCase();
-  switch (r) {
-    case 'tool_calls':
-    case 'tool_call':
-    case 'function_call':
-    case 'function_calls':
-      return 'tool_use';
-    case 'length':
-    case 'max_tokens':
-    case 'max_output_tokens':
-      return 'max_tokens';
-    case 'stop':
-    case 'end_turn':
-    case 'stop_sequence':
-    case 'content_filter':
-    case 'safety':
-    case 'recitation':
-    case 'language':
-    case 'blocklist':
-    case 'prohibited_content':
-    case 'spii':
-    case 'malformed_function_call':
-    case 'finish_reason_unspecified':
-    default:
-      return 'end_turn';
-  }
-}
-
 // Canonical finish used internally for the event stream.
 function canonFinish(raw) {
   const r = String(raw || '').toLowerCase();
@@ -262,14 +233,6 @@ function smartFinish(root, choice) {
   if (typeof raw === 'string' && raw) return raw;
   if (root?.done === true || choice?.done === true) return 'stop';
   return null;
-}
-
-function smartChoice(root) {
-  if (!root || typeof root !== 'object') return null;
-  for (const k of ['choices', 'candidates', 'outputs', 'results', 'messages']) {
-    if (Array.isArray(root[k]) && root[k][0] && typeof root[k][0] === 'object') return root[k][0];
-  }
-  return root;
 }
 
 function firstChoice(root) {
@@ -1935,15 +1898,6 @@ function createAnthropicStream(emit, model) {
   };
 }
 
-function canonicalToOpenAI(canonical) {
-  switch (canonical) {
-    case 'length': return 'length';
-    case 'tool_calls': return 'tool_calls';
-    case 'content_filter': return 'content_filter';
-    default: return 'stop';
-  }
-}
-
 function buildAnthropicMessage({ model, think, text, tools, finish, prompt, completion, cached, id, sig }) {
   const content = [];
   const thinking = (think || []).join('');
@@ -2339,9 +2293,9 @@ function createVertexStream(emit, model) {
 }
 
 export {
-  mapStopReason, canonFinish, chatFinish, canonicalToOpenAI, anthropicStopReason,
+  canonFinish, chatFinish, anthropicStopReason,
   smartReasoning, smartText, smartToolCalls, smartUsage, smartFinish,
-  smartChoice, firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
+  firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
   budgetToEffort, effortToBudget, clampBudget, parseArgs, stringifyArgs,
   anthropicToIR, chatToIR, responsesToIR, vertexToIR, parseToIR,
   healToolPairs, healAnthropicPayload, rememberToolSignature, lookupToolSignature, estimateTokens, irToChatBody, irToAnthropicBody, irToVertexBody, emitUpstreamBody,

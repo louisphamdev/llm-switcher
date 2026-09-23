@@ -1197,6 +1197,7 @@
     let currentProfileBuffer = null;
     let renderedSlotFormat = 'auto';
     const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
+    // Same list as TARGETS in state.mjs. The page is served as a static file and cannot import it.
     const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
     // Order matters: publicModels is read by position when codexRoles has no entry.
     const CODEX_ROLE_SLOTS = ['main', 'review', 'subagent'];

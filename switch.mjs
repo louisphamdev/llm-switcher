@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn, execFileSync, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,

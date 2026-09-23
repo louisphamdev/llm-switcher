@@ -517,7 +517,7 @@ re-opened from a shell where the shim is on `PATH`.
 |---|---|
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the repo (the proxy, `switch` and `mcp.mjs` all honour it). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port (priority: flag > env > `config.port`). |
-| `x-llm-profile: <key>` header or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
+| `x-llm-profile: <key>` header (alias `x-profile`) or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
 | `profile.thinkingMode` | `auto` (default, for gateways like 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
 | `profile.endpoints` | Override upstream URLs per format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
