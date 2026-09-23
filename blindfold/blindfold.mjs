@@ -176,13 +176,35 @@ export function toGatewayPath(url) {
   return GATEWAY_PREFIX + parsed.pathname.slice(API_PREFIX.length) + parsed.search;
 }
 
+// Codex's ChatGPT credentials. The gateway never reads them, and the gateway port is plain
+// HTTP that another local account can hold once it is free, so they stay on this side.
+const GATEWAY_STRIPPED = ['authorization', 'proxy-authorization', 'cookie', 'chatgpt-account-id', 'openai-organization'];
+
 // The gateway answers only to a loopback Host, so rewrite it. Origin carries the
 // intercepted hostname and would fail the same check.
-function gatewayHeaders(headers) {
+export function gatewayHeaders(headers, { host = GATEWAY_HOST, port = GATEWAY_PORT } = {}) {
   const out = { ...headers };
-  out.host = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
+  out.host = `${host}:${port}`;
   delete out.origin;
+  for (const name of GATEWAY_STRIPPED) delete out[name];
   return out;
+}
+
+// A relay holds two connections. When one side fails or leaves early, end the other:
+// otherwise the client waits forever, or the upstream keeps streaming (and spending).
+function bindExchange(res, upstream) {
+  res.on('close', () => { if (!res.writableFinished) upstream.destroy(); });
+  upstream.on('response', (upRes) => {
+    upRes.on('error', () => res.destroy());
+    upRes.on('close', () => { if (!upRes.complete) res.destroy(); });
+  });
+}
+
+function failExchange(res, status, contentType, body) {
+  if (res.destroyed) return;
+  if (res.headersSent) return res.destroy();
+  res.writeHead(status, { 'Content-Type': contentType });
+  res.end(body);
 }
 
 // A stalled peer must not hold a socket open for the life of the process.
@@ -219,28 +241,31 @@ function recordExchange(req) {
   };
 }
 
-mitm.on('request', (req, res) => {
-  if (!isGatewayPath(req.url)) return passThroughRequest(req, res);
-
+export function relayToGateway(req, res, { host = GATEWAY_HOST, port = GATEWAY_PORT } = {}) {
   log('gateway', req.method, req.url);
   const record = recordExchange(req);
 
   const upstream = http.request({
-    host: GATEWAY_HOST,
-    port: GATEWAY_PORT,
+    host,
+    port,
     method: req.method,
     path: toGatewayPath(req.url),
-    headers: gatewayHeaders(req.headers)
+    headers: gatewayHeaders(req.headers, { host, port })
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
     if (record) record(upRes);
     upRes.pipe(res);
   });
+  bindExchange(res, upstream);
   upstream.on('error', (err) => {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: `gateway unreachable: ${err.message}` } }));
+    failExchange(res, 502, 'application/json', JSON.stringify({ error: { message: `gateway unreachable: ${err.message}` } }));
   });
   req.pipe(upstream);
+}
+
+mitm.on('request', (req, res) => {
+  if (!isGatewayPath(req.url)) return passThroughRequest(req, res);
+  relayToGateway(req, res);
 });
 
 // Everything that is not a Codex API call goes to the real host, so sign-in and
@@ -260,9 +285,9 @@ function passThroughRequest(req, res) {
     if (record) record(upRes);
     upRes.pipe(res);
   });
+  bindExchange(res, upstream);
   upstream.on('error', (err) => {
-    res.writeHead(502, { 'Content-Type': 'text/plain' });
-    res.end(`upstream unreachable: ${err.message}`);
+    failExchange(res, 502, 'text/plain', `upstream unreachable: ${err.message}`);
   });
   req.pipe(upstream);
 }
@@ -349,17 +374,11 @@ function captureUpgrade(req, clientSocket, target) {
 }
 
 // WebSocket upgrades: relay the raw TCP stream once the handshake is written.
-mitm.on('upgrade', (req, clientSocket, head) => {
-  const toGateway = isGatewayPath(req.url);
-  const target = toGateway
-    ? net.connect(GATEWAY_PORT, GATEWAY_HOST)
-    : tls.connect({ host: TARGET_HOST, port: 443, servername: TARGET_HOST });
-
-  const headers = toGateway ? gatewayHeaders(req.headers) : { ...req.headers, host: TARGET_HOST };
-  const requestPath = toGateway ? toGatewayPath(req.url) : req.url;
-
-  target.on(toGateway ? 'connect' : 'secureConnect', () => {
-    log('upgrade', toGateway ? 'gateway' : 'passthrough', requestPath);
+function relayUpgrade(req, clientSocket, head, target, readyEvent, headers, requestPath, route) {
+  let ready = false;
+  target.on(readyEvent, () => {
+    ready = true;
+    log('upgrade', route, requestPath);
     const lines = [`${req.method} ${requestPath} HTTP/1.1`];
     for (const [k, v] of Object.entries(headers)) lines.push(`${k}: ${v}`);
     target.write(lines.join('\r\n') + '\r\n\r\n');
@@ -371,9 +390,26 @@ mitm.on('upgrade', (req, clientSocket, head) => {
     captureUpgrade(req, clientSocket, target);
   });
 
-  const close = () => { target.destroy(); clientSocket.destroy(); };
-  target.on('error', close);
-  clientSocket.on('error', close);
+  // Either side closing ends the other, in capture mode too, where no pipe carries it.
+  target.on('close', () => clientSocket.destroy());
+  clientSocket.on('close', () => target.destroy());
+  target.on('error', (err) => {
+    log('upgrade', route, 'failed:', err.code || err.message);
+    if (!ready && clientSocket.writable) clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+    else clientSocket.destroy();
+  });
+  clientSocket.on('error', () => target.destroy());
+}
+
+export function relayUpgradeToGateway(req, clientSocket, head, { host = GATEWAY_HOST, port = GATEWAY_PORT } = {}) {
+  relayUpgrade(req, clientSocket, head, net.connect(port, host), 'connect',
+    gatewayHeaders(req.headers, { host, port }), toGatewayPath(req.url), 'gateway');
+}
+
+mitm.on('upgrade', (req, clientSocket, head) => {
+  if (isGatewayPath(req.url)) return relayUpgradeToGateway(req, clientSocket, head);
+  relayUpgrade(req, clientSocket, head, tls.connect({ host: TARGET_HOST, port: 443, servername: TARGET_HOST }),
+    'secureConnect', { ...req.headers, host: TARGET_HOST }, req.url, 'passthrough');
 });
 
 mitm.on('tlsClientError', (err) => log('tls client error:', err.message));

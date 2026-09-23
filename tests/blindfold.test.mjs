@@ -16,9 +16,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
+import net from 'node:net';
 import {
   isGatewayPath, toGatewayPath, isInterceptedHost, isPrivateDestination,
-  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody, writeCaptureFile
+  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody, writeCaptureFile,
+  relayToGateway, relayUpgradeToGateway
 } from '../blindfold/blindfold.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -178,5 +181,85 @@ test('make-certs.sh writes private files and refuses a directory it does not own
     assert.ok(!fs.existsSync(path.join(rootOwned, 'ca.key')));
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ---- relay behaviour, through the real handlers against a stub gateway ----
+
+const CREDENTIALS = {
+  authorization: 'Bearer chatgpt-oauth', 'proxy-authorization': 'Basic x', cookie: 'sid=1',
+  'chatgpt-account-id': 'acct-1', 'openai-organization': 'org-1'
+};
+
+function listen(server) {
+  return new Promise(r => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+}
+
+// The gateway port is plain HTTP on loopback. Codex's ChatGPT credentials must never travel
+// there: the gateway does not read them, and another account can hold a freed port.
+test('the gateway relay strips Codex credentials and keeps tracing headers', async () => {
+  const seen = [];
+  const stub = http.createServer((req, res) => { seen.push(req.headers); res.end('ok'); });
+  stub.on('upgrade', (req, socket) => { seen.push(req.headers); socket.end('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'); });
+  const stubPort = await listen(stub);
+  const front = http.createServer((req, res) => relayToGateway(req, res, { host: '127.0.0.1', port: stubPort }));
+  front.on('upgrade', (req, socket, head) => relayUpgradeToGateway(req, socket, head, { host: '127.0.0.1', port: stubPort }));
+  const frontPort = await listen(front);
+  try {
+    const r = await fetch(`http://127.0.0.1:${frontPort}${API_PREFIX}/responses`, { headers: { ...CREDENTIALS, 'x-request-id': 'trace-1' } });
+    assert.equal(await r.text(), 'ok');
+    await new Promise((resolve, reject) => {
+      const s = net.connect(frontPort, '127.0.0.1', () => {
+        const extra = Object.entries(CREDENTIALS).map(([k, v]) => `${k}: ${v}`).join('\r\n');
+        s.write(`GET ${API_PREFIX}/responses HTTP/1.1\r\nHost: chatgpt.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nx-request-id: trace-2\r\n${extra}\r\n\r\n`);
+      });
+      s.on('data', () => { s.destroy(); resolve(); });
+      s.on('error', reject);
+    });
+    assert.equal(seen.length, 2);
+    for (const h of seen) {
+      for (const name of Object.keys(CREDENTIALS)) assert.equal(h[name], undefined, `${name} must not reach the gateway`);
+      assert.match(h['x-request-id'], /^trace-/);
+    }
+  } finally {
+    front.close(); stub.close();
+  }
+});
+
+test('the gateway relay ends the client response when the gateway dies mid-body', async () => {
+  const stub = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: partial\n\n'); setTimeout(() => res.socket.destroy(), 50); });
+  const stubPort = await listen(stub);
+  const front = http.createServer((req, res) => relayToGateway(req, res, { host: '127.0.0.1', port: stubPort }));
+  const frontPort = await listen(front);
+  try {
+    const outcome = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve('hung'), 2000);
+      http.get({ host: '127.0.0.1', port: frontPort, path: `${API_PREFIX}/responses` }, (res) => {
+        res.on('data', () => {});
+        res.on('close', () => { clearTimeout(timer); resolve('ended'); });
+      }).on('error', () => { clearTimeout(timer); resolve('ended'); });
+    });
+    assert.equal(outcome, 'ended');
+  } finally {
+    front.close(); stub.close();
+  }
+});
+
+test('the gateway relay closes the upstream request when the client aborts', async () => {
+  let upstreamClosed;
+  const closed = new Promise(r => { upstreamClosed = r; });
+  const stub = http.createServer((req, res) => { res.writeHead(200); res.write('start'); req.socket.on('close', upstreamClosed); });
+  const stubPort = await listen(stub);
+  const front = http.createServer((req, res) => relayToGateway(req, res, { host: '127.0.0.1', port: stubPort }));
+  const frontPort = await listen(front);
+  try {
+    const client = http.get({ host: '127.0.0.1', port: frontPort, path: `${API_PREFIX}/responses` }, (res) => {
+      res.once('data', () => client.destroy());
+    });
+    client.on('error', () => {});
+    const result = await Promise.race([closed.then(() => 'closed'), new Promise(r => setTimeout(() => r('still open'), 2000))]);
+    assert.equal(result, 'closed');
+  } finally {
+    front.close(); stub.close();
   }
 });
