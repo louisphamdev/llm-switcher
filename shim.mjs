@@ -210,14 +210,18 @@ export function shimStatus(names = SHIMMED) {
 }
 
 /** Line to add to the shell rc so the shim comes before the real binary. */
-export function pathExportLine() {
-  return process.platform === 'win32'
-    ? `setx PATH "${SHIM_DIR};%PATH%"`
-    : `export PATH="${SHIM_DIR}:$PATH"`;
+// Windows: setx truncates at 1024 characters and would copy the merged system+user PATH into the
+// user key, and PowerShell does not expand %PATH%. Prepend to the User-scope Path only.
+export function pathExportLine(platform = process.platform) {
+  if (platform === 'win32') {
+    return `powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', '${SHIM_DIR};' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')"`;
+  }
+  return `export PATH="${SHIM_DIR}:$PATH"`;
 }
 
-/** Which rc file to edit, based on the current shell. */
-export function suggestedRcFiles() {
+/** Which rc file to edit, based on the current shell. Windows has none: the command above is run once. */
+export function suggestedRcFiles(platform = process.platform) {
+  if (platform === 'win32') return [];
   const home = os.homedir();
   const shell = path.basename(process.env.SHELL || '');
   if (shell === 'zsh') return [path.join(home, '.zshrc'), path.join(home, '.zprofile')];

@@ -329,7 +329,8 @@ async function turnOn(profileName, cliTarget) {
     if (installed.length) console.log(`\n[Shim] Installed launcher shims: ${installed.join(', ')}`);
     if (!sh.onPath) {
       console.log(`[Shim] NOT on PATH yet — resumed sessions will still bypass the gateway.`);
-      console.log(`       Add this line to ${suggestedRcFiles()[0]} and open a new terminal:`);
+      const rc = suggestedRcFiles()[0];
+      console.log(rc ? `       Add this line to ${rc} and open a new terminal:` : '       Run this command once, then open a new terminal:');
       console.log(`           ${pathExportLine()}`);
     }
   } catch {}
@@ -533,8 +534,13 @@ async function manageShim(action = 'status') {
     if (!st.onPath) {
       console.log(`\n[ACTION REQUIRED] Add the shim dir to PATH so it precedes the real binaries:`);
       console.log(`    ${pathExportLine()}`);
-      console.log(`\nAppend that line to one of:`);
-      for (const rc of suggestedRcFiles()) console.log(`    ${rc}`);
+      const rcFiles = suggestedRcFiles();
+      if (rcFiles.length) {
+        console.log(`\nAppend that line to one of:`);
+        for (const rc of rcFiles) console.log(`    ${rc}`);
+      } else {
+        console.log(`\nRun that command once; it changes only your User-scope Path.`);
+      }
       console.log(`\nThen open a new terminal (or 'exec $SHELL') and verify:`);
       console.log(`    switch shim status`);
     } else {

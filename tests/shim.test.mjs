@@ -101,7 +101,7 @@ test('shim fails loudly (127) when the real binary is missing', (t) => {
 
 test('helpers report PATH guidance and shim wiring', () => {
   assert.ok(pathExportLine().includes(SHIM_DIR));
-  assert.ok(suggestedRcFiles().length > 0);
+  assert.ok(suggestedRcFiles('linux').length > 0);
   const st = shimStatus();
   assert.equal(st.dir, SHIM_DIR);
   assert.deepEqual(st.shims.map(s => s.name), SHIMMED);
@@ -159,4 +159,16 @@ test('Codex shim passes the main model as --config model', (t) => {
   const without = runShim('codex', ['exec'], { active: false, fakeDir: fake, env: { LLM_SWITCHER_CODEX_MAIN_MODEL: '' } });
   assert.doesNotMatch(without, /--config model=/);
   assert.match(renderShim('codex', 'win32'), /if defined LLM_SWITCHER_CODEX_MAIN_MODEL set "CODEX_SWITCHER_ARGS=%CODEX_SWITCHER_ARGS% --config model=/);
+});
+
+// setx truncates at 1024 characters and writes the merged system+user PATH into the user key;
+// in PowerShell %PATH% is not expanded at all. The Windows advice must use neither.
+test('Windows PATH advice never uses setx or %PATH%, and names no POSIX rc file', () => {
+  const line = pathExportLine('win32');
+  assert.ok(!/setx/i.test(line), line);
+  assert.ok(!line.includes('%PATH%'), line);
+  assert.match(line, /SetEnvironmentVariable\('Path'/);
+  assert.match(line, /'User'\)/, 'only the User-scope Path changes');
+  assert.ok(line.includes(SHIM_DIR));
+  assert.deepEqual(suggestedRcFiles('win32'), []);
 });
