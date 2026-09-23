@@ -31,6 +31,7 @@ import https from 'node:https';
 import path from 'node:path';
 import tls from 'node:tls';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createFrameReader, negotiatesDeflate } from './wsframe.mjs';
 
@@ -61,6 +62,8 @@ export const GATEWAY_PREFIX = arg('gateway-prefix', '/v1');
 const CERT_DIR = arg('certs', path.join(HERE, 'certs'));
 const VERBOSE = process.argv.includes('--verbose');
 const CAPTURE_DIR = arg('capture', null);
+// The switcher's admin.token. The identity probe answers HMAC(token, nonce) with it.
+const TOKEN_FILE = arg('token-file', path.join(HERE, '..', 'admin.token'));
 
 const log = (...args) => { if (VERBOSE) console.log('[blindfold]', ...args); };
 
@@ -420,8 +423,28 @@ mitm.on('clientError', (err, socket) => {
 
 // ---------- the HTTP proxy Codex talks to ----------
 
+// A plain (non-CONNECT) request is a probe. With ?challenge=<nonce> it proves identity: only a
+// process that reads admin.token can answer HMAC(token, nonce), and it names the arguments it runs with.
+export function identityAnswer(url) {
+  const challenge = new URL(url || '/', 'http://blindfold.invalid').searchParams.get('challenge');
+  if (!challenge) return null;
+  let proof = '';
+  try {
+    const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
+    if (token) proof = crypto.createHmac('sha256', token).update(challenge).digest('hex');
+  } catch {}
+  return {
+    proxy: 'llm-switcher-blindfold', proof, pid: process.pid,
+    port: LISTEN_PORT, gatewayPort: GATEWAY_PORT, host: TARGET_HOST, prefix: API_PREFIX
+  };
+}
+
 const proxy = http.createServer((req, res) => {
-  // A plain (non-CONNECT) proxy request. Codex uses HTTPS, so this is only a probe.
+  const identity = identityAnswer(req.url);
+  if (identity) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify(identity));
+  }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('llm-switcher blindfold proxy\n');
 });

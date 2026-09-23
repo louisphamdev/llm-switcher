@@ -9,6 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import http from 'node:http';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -93,7 +95,7 @@ export const paths = {
   envCodexSh: path.join(ROOT_DIR, 'env-codex.sh'),
   codexCatalog: path.join(ROOT_DIR, 'model-catalog.json'),
   codexCatalogTemplate: path.join(ROOT_DIR, 'codex-catalog-template.json'),
-  blindfoldCA: path.join(ROOT_DIR, 'blindfold', 'certs', 'ca.pem'),
+  blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(ROOT_DIR, 'blindfold', 'certs'), 'ca.pem'),
   pidFile: path.join(ROOT_DIR, 'proxy.pid')
 };
 
@@ -597,4 +599,159 @@ export function redactConfig(cfg) {
     }
   }
   return clone;
+}
+
+// ---------------- process identity ----------------
+// An answer on a port proves nothing: any local process can bind a free port and replay a /health
+// body. Only a process that can read admin.token can answer HMAC(token, nonce) for a fresh nonce.
+export function identityProof(nonce, token = readAdminToken()) {
+  return token ? crypto.createHmac('sha256', token).update(String(nonce)).digest('hex') : '';
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function getJson(port, pathname, timeoutMs = 1000) {
+  return new Promise(resolve => {
+    const req = http.get({ host: '127.0.0.1', port, path: pathname, timeout: timeoutMs }, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { data += c; if (data.length > 65536) req.destroy(); });
+      res.on('end', () => {
+        let body = null;
+        try { body = JSON.parse(data); } catch {}
+        resolve({ state: 'answered', body });
+      });
+    });
+    req.on('error', err => resolve({ state: err.code === 'ECONNREFUSED' ? 'free' : 'foreign' }));
+    req.on('timeout', () => { req.destroy(); resolve({ state: 'foreign' }); });
+  });
+}
+
+const newNonce = () => crypto.randomBytes(16).toString('hex');
+
+/** 'ours' | 'foreign' | 'free' */
+export async function probeGateway(port) {
+  const nonce = newNonce();
+  const r = await getJson(port, `/health?challenge=${nonce}`);
+  if (r.state !== 'answered') return r.state;
+  const proof = identityProof(nonce);
+  return r.body?.proxy === 'llm-switcher' && proof && r.body.proof === proof ? 'ours' : 'foreign';
+}
+
+/** { state: 'ours', pid, gatewayPort, host, prefix } | { state: 'foreign' } | { state: 'free' } */
+export async function probeBlindfold(port) {
+  const nonce = newNonce();
+  const r = await getJson(port, `/?challenge=${nonce}`);
+  if (r.state !== 'answered') return { state: r.state };
+  const b = r.body;
+  const proof = identityProof(nonce);
+  if (b?.proxy !== 'llm-switcher-blindfold' || !proof || b.proof !== proof) return { state: 'foreign' };
+  return { state: 'ours', pid: b.pid, gatewayPort: b.gatewayPort, host: b.host, prefix: b.prefix };
+}
+
+// Signal a pid only right after a fresh identity probe named it.
+function killVerified(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
+    else process.kill(pid, 'SIGTERM');
+  } catch {}
+}
+
+// ---------------- blindfold interceptor ----------------
+// HTTPS_PROXY in env-codex.* is a hard dependency: with no interceptor behind it, Codex reaches no
+// host at all. The gateway process owns the interceptor and reconcileBlindfold is the only code
+// that starts one; the CLI asks the gateway through POST /api/blindfold/sync.
+
+const blindfoldScript = path.join(ROOT_DIR, 'blindfold', 'blindfold.mjs');
+export const blindfoldStatePath = path.join(path.dirname(configPath), 'blindfold.json');
+
+function readBlindfoldState() {
+  try { return JSON.parse(fs.readFileSync(blindfoldStatePath, 'utf8')); } catch { return null; }
+}
+
+function writeBlindfoldState(st) {
+  fs.writeFileSync(blindfoldStatePath, JSON.stringify(st), { encoding: 'utf8', mode: 0o600 });
+}
+
+async function stopBlindfoldAt(port) {
+  const cur = await probeBlindfold(port);
+  if (cur.state !== 'ours') return;
+  killVerified(cur.pid);
+  for (let i = 0; i < 20; i++) {
+    await sleep(100);
+    if ((await probeBlindfold(port)).state !== 'ours') return;
+  }
+}
+
+/** Stop the interceptor recorded in blindfold.json, if a probe confirms it is ours. Never starts one. */
+export async function stopRecordedBlindfold() {
+  const prev = readBlindfoldState();
+  if (prev?.port) await stopBlindfoldAt(prev.port);
+  try { fs.unlinkSync(blindfoldStatePath); } catch {}
+}
+
+/** null when the interceptor can start, otherwise the reason and the command that fixes it. */
+export function blindfoldPreflight(desired) {
+  const certDir = path.dirname(desired.ca);
+  const build = `bash blindfold/make-certs.sh ${desired.host}${process.env.LLM_SWITCHER_BLINDFOLD_CERTS ? ` "${certDir}"` : ''}`;
+  for (const f of [desired.ca, path.join(certDir, 'leaf.pem'), path.join(certDir, 'leaf.key')]) {
+    if (!fs.existsSync(f)) return `Blindfold mode is on, but ${path.basename(f)} is missing in ${certDir}. Build the certificates first: ${build}`;
+  }
+  // A leaf for another host fails the TLS handshake with an error that reads like a network fault.
+  if (!certCoversHost(fs.readFileSync(path.join(certDir, 'leaf.pem'), 'utf8'), desired.host)) {
+    return `The leaf certificate does not cover "${desired.host}". Rebuild it for that host: ${build}`;
+  }
+  return null;
+}
+
+// The single place that starts an interceptor.
+function spawnBlindfold(desired, gatewayPort) {
+  const log = fs.openSync(path.join(ROOT_DIR, 'blindfold.log'), 'a', 0o600);
+  const child = spawn(process.execPath, [
+    blindfoldScript,
+    '--port', String(desired.port),
+    '--gateway-port', String(gatewayPort),
+    '--host', desired.host,
+    '--prefix', desired.prefix,
+    '--certs', path.dirname(desired.ca),
+    '--token-file', adminTokenPath
+  ], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
+  child.unref();
+  fs.closeSync(log);
+}
+
+const matches = (cur, desired, gatewayPort) =>
+  cur.state === 'ours' && cur.gatewayPort === gatewayPort && cur.host === desired.host && cur.prefix === desired.prefix;
+
+/**
+ * Bring the interceptor in line with the saved config: start, respawn with new arguments, or stop.
+ * Returns { ok: true, action } or { ok: false, error }.
+ */
+export async function reconcileBlindfold(cfg, gatewayPort) {
+  const desired = computeLaunchState(cfg, gatewayPort).blindfold;
+  const prev = readBlindfoldState();
+  if (prev?.port && (!desired || prev.port !== desired.port)) await stopRecordedBlindfold();
+  if (!desired) return { ok: true, action: 'none' };
+
+  const problem = blindfoldPreflight(desired);
+  if (problem) return { ok: false, error: problem };
+  const cur = await probeBlindfold(desired.port);
+  if (cur.state === 'foreign') return { ok: false, error: `Port ${desired.port} is held by another process, not by this switcher's interceptor.` };
+  if (matches(cur, desired, gatewayPort)) {
+    writeBlindfoldState({ pid: cur.pid, port: desired.port, gatewayPort, host: desired.host, prefix: desired.prefix });
+    return { ok: true, action: 'kept' };
+  }
+  if (cur.state === 'ours') await stopBlindfoldAt(desired.port);
+
+  spawnBlindfold(desired, gatewayPort);
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    const now = await probeBlindfold(desired.port);
+    if (matches(now, desired, gatewayPort)) {
+      writeBlindfoldState({ pid: now.pid, port: desired.port, gatewayPort, host: desired.host, prefix: desired.prefix });
+      return { ok: true, action: 'started' };
+    }
+  }
+  return { ok: false, error: `The interceptor did not come up on port ${desired.port}. See blindfold.log.` };
 }

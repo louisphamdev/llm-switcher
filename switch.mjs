@@ -2,13 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync, execSync } from 'node:child_process';
-import http from 'node:http';
-import net from 'node:net';
 import {
   ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
-  applyLaunchState, clearLaunchState, computeLaunchState, certCoversHost,
-  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken
+  applyLaunchState, clearLaunchState, computeLaunchState,
+  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken,
+  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold
 } from './state.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
@@ -53,27 +52,14 @@ function getTargetPort() {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// Only count as "running" when /health returns the LLM Switcher signature (avoids mistaking another tool on the port).
-function checkProxyRunning(port) {
-  return new Promise(resolve => {
-    const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: 1000 }, res => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try { resolve(res.statusCode === 200 && JSON.parse(data).proxy === 'llm-switcher'); } catch { resolve(false); }
-      });
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
+// A port answer is not enough: probeGateway checks HMAC(admin.token, nonce), so a process that
+// replays a /health body counts as foreign, not as this switcher.
+async function checkProxyRunning(port) {
+  return (await probeGateway(port)) === 'ours';
 }
 
 function startProxyBackground(port) {
-  const log = fs.openSync(proxyLogPath, 'a');
+  const log = fs.openSync(proxyLogPath, 'a', 0o600);
   const child = spawn(process.execPath, [proxyScript, '--port', String(port)], {
     detached: true,
     stdio: ['ignore', log, log],
@@ -81,111 +67,65 @@ function startProxyBackground(port) {
   });
   child.unref();
   fs.closeSync(log);
-  fs.writeFileSync(paths.pidFile, String(child.pid), 'utf8');
   return child.pid;
 }
 
-// ---------------- blindfold interceptor ----------------
-//
-// Blindfold mode routes Codex through HTTPS_PROXY instead of a base URL override.
-// That variable is a hard dependency: if the interceptor is not listening, Codex
-// cannot reach anything at all. So its lifetime follows the gateway's, and an
-// activation with a missing certificate is refused rather than half-applied.
-
-const blindfoldScript = path.join(ROOT_DIR, 'blindfold', 'blindfold.mjs');
-const blindfoldPidFile = path.join(ROOT_DIR, 'blindfold.pid');
-
-function checkBlindfoldRunning(port) {
-  return new Promise(resolve => {
-    const socket = net.connect({ host: '127.0.0.1', port, timeout: 1000 });
-    socket.on('connect', () => { socket.destroy(); resolve(true); });
-    socket.on('error', () => resolve(false));
-    socket.on('timeout', () => { socket.destroy(); resolve(false); });
-  });
-}
-
-// Refuse before any file is written. A half-applied blindfold leaves HTTPS_PROXY
-// pointing at a port nothing listens on, and then Codex reaches no host at all.
-function assertBlindfoldUsable(port) {
-  const planned = computeLaunchState(config, port);
-  if (!planned.blindfold) return;
-  const { ca, host } = planned.blindfold;
-  const leaf = path.join(ROOT_DIR, 'blindfold', 'certs', 'leaf.pem');
-  const build = `bash blindfold/make-certs.sh ${host}`;
-
-  if (!fs.existsSync(ca) || !fs.existsSync(leaf)) {
-    console.error(`[Error] Blindfold mode is on, but the certificates are missing in ${path.dirname(ca)}.`);
-    console.error(`        Build them first:  ${build}`);
-    console.error('        Or set "blindfold": false in the profile.');
-    process.exit(1);
-  }
-  // A leaf for another host fails the TLS handshake with an error that reads like a
-  // network fault, so name the real cause here instead.
-  if (!certCoversHost(fs.readFileSync(leaf, 'utf8'), host)) {
-    console.error(`[Error] The leaf certificate does not cover "${host}".`);
-    console.error(`        Rebuild it for that host:  ${build}`);
-    process.exit(1);
-  }
-}
-
-async function syncBlindfold(st, port) {
-  if (st?.blindfold) await ensureBlindfoldRunning(st.blindfold, port);
-  else stopBlindfold();
-}
-
-async function ensureBlindfoldRunning(blindfold, port) {
-  if (await checkBlindfoldRunning(blindfold.port)) {
-    console.log(`[Blindfold] Interceptor already listening on port ${blindfold.port}.`);
-    return;
-  }
-  const log = fs.openSync(path.join(ROOT_DIR, 'blindfold.log'), 'a');
-  const child = spawn(process.execPath, [
-    blindfoldScript,
-    '--port', String(blindfold.port),
-    '--gateway-port', String(port),
-    '--host', blindfold.host,
-    '--prefix', blindfold.prefix
-  ], { detached: true, stdio: ['ignore', log, log], windowsHide: true });
-  child.unref();
-  fs.closeSync(log);
-  fs.writeFileSync(blindfoldPidFile, String(child.pid), 'utf8');
-
-  for (let i = 0; i < 20; i++) {
-    await sleep(250);
-    if (await checkBlindfoldRunning(blindfold.port)) {
-      console.log(`[Blindfold] Interceptor on port ${blindfold.port}; Codex keeps its official endpoint.`);
-      return;
-    }
-  }
-  console.error(`[Error] The interceptor did not come up on port ${blindfold.port}. See blindfold.log.`);
+function refuseForeignPort(port, owner) {
+  console.error(`[Error] Port ${port} is held by another process, not by ${owner}.`);
+  console.error('        Stop that process, or choose another port with `switch port <n>`. Nothing was changed.');
   process.exit(1);
 }
 
-function stopBlindfold() {
-  if (!fs.existsSync(blindfoldPidFile)) return;
-  const pid = parseInt(fs.readFileSync(blindfoldPidFile, 'utf8').trim(), 10);
-  if (pid > 0) {
-    try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
-      else process.kill(pid, 'SIGTERM');
-    } catch {}
-  }
-  try { fs.unlinkSync(blindfoldPidFile); } catch {}
-}
-
 async function ensureProxyRunning(port) {
-  if (await checkProxyRunning(port)) {
+  const state = await probeGateway(port);
+  if (state === 'ours') {
     console.log(`Proxy is running on port ${port} (config reloaded dynamically).`);
     return;
   }
+  if (state === 'foreign') refuseForeignPort(port, 'this switcher');
   console.log(`Starting proxy service on port ${port}...`);
   startProxyBackground(port);
   for (let i = 0; i < 20; i++) {
     await sleep(250);
-    if (await checkProxyRunning(port)) return;
+    if ((await probeGateway(port)) === 'ours') return;
   }
   console.error(`[Error] Proxy did not come up on port ${port}. See ${proxyLogPath} for details.`);
   process.exit(1);
+}
+
+// The gateway owns the blindfold interceptor. After every write of launch state the CLI asks it to
+// bring the interceptor in line with config.json.
+async function requestBlindfoldSync(port) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/blindfold/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': readAdminToken() || '' },
+      body: '{}',
+      signal: AbortSignal.timeout(15000)
+    });
+    return await r.json();
+  } catch (err) {
+    return { ok: false, error: `the gateway on port ${port} did not answer: ${err.message}` };
+  }
+}
+
+// With the gateway up it reconciles; with it down only a stop is safe, and stopping never spawns.
+async function syncOrStopBlindfold(port) {
+  if (await checkProxyRunning(port)) {
+    const r = await requestBlindfoldSync(port);
+    if (!r.ok) console.warn(`[Blindfold] ${r.error}`);
+    return r;
+  }
+  await stopRecordedBlindfold();
+  return { ok: true };
+}
+
+// Same atomic, private write as saveConfig, for bytes that must come back unchanged.
+function restoreConfigBytes(bytes) {
+  const tmp = `${configPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, bytes, { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, configPath);
 }
 
 function openBrowser(url) {
@@ -197,6 +137,13 @@ function openBrowser(url) {
     } else {
       execFileSync('xdg-open', [url], { stdio: 'ignore' });
     }
+  } catch {}
+}
+
+function killPid(pid) {
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
+    else process.kill(pid, 'SIGTERM');
   } catch {}
 }
 
@@ -214,44 +161,43 @@ function listeningPids(port) {
           if (pid > 0) pids.add(pid);
         }
       }
-    } else {
-      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
+      return [...pids];
+    }
+    try {
+      const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
       for (const s of out.split(/\s+/)) {
         const pid = parseInt(s, 10);
         if (pid > 0) pids.add(pid);
       }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      // Minimal Linux images ship ss (iproute2) but no lsof.
+      const out = execFileSync('ss', ['-ltnpH', `sport = :${port}`], { encoding: 'utf8' });
+      for (const m of out.matchAll(/pid=(\d+)/g)) pids.add(parseInt(m[1], 10));
     }
   } catch {}
   return [...pids];
 }
 
+// Returns 'stopped', 'not-running', or 'still-running'. The kill targets the process that listens on
+// the port, right after the identity probe confirmed that listener is this switcher.
 async function stopProxy(port) {
-  const running = await checkProxyRunning(port);
-  if (fs.existsSync(paths.pidFile)) {
-    // Only kill by pid file after confirming the switcher is running, to avoid killing an unrelated process that reused the PID.
-    if (running) {
-      const pid = parseInt(fs.readFileSync(paths.pidFile, 'utf8').trim(), 10);
-      if (pid > 0) {
-        try { process.kill(pid); } catch {}
-      }
+  if ((await probeGateway(port)) !== 'ours') return 'not-running';
+  const waitGone = async () => {
+    for (let i = 0; i < 20; i++) {
+      await sleep(150);
+      if ((await probeGateway(port)) !== 'ours') return true;
     }
-    try { fs.unlinkSync(paths.pidFile); } catch {}
+    return false;
+  };
+  // A supervisor restarts what we kill, so a service is stopped through its manager first.
+  const svc = installedService();
+  if (svc) {
+    serviceStop(svc);
+    if (await waitGone()) return 'stopped';
   }
-  if (!running) return false;
-
-  for (let i = 0; i < 8; i++) {
-    await sleep(150);
-    if (!(await checkProxyRunning(port))) return true;
-  }
-  // Still running (e.g. started by a service) -> kill the process listening on the port, already verified as LLM Switcher.
-  for (const pid of listeningPids(port)) {
-    if (pid === process.pid) continue;
-    try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(pid)], { stdio: 'ignore' });
-      else process.kill(pid, 'SIGTERM');
-    } catch {}
-  }
-  return true;
+  for (const pid of listeningPids(port)) if (pid !== process.pid) killPid(pid);
+  return (await waitGone()) ? 'stopped' : 'still-running';
 }
 
 async function changePort(newPortStr) {
@@ -260,23 +206,46 @@ async function changePort(newPortStr) {
     console.error(`[Error] Invalid port: "${newPortStr}". Must be an integer between 1 and 65535.`);
     process.exit(1);
   }
-  const oldPort = parsePort(config.port) || 3456;
-  const isRunning = await checkProxyRunning(oldPort);
-  if (isRunning) {
+  const oldPort = resolvePort([], config);
+  const svc = installedService();
+  const wasRunning = await checkProxyRunning(oldPort);
+  if (wasRunning && !svc) {
     console.log(`Stopping gateway on current port ${oldPort}...`);
-    await stopProxy(oldPort);
+    if ((await stopProxy(oldPort)) === 'still-running') {
+      console.error(`[Error] The gateway on port ${oldPort} did not stop. The port is unchanged.`);
+      process.exit(1);
+    }
   }
-  config.port = p;
-  saveConfig(config);
-  console.log(`[SUCCESS] Port updated to ${p} in config.json.`);
+  // Re-read just before the write: a dashboard save made while the gateway stopped must survive.
+  const fresh = loadConfig() || config;
+  fresh.port = p;
+  saveConfig(fresh);
   if (process.env.PORT || process.env.LLM_SWITCHER_PORT) {
     console.log(`[WARN] PORT / LLM_SWITCHER_PORT env var is set and overrides config.json.`);
   }
-  if (isRunning) {
+  if (svc) {
+    // The unit fixes the port on its command line, so it is rewritten and restarted, not fought.
+    console.log(`Reinstalling the ${svc} service on port ${p}...`);
+    if (!installService(p)) process.exit(1);
+    let up = false;
+    for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(p); }
+    if (!up) {
+      console.error(`[Error] The ${svc} service did not come up on port ${p}. See ${proxyLogPath}.`);
+      process.exit(1);
+    }
+  } else if (wasRunning) {
     console.log(`Restarting gateway on new port ${p}...`);
     await ensureProxyRunning(p);
   }
-  reportSettings(applyLaunchState(config, p).settings);
+  reportSettings(applyLaunchState(fresh, p).settings);
+  if (await checkProxyRunning(p)) {
+    const bf = await requestBlindfoldSync(p);
+    if (!bf.ok) {
+      console.error(`[Error] ${bf.error}`);
+      process.exit(1);
+    }
+  }
+  console.log(`[SUCCESS] Port updated to ${p}.`);
 }
 
 function printProfile(profile) {
@@ -306,20 +275,46 @@ async function turnOn(profileName, cliTarget) {
     process.exit(1);
   }
 
-  const err = cliTarget ? setTargetProfile(config, cliTarget, key) : activateProfile(config, key);
+  // Plan on a copy. Nothing is written until every check below passes.
+  const planned = structuredClone(config);
+  const err = cliTarget ? setTargetProfile(planned, cliTarget, key) : activateProfile(planned, key);
   if (err) {
     console.error(`[Error] ${err}`);
     process.exit(1);
   }
-  saveConfig(config);
-
-  const profile = config.profiles[key];
+  const profile = planned.profiles[key];
   console.log(`Activating profile: [${profile.name || key}] (${key})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
-  assertBlindfoldUsable(port);
+
+  if ((await probeGateway(port)) === 'foreign') refuseForeignPort(port, 'this switcher');
+  const plannedState = computeLaunchState(planned, port);
+  if (plannedState.blindfold) {
+    const problem = blindfoldPreflight(plannedState.blindfold);
+    if (problem) {
+      console.error(`[Error] ${problem}`);
+      console.error('        Or set "blindfold": false in the profile. Nothing was changed.');
+      process.exit(1);
+    }
+    if ((await probeBlindfold(plannedState.blindfold.port)).state === 'foreign') {
+      refuseForeignPort(plannedState.blindfold.port, "this switcher's blindfold interceptor");
+    }
+  }
   await ensureProxyRunning(port);
-  const st = applyLaunchState(config, port);
+
+  const previousBytes = fs.readFileSync(configPath);
+  saveConfig(planned);
+  const st = applyLaunchState(planned, port);
   reportSettings(st.settings);
-  await syncBlindfold(st, port);
+  const bf = await requestBlindfoldSync(port);
+  if (!bf.ok) {
+    // Put back exactly what was there. clearLaunchState would also switch off unrelated targets
+    // and run the settings.json cleaner, so the previous state is re-applied instead.
+    restoreConfigBytes(previousBytes);
+    applyLaunchState(JSON.parse(previousBytes.toString('utf8')), port, { cleanSettings: false });
+    await requestBlindfoldSync(port);
+    console.error(`[Error] ${bf.error}`);
+    console.error('        The previous configuration is restored.');
+    process.exit(1);
+  }
 
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
@@ -338,7 +333,7 @@ async function turnOn(profileName, cliTarget) {
   console.log(`\n[SUCCESS] Switched to profile "${profile.name || key}".`);
   printProfile(profile);
   console.log('\nActive targets:');
-  printTargets(getActiveMap(config));
+  printTargets(getActiveMap(planned));
   console.log(`\nClaude 1M:    ${st.claude1M ? `ACTIVE (${st.claude1M})` : 'OFF'}`);
   console.log(`Codex 1M:     ${st.codex1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
 }
@@ -355,7 +350,7 @@ async function turnOff(targetArg) {
     saveConfig(config);
     const st = applyLaunchState(config, port);
     reportSettings(st.settings);
-    await syncBlindfold(st, port);
+    await syncOrStopBlindfold(port);
     console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
     printTargets(getActiveMap(config));
     return;
@@ -365,9 +360,13 @@ async function turnOff(targetArg) {
   deactivateAll(config);
   saveConfig(config);
   reportSettings(clearLaunchState(port));
-  stopBlindfold();
-  const stopped = await stopProxy(port);
-  console.log(stopped ? 'Stopped local proxy service.' : 'Proxy service was not running.');
+  await syncOrStopBlindfold(port);
+  const result = await stopProxy(port);
+  if (result === 'still-running') {
+    console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
+    process.exit(1);
+  }
+  console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
 }
 
@@ -379,12 +378,13 @@ function reportSettings(result) {
 
 async function showStatus() {
   const port = getTargetPort();
-  const isRunning = await checkProxyRunning(port);
+  const gateway = await probeGateway(port);
+  const isRunning = gateway === 'ours';
   const activeMap = getActiveMap(config);
   const flagged = fs.existsSync(paths.activeFlag);
 
   console.log('=== LLM Switcher Status ===');
-  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : 'STOPPED'}`);
+  console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : gateway === 'foreign' ? `PORT ${port} HELD BY ANOTHER PROCESS` : 'STOPPED'}`);
   console.log(`Web UI:         http://127.0.0.1:${port}/ui`);
   console.log(`Launcher Flag:  ${flagged ? 'active.flag present' : 'absent (launchers use official endpoints)'}`);
   if (flagged && !isRunning) {
@@ -415,24 +415,58 @@ function xmlEscape(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function manageService(action) {
-  const nodeBin = process.execPath;
-  const port = getTargetPort();
+const SYSTEMD_UNIT = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
+const LAUNCHD_PLIST = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
 
-  if (action === 'install') {
-    if (process.platform === 'win32') {
-      try {
-        // execFileSync quotes correctly for schtasks; no /RL HIGHEST needed (gateway needs no admin rights).
-        execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/TR', `"${nodeBin}" "${proxyScript}" --port ${port}`, '/SC', 'ONLOGON', '/F'], { stdio: 'inherit' });
-        console.log('[SUCCESS] Installed Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
-        execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
-        console.log('[SUCCESS] Started background service.');
-      } catch (err) {
-        console.error('Failed to register task (ONLOGON tasks may require an elevated terminal):', err.message);
-      }
-    } else if (process.platform === 'darwin') {
-      const plistPath = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
-      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+// systemctl --user needs the user bus. A shell without a login session (su, cron, ssh -T) has no
+// XDG_RUNTIME_DIR, and then every call fails although the user manager runs.
+function systemctlUser(args, opts = {}) {
+  const env = { ...process.env };
+  if (!env.XDG_RUNTIME_DIR && process.getuid) env.XDG_RUNTIME_DIR = `/run/user/${process.getuid()}`;
+  return execFileSync('systemctl', ['--user', ...args], { env, ...opts });
+}
+
+/** 'systemd' | 'launchd' | 'schtasks' | null */
+function installedService() {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+      return 'schtasks';
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === 'darwin') return fs.existsSync(LAUNCHD_PLIST) ? 'launchd' : null;
+  return fs.existsSync(SYSTEMD_UNIT) ? 'systemd' : null;
+}
+
+// KeepAlive / Restart=always restart a killed gateway, so a service stops through its manager.
+function serviceStop(kind) {
+  try {
+    if (kind === 'systemd') systemctlUser(['stop', 'llm-switcher'], { stdio: 'ignore' });
+    else if (kind === 'launchd') execFileSync('launchctl', ['unload', LAUNCHD_PLIST], { stdio: 'ignore' });
+    else if (kind === 'schtasks') execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+  } catch {}
+}
+
+// Writes the service for `port` and (re)starts it, so a running unit picks up the new command line.
+function installService(port) {
+  const nodeBin = process.execPath;
+  if (process.platform === 'win32') {
+    try {
+      // execFileSync quotes correctly for schtasks; no /RL HIGHEST needed (gateway needs no admin rights).
+      execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/TR', `"${nodeBin}" "${proxyScript}" --port ${port}`, '/SC', 'ONLOGON', '/F'], { stdio: 'inherit' });
+      try { execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' }); } catch {}
+      execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
+      console.log('[SUCCESS] Installed and started Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
+      return true;
+    } catch (err) {
+      console.error('[Error] Failed to register task (ONLOGON tasks may require an elevated terminal):', err.message);
+      return false;
+    }
+  }
+  if (process.platform === 'darwin') {
+    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -455,18 +489,20 @@ function manageService(action) {
   <true/>
 </dict>
 </plist>`;
-      fs.mkdirSync(path.dirname(plistPath), { recursive: true });
-      fs.writeFileSync(plistPath, plistContent, 'utf8');
-      try {
-        execFileSync('launchctl', ['load', plistPath], { stdio: 'inherit' });
-        console.log('[SUCCESS] Installed and started macOS launchd service.');
-      } catch (e) {
-        console.error('Failed to load launchd service:', e.message);
-      }
-    } else {
-      const servicePath = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
-      const q = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"`;
-      const serviceContent = `[Unit]
+    fs.mkdirSync(path.dirname(LAUNCHD_PLIST), { recursive: true });
+    fs.writeFileSync(LAUNCHD_PLIST, plistContent, 'utf8');
+    try {
+      try { execFileSync('launchctl', ['unload', LAUNCHD_PLIST], { stdio: 'ignore' }); } catch {}
+      execFileSync('launchctl', ['load', LAUNCHD_PLIST], { stdio: 'inherit' });
+      console.log('[SUCCESS] Installed and started macOS launchd service.');
+      return true;
+    } catch (e) {
+      console.error('[Error] Failed to load launchd service:', e.message);
+      return false;
+    }
+  }
+  const q = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"`;
+  const serviceContent = `[Unit]
 Description=LLM Switcher Local Gateway
 After=network.target
 
@@ -477,23 +513,32 @@ Restart=always
 [Install]
 WantedBy=default.target
 `;
-      fs.mkdirSync(path.dirname(servicePath), { recursive: true });
-      fs.writeFileSync(servicePath, serviceContent, 'utf8');
-      try {
-        execSync('systemctl --user daemon-reload && systemctl --user enable --now llm-switcher', { stdio: 'inherit' });
-        console.log('[SUCCESS] Installed and started systemd user service.');
-      } catch (e) {
-        console.error('Failed to start systemd service:', e.message);
-      }
-    }
+  fs.mkdirSync(path.dirname(SYSTEMD_UNIT), { recursive: true });
+  fs.writeFileSync(SYSTEMD_UNIT, serviceContent, 'utf8');
+  try {
+    systemctlUser(['daemon-reload'], { stdio: 'inherit' });
+    systemctlUser(['enable', 'llm-switcher'], { stdio: 'inherit' });
+    systemctlUser(['restart', 'llm-switcher'], { stdio: 'inherit' });
+    console.log('[SUCCESS] Installed and started systemd user service.');
+    return true;
+  } catch (e) {
+    console.error('[Error] Failed to start systemd service:', e.message);
+    return false;
+  }
+}
+
+async function manageService(action) {
+  const port = getTargetPort();
+
+  if (action === 'install') {
+    if (!installService(port)) process.exit(1);
     return;
   }
 
   if (action === 'uninstall') {
+    const kind = installedService();
+    serviceStop(kind);
     if (process.platform === 'win32') {
-      try {
-        execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
-      } catch {}
       try {
         execFileSync('schtasks', ['/Delete', '/TN', 'LLMSwitcher', '/F'], { stdio: 'inherit' });
         console.log('[SUCCESS] Removed Windows Scheduled Task "LLMSwitcher".');
@@ -501,18 +546,12 @@ WantedBy=default.target
         console.error('Failed to delete task (may not exist):', err.message);
       }
     } else if (process.platform === 'darwin') {
-      const plistPath = path.join(userProfile, 'Library', 'LaunchAgents', 'com.llmswitcher.gateway.plist');
-      if (fs.existsSync(plistPath)) {
-        try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }); } catch {}
-        try { fs.unlinkSync(plistPath); } catch {}
-      }
+      try { fs.unlinkSync(LAUNCHD_PLIST); } catch {}
       console.log('[SUCCESS] Removed macOS launchd service.');
     } else {
-      try {
-        execSync('systemctl --user disable --now llm-switcher', { stdio: 'ignore' });
-      } catch {}
-      const servicePath = path.join(userProfile, '.config', 'systemd', 'user', 'llm-switcher.service');
-      try { if (fs.existsSync(servicePath)) fs.unlinkSync(servicePath); } catch {}
+      try { systemctlUser(['disable', '--now', 'llm-switcher'], { stdio: 'ignore' }); } catch {}
+      try { if (fs.existsSync(SYSTEMD_UNIT)) fs.unlinkSync(SYSTEMD_UNIT); } catch {}
+      try { systemctlUser(['daemon-reload'], { stdio: 'ignore' }); } catch {}
       console.log('[SUCCESS] Removed systemd user service.');
     }
     return stopProxy(port);

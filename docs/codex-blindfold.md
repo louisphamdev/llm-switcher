@@ -92,9 +92,18 @@ Add two keys to the Codex profile in `config.json`:
 switch codex <your-profile>
 ```
 
-This one command starts the gateway, starts the interceptor on the configured port, and writes the environment files. `switch off` stops both and removes the generated files.
+This one command starts the gateway and writes the environment files. The gateway then starts the interceptor on the configured port. `switch off` stops both and removes the generated files.
 
-If the CA is missing, `switch` refuses the activation and writes no file. That refusal is deliberate: blindfold mode replaces the base URL override with `HTTPS_PROXY`, so a half-applied state would point Codex at a port where nothing listens, and Codex would then reach no host at all.
+The gateway owns the interceptor. It brings the interceptor in line with `config.json` when it starts, after every change in the dashboard, and after every `switch` command. A service start, a `switch port`, and a change of host, prefix or port in the dashboard therefore never leave `HTTPS_PROXY` pointing at a port where nothing listens. When blindfold mode is turned off for the Codex target, the gateway stops the interceptor, and a running Codex session must be restarted.
+
+`switch` refuses the activation and writes no file in these cases:
+
+- The CA, the leaf certificate or the leaf key is missing, or the leaf does not cover the host.
+- Another process holds the interceptor port or the gateway port.
+
+That refusal is deliberate: blindfold mode replaces the base URL override with `HTTPS_PROXY`, so a half-applied state would point Codex at a port where nothing listens, and Codex would then reach no host at all. If the interceptor fails to start after these checks pass, `switch` restores the previous `config.json` and launcher files and exits with an error.
+
+The switcher trusts a port only after the process on it proves its identity with the token in `admin.token`. A process that only answers on the port, or replays an earlier answer, is treated as foreign.
 
 The environment now holds `HTTPS_PROXY`, `NO_PROXY` and `CODEX_CA_CERTIFICATE` in `env-codex.cmd` and `env-codex.sh`. Only the Codex shim loads those two files. They are separate from `env.cmd` and `env.sh` on purpose: the `claude` shim loads the shared files, and a Codex-only proxy would otherwise capture every `claude` HTTPS call.
 
@@ -180,7 +189,7 @@ its completions over a WebSocket, so these files hold the full conversation.
 1. Set `"blindfold": false` in the profile.
 2. Run `switch codex <your-profile>` again.
 
-The switcher writes `LLM_SWITCHER_CODEX_BASE_URL` again, stops the interceptor, and Codex returns to the normal route.
+The switcher writes `LLM_SWITCHER_CODEX_BASE_URL` again, the gateway stops the interceptor, and Codex returns to the normal route.
 
 ## Limits
 

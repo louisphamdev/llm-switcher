@@ -323,10 +323,10 @@ Blindfold xóa dòng đó. Codex giữ nguyên endpoint chính thức, switcher 
 ```bash
 bash blindfold/make-certs.sh chatgpt.com   # chạy một lần
 # rồi đặt "blindfold": true trong profile Codex
-switch codex <profile>                     # interceptor khởi động cùng gateway
+switch codex <profile>                     # gateway khởi động interceptor
 ```
 
-`switch` khởi động interceptor cùng gateway và dừng nó bằng `switch off`. Thiếu CA thì `switch` từ chối kích hoạt và không ghi file nào.
+Gateway sở hữu interceptor: nó khởi động interceptor khi boot và sau mỗi thay đổi, còn `switch off` dừng nó. Thiếu certificate, hoặc cổng gateway/interceptor bị tiến trình khác giữ, thì `switch` từ chối kích hoạt và không ghi file nào.
 
 Hãy đọc [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) trước khi bật. Tài liệu nói rõ phạm vi chặn, rủi ro khi giữ private key của CA, và cách quay lại. Mở đầu là ba sơ đồ:
 

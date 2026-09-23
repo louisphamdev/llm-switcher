@@ -323,10 +323,10 @@ Blindfold mode removes that line. Codex keeps its official endpoint, and the swi
 ```bash
 bash blindfold/make-certs.sh chatgpt.com   # once
 # then set "blindfold": true in the Codex profile
-switch codex <profile>                     # starts the interceptor with the gateway
+switch codex <profile>                     # the gateway starts the interceptor
 ```
 
-`switch` starts the interceptor with the gateway and stops it with `switch off`. If the CA is missing it refuses the activation and writes no file.
+The gateway owns the interceptor: it starts it at boot and after every change, and `switch off` stops it. If the certificates are missing, or another process holds the gateway or interceptor port, `switch` refuses the activation and writes no file.
 
 Read [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) before you turn it on. The guide explains the interception scope, the risk of holding a private CA, and how to go back. It opens with three diagrams:
 

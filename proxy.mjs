@@ -16,7 +16,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken
+  ensureAdminToken, identityProof, reconcileBlindfold
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -871,13 +871,30 @@ function requireConfig(res) {
   return cfg;
 }
 
-// Returns the names of the settings.json values the switcher removed, so the caller can show them.
-function commit(cfg) {
+// Reconcile runs one at a time: two commits in flight must not both start an interceptor.
+let reconcileChain = Promise.resolve();
+function reconcile(cfg) {
+  const run = reconcileChain.then(() => reconcileBlindfold(cfg, PORT));
+  reconcileChain = run.catch(() => {});
+  return run.then(r => {
+    if (!r.ok) console.error(`[llm-switcher:blindfold] ${r.error}`);
+    else if (r.action === 'started') console.log('[llm-switcher:blindfold] interceptor started');
+    return r;
+  });
+}
+
+// Returns what the caller must show: removed settings.json values, and a blindfold failure.
+async function commit(cfg) {
   saveConfig(cfg);
   const st = applyLaunchState(cfg, PORT);
   const removed = st.settings?.removed || [];
   if (removed.length) console.log(`[llm-switcher] settings.json: removed switcher-written values: ${removed.join(', ')}`);
-  return { settingsRemoved: removed, ...(st.envWriteError ? { envWriteError: st.envWriteError } : {}) };
+  const bf = await reconcile(cfg);
+  return {
+    settingsRemoved: removed,
+    ...(st.envWriteError ? { envWriteError: st.envWriteError } : {}),
+    ...(bf.ok ? {} : { success: false, error: `Saved, but the blindfold interceptor is not in line: ${bf.error}` })
+  };
 }
 
 const VALID_MODES = ['hybrid', 'convert', 'direct'];
@@ -1023,9 +1040,12 @@ async function route(req, res) {
   // Health check
   if (method === 'GET' && pathname === '/health') {
     const { profileKey, profile } = getFirstActiveProfile(TARGETS, req);
+    // ?challenge=<nonce> lets the CLI tell this gateway from a process that replays a /health body.
+    const challenge = parsedUrl.searchParams.get('challenge');
     return sendJson(res, 200, {
       status: 'ok',
       proxy: 'llm-switcher',
+      ...(challenge ? { proof: identityProof(challenge, ADMIN_TOKEN.toString()) } : {}),
       port: PORT,
       configLoaded: Boolean(loadConfig()),
       activeProfile: profileKey || '(none)',
@@ -1210,7 +1230,7 @@ async function routeApi(req, res, method, pathname) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    const applied = commit(cfg);
+    const applied = await commit(cfg);
     return sendJson(res, 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
   }
 
@@ -1235,7 +1255,7 @@ async function routeApi(req, res, method, pathname) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    const applied = commit(cfg);
+    const applied = await commit(cfg);
     return sendJson(res, 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
   }
 
@@ -1270,7 +1290,7 @@ async function routeApi(req, res, method, pathname) {
     }
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
-    const applied = isProfileActive(cfg, key) || unassigned ? commit(cfg) : (saveConfig(cfg), {});
+    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg) : (saveConfig(cfg), {});
     return sendJson(res, 200, { success: true, ...applied });
   }
 
@@ -1278,8 +1298,14 @@ async function routeApi(req, res, method, pathname) {
   if (pathname === '/api/delete-profile') {
     const err = deleteProfile(cfg, body.key);
     if (err) return sendJson(res, 404, { error: err });
-    const applied = commit(cfg);
+    const applied = await commit(cfg);
     return sendJson(res, 200, { success: true, ...applied });
+  }
+
+  // POST /api/blindfold/sync — the CLI asks the owner to bring the interceptor in line with config.json.
+  if (pathname === '/api/blindfold/sync') {
+    const r = await reconcile(cfg);
+    return sendJson(res, r.ok ? 200 : 500, r);
   }
 
   // POST /api/test-upstream
@@ -1661,6 +1687,9 @@ if (!loadConfig()) {
 }
 
 server.listen(PORT, '127.0.0.1', () => {
+  // A service start or a restart on a new port finds env-codex.* already pointing at the interceptor.
+  const cfg = loadConfig();
+  if (cfg && !getConfigLoadError()) reconcile(cfg);
   console.log(`[llm-switcher] Server running on http://127.0.0.1:${PORT}`);
   console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui`);
   console.log(`[llm-switcher] Endpoints: /v1/messages (anthropic) | /v1/chat/completions (openai) | /v1/responses (codex) | /v1beta/models/* (vertex)`);
