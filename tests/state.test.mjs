@@ -10,7 +10,7 @@ import {
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile as execFileCb } from 'node:child_process';
 
 const makeCfg = () => ({
   port: 4000,
@@ -604,4 +604,29 @@ test('isSafeModelName refuses names that TOML reads as something other than a st
   for (const good of ['gpt-5.2', 'o3', 'ag/gemini-3.8-flash', 'claude-opus-4-6', 'qwen3:32b', 'e5-large']) {
     assert.equal(isSafeModelName(good), true, good);
   }
+});
+
+// The CLI and the gateway both write the launch files, one file at a time. Two writers that overlap
+// would leave env.sh from one state and env-codex.sh from another (audit racer-M6).
+test('launch-file writers take turns through a lock, and a dead holder does not block them', async (t) => {
+  const { dir, env } = tmpDirs(t);
+  const lock = path.join(dir, '.launch.lock');
+  // A live holder: this test process. The child must wait until the lock is gone.
+  fs.writeFileSync(lock, String(process.pid));
+  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
+  const started = Date.now();
+  const r = await new Promise((resolve, reject) => {
+    execFileCb(process.execPath, ['--input-type=module', '-e',
+      `const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))}); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
+    { env: { ...process.env, LLM_SWITCHER_PORT: '', ...env }, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(Number(out.trim()))));
+  });
+  // Without the lock the write takes a few ms; with it the child waits for the release at 400 ms.
+  assert.ok(r >= 100, `the writer waited ${r} ms for the live holder`);
+  assert.ok(Date.now() - started >= 380);
+  assert.equal(fs.existsSync(lock), false, 'the writer releases the lock');
+  // A holder that no longer runs is taken over at once.
+  fs.writeFileSync(lock, '999999999');
+  const quick = runState(env, `const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); return Date.now() - t0;`);
+  assert.ok(quick < 1000, `a stale lock blocked for ${quick} ms`);
+  assert.equal(fs.existsSync(lock), false);
 });
