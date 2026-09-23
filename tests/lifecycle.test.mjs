@@ -268,3 +268,48 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
+
+// Two admin changes must not interleave while one waits for its interceptor check (audit J1).
+test('concurrent admin changes: a refused change never reaches disk, and no accepted change is lost', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
+  const ws = makeWorkspace({ certs: true });
+  const gwPort = await freePort();
+  const bfPort = await freePort();
+  writeConfig(ws, gwPort, bfPort, 'bf');
+  const launch = snapshotLaunchFiles();
+  const gw = await startGateway(ws, gwPort);
+  // A squatter that accepts and never answers keeps the identity probe waiting.
+  const silent = net.createServer(() => {});
+  const silentPort = await new Promise(r => silent.listen(0, '127.0.0.1', () => r(silent.address().port)));
+  try {
+    await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
+    const post = (body) => fetch(`http://127.0.0.1:${gwPort}/api/save-profile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': token(ws) }, body: JSON.stringify(body)
+    });
+    const refused = post({ key: 'bf', profile: { blindfoldPort: silentPort } });
+    await new Promise(r => setTimeout(r, 300));
+    const other = post({ key: 'plain', profile: { name: 'Renamed' } });
+    const [a, b] = await Promise.all([refused, other]);
+    assert.equal(a.status, 502);
+    assert.equal(b.status, 200);
+    const onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+    assert.equal(onDisk.profiles.bf.blindfoldPort, bfPort, 'the refused port is not saved by the other request');
+    assert.equal(onDisk.profiles.plain.name, 'Renamed');
+
+    // Two accepted changes to the active profile: the one that saves last keeps the other.
+    const [c, d] = await Promise.all([
+      post({ key: 'bf', profile: { name: 'First' } }),
+      post({ key: 'bf', profile: { defaultModels: { main: 'm2' } } })
+    ]);
+    assert.equal(c.status, 200);
+    assert.equal(d.status, 200);
+    const both = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8')).profiles.bf;
+    assert.equal(both.name, 'First', 'no accepted change is lost');
+    assert.equal(both.defaultModels.main, 'm2');
+  } finally {
+    silent.close();
+    try { const st = await probe(ws, `s.probeBlindfold(${bfPort})`); if (st.state === 'ours') process.kill(st.pid, 'SIGTERM'); } catch {}
+    gw.kill();
+    restoreLaunchFiles(launch);
+    fs.rmSync(ws.dir, { recursive: true, force: true });
+  }
+});

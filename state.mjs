@@ -137,11 +137,6 @@ export function loadConfig() {
 
 // A caller that changed the cached object and then decided not to save drops it here, so the
 // next loadConfig reads config.json again instead of serving the unsaved change.
-export function forgetConfigCache() {
-  cachedConfig = null;
-  lastMtime = 0;
-}
-
 export function getConfigLoadError() {
   return lastLoadError;
 }

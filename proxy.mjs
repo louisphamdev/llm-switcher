@@ -16,7 +16,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget, forgetConfigCache
+  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -871,12 +871,20 @@ function requireConfig(res) {
   return cfg;
 }
 
-// Reconcile runs one at a time: two commits in flight must not both start an interceptor.
-let reconcileChain = Promise.resolve();
+// Config changes and interceptor reconciles run one at a time, from read to save. A change that
+// waits for its interceptor check must not be saved by a concurrent one, and two must not both
+// start an interceptor.
+let adminChain = Promise.resolve();
+function serialized(fn) {
+  const run = adminChain.then(fn);
+  adminChain = run.catch(() => {});
+  return run;
+}
+const CONFIG_CHANGES = new Set(['/api/switch', '/api/toggle', '/api/save-profile', '/api/delete-profile', '/api/blindfold/sync']);
+
+// Callers run it inside serialized().
 function reconcile(cfg) {
-  const run = reconcileChain.then(() => reconcileBlindfold(cfg, PORT));
-  reconcileChain = run.catch(() => {});
-  return run.then(r => {
+  return reconcileBlindfold(cfg, PORT).then(r => {
     if (!r.ok) console.error(`[llm-switcher:blindfold] ${r.error}`);
     else if (r.action === 'started') console.log('[llm-switcher:blindfold] interceptor started');
     return r;
@@ -887,10 +895,7 @@ function reconcile(cfg) {
 async function commit(cfg) {
   // Refuse before saving: a saved interceptor port that a squatter holds would route Codex through it.
   const problem = await checkBlindfoldTarget(cfg, PORT);
-  if (problem) {
-    forgetConfigCache();
-    return { success: false, error: `Not saved: ${problem}` };
-  }
+  if (problem) return { success: false, error: `Not saved: ${problem}` };
   saveConfig(cfg);
   const st = applyLaunchState(cfg, PORT);
   const removed = st.settings?.removed || [];
@@ -1223,8 +1228,15 @@ async function routeApi(req, res, method, pathname) {
     return sendJson(res, 200, { success: true });
   }
 
-  const cfg = requireConfig(res);
-  if (!cfg) return;
+  if (CONFIG_CHANGES.has(pathname)) return serialized(() => routeConfigApi(res, method, pathname, body));
+  return routeConfigApi(res, method, pathname, body);
+}
+
+async function routeConfigApi(res, method, pathname, body) {
+  const loaded = requireConfig(res);
+  if (!loaded) return;
+  // A copy: a refused change must never reach the cached config that other requests read.
+  const cfg = structuredClone(loaded);
 
   // POST /api/switch  { target?, profile? | null, deactivate? }
   if (pathname === '/api/switch') {
@@ -1698,7 +1710,7 @@ if (!loadConfig()) {
 server.listen(PORT, '127.0.0.1', () => {
   // A service start or a restart on a new port finds env-codex.* already pointing at the interceptor.
   const cfg = loadConfig();
-  if (cfg && !getConfigLoadError()) reconcile(cfg);
+  if (cfg && !getConfigLoadError()) serialized(() => reconcile(cfg));
   console.log(`[llm-switcher] Server running on http://127.0.0.1:${PORT}`);
   console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui`);
   console.log(`[llm-switcher] Endpoints: /v1/messages (anthropic) | /v1/chat/completions (openai) | /v1/responses (codex) | /v1beta/models/* (vertex)`);
