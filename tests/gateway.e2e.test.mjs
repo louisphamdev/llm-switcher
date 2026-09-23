@@ -9,8 +9,10 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { assertValidAnthropicEvents } from './helpers.mjs';
+import { createFrameReader } from '../blindfold/wsframe.mjs';
 
 const MASKED = '__LLM_SWITCHER_KEEP_KEY__';
 
@@ -18,6 +20,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let upstream, upstreamPort, proxy, proxyPort, tmpDir;
 const received = []; // { url, headers, body }
+const hangState = { closed: false };
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -57,6 +60,20 @@ function startUpstream() {
             { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '*** End Patch"}' } }] } }] },
             { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
           ]);
+        }
+        if (lastUser.includes('ERROR_THEN_HANG')) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.write(`data: ${JSON.stringify({ error: { message: 'in-band failure' } })}\n\n`);
+          res.on('close', () => { hangState.closed = true; });
+          return;
+        }
+        if (lastUser.includes('SLOW_TURN')) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'slow ' } }] })}\n\n`);
+          return setTimeout(() => {
+            res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'done' }, finish_reason: 'stop' }] })}\n\n`);
+            res.end();
+          }, 300);
         }
         if (lastUser.includes('MID_STREAM_ERROR')) {
           return sse(res, [
@@ -649,4 +666,132 @@ test('an auto profile maps Codex names by client protocol and leaves Claude mapp
   assert.equal(await upstreamModel('/v1/responses', { model: 'main', stream: false, input: 'hi' }), 'up-opus');
   assert.equal(await upstreamModel('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-opus');
   assert.equal(await upstreamModel('/v1/chat/completions', { model: 'default', messages: [{ role: 'user', content: 'hi' }] }), 'up-sonnet');
+});
+
+// ---- Request input limits and the Codex WS transport (audit F04, F05, F20, F37, F38, F51) ----
+
+test('readBody: gzip, deflate and br bodies decode; a decompression bomb gets 413 and the gateway stays up', async () => {
+  const body = Buffer.from('{}');
+  for (const [enc, pack] of [['gzip', zlib.gzipSync], ['deflate', zlib.deflateSync], ['br', zlib.brotliCompressSync]]) {
+    const r = await fetch(url('/api/logs/clear'), { method: 'POST', headers: withToken('/api/logs/clear', { 'Content-Type': 'application/json', 'Content-Encoding': enc }), body: pack(body) });
+    assert.equal(r.status, 200, enc);
+  }
+  // 8 MB of zeros packs into a few KB, far under the 1 MB raw cap of /api/*.
+  const bomb = zlib.gzipSync(Buffer.alloc(8 * 1024 * 1024));
+  assert.ok(bomb.length < 64 * 1024);
+  const r = await fetch(url('/api/logs/clear'), { method: 'POST', headers: withToken('/api/logs/clear', { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }), body: bomb });
+  assert.equal(r.status, 413);
+  assert.match((await r.json()).error, /after decompression/);
+  assert.equal((await fetch(url('/health'))).status, 200);
+});
+
+function clientFrame(opcode, payload, { fin = true, length } = {}) {
+  const data = Buffer.from(payload);
+  const len = length ?? data.length;
+  const head = len < 126 ? Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | len])
+    : len < 65536 ? Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | 126, len >> 8, len & 0xff])
+      : Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(len)); return b; })()]);
+  const mask = crypto.randomBytes(4);
+  const masked = Buffer.from(data.map((b, i) => b ^ mask[i & 3]));
+  return Buffer.concat([head, mask, masked]);
+}
+
+// A raw client: the tests need fragments and oversized headers that WebSocket cannot send.
+function rawWs(headers = {}) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(proxyPort, '127.0.0.1');
+    const extra = Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('');
+    socket.write(`GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1:${proxyPort}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\n${extra}\r\n`);
+    let head = Buffer.alloc(0);
+    const read = createFrameReader();
+    const messages = [];
+    let closed = false;
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf('\r\n\r\n');
+      if (end < 0) return;
+      socket.off('data', onData);
+      const rest = head.subarray(end + 4);
+      const collect = (c) => { for (const f of read(c)) messages.push(f.type === 'text' ? JSON.parse(f.payload.toString()) : f); };
+      socket.on('data', collect);
+      if (rest.length) collect(rest);
+      resolve({ socket, reply: head.subarray(0, end).toString(), messages, closed: () => closed });
+    };
+    socket.on('data', onData);
+    socket.on('close', () => { closed = true; });
+    socket.on('error', reject);
+  });
+}
+
+async function until(check, ms = 5000) {
+  const stop = Date.now() + ms;
+  while (Date.now() < stop) {
+    if (check()) return true;
+    await new Promise(r => setTimeout(r, 20));
+  }
+  return false;
+}
+
+test('Codex WS: a fragmented message is reassembled', async () => {
+  const ws = await rawWs();
+  const text = JSON.stringify({ type: 'session.update', session: { tag: 'fragmented' } });
+  ws.socket.write(clientFrame(1, text.slice(0, 10), { fin: false }));
+  ws.socket.write(clientFrame(0, text.slice(10), { fin: true }));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'session.updated')), 'no session.updated');
+  assert.equal(ws.messages.find(m => m.type === 'session.updated').session.tag, 'fragmented');
+  ws.socket.destroy();
+});
+
+test('Codex WS: a frame larger than the body cap closes the socket before it is buffered', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, 'x', { length: 2 ** 40 }).subarray(0, 14));
+  assert.ok(await until(() => ws.closed()), 'socket stays open');
+  const close = ws.messages.find(m => m.type === 'close');
+  assert.ok(close, 'a close frame is sent');
+  assert.equal(close.payload.readUInt16BE(0), 1009);
+});
+
+test('Codex WS: 101 reply names the public main model or the slot, never the upstream id', async () => {
+  const hidden = await rawWs({ 'x-llm-profile': 'agmock' });
+  assert.match(hidden.reply, /\r\nOpenAI-Model: main\r\n/i);
+  assert.ok(!hidden.reply.includes('ag/mock-flash'));
+  hidden.socket.destroy();
+  const published = await rawWs({ 'x-llm-profile': 'pub' });
+  assert.match(published.reply, /\r\nOpenAI-Model: gpt-5\.6-sol\r\n/i);
+  published.socket.destroy();
+});
+
+test('Codex WS: overlapping response.create turns run one after the other', async () => {
+  const ws = await rawWs();
+  const create = (input) => clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input }));
+  ws.socket.write(Buffer.concat([create('SLOW_TURN first'), create('SLOW_TURN second')]));
+  const ends = () => ws.messages.filter(m => m.type === 'response.completed' || m.type === 'response.failed').length;
+  assert.ok(await until(() => ends() === 2, 10000), 'both turns end');
+  const order = ws.messages.filter(m => /^response\.(created|completed|failed)$/.test(m.type)).map(m => m.type);
+  assert.deepEqual(order, ['response.created', 'response.completed', 'response.created', 'response.completed']);
+  ws.socket.destroy();
+});
+
+test('Codex WS: a mid-stream error is logged with its text', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MID_STREAM_ERROR over ws' })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.failed')), 'no response.failed');
+  ws.socket.destroy();
+  const { logs } = await (await fetch(url('/api/logs'), { headers: withToken('/api/logs', {}) })).json();
+  const entry = logs.find(l => l.clientFormat === 'responses-ws' && l.status === 502);
+  assert.ok(entry, 'a 502 responses-ws entry');
+  assert.match(entry.error || '', /upstream exploded/);
+});
+
+test('Codex WS: a turn that throws before its own error handling still ends in response.failed', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 12345, input: 'numeric model' })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.failed')), `no response.failed: ${JSON.stringify(ws.messages.map(m => m.type))}`);
+  ws.socket.destroy();
+});
+
+test('An in-band upstream error closes the upstream connection instead of leaving it open', async () => {
+  const r = await post('/v1/chat/completions', { model: 'main', stream: true, messages: [{ role: 'user', content: 'ERROR_THEN_HANG' }] });
+  await r.text();
+  assert.ok(await until(() => hangState.closed, 3000), 'the upstream response is still open');
 });

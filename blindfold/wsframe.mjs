@@ -1,8 +1,5 @@
-// Minimal RFC 6455 frame reader, for the capture file only.
-//
-// The proxy relays the raw bytes untouched; this reader works on a copy. It exists
-// because a Codex completion travels over a WebSocket, so a capture that only
-// records HTTP sees the handshake and nothing else.
+// Minimal RFC 6455 frame reader. The blindfold capture reads a copy of the relayed bytes with it,
+// and the gateway reads the Codex WS transport with it.
 //
 // Scope on purpose: it reassembles data messages and reports control frames. It
 // does not answer a ping, does not close a connection and never writes a byte back.
@@ -22,9 +19,18 @@ const NAME = Object.fromEntries(Object.entries(OPCODE).map(([k, v]) => [v, k]));
 
 // A frame reader is a stream parser: a TCP chunk carries any number of frames, and
 // one frame can be split across chunks. It buffers until a whole frame is present.
-export function createFrameReader({ inflate = false } = {}) {
-  let buffer = Buffer.alloc(0);
+//
+// A message larger than maxMessage yields one {type:'error'} item, decided from the frame
+// header before the body is buffered. After an error the reader returns nothing more.
+export function createFrameReader({ inflate = false, maxMessage = Infinity } = {}) {
+  // Chunks are joined once, when enough bytes are present: joining on every chunk copies a
+  // large frame again for each chunk that carries it.
+  let pending = [];
+  let pendingBytes = 0;
+  let needed = 2;
+  let failed = false;
   let fragments = [];
+  let fragmentBytes = 0;
   let fragmentOpcode = null;
   let fragmentCompressed = false;
 
@@ -49,7 +55,7 @@ export function createFrameReader({ inflate = false } = {}) {
 
   const inflateMessage = (payload) => {
     if (!inflate) return payload;
-    const opts = { finishFlush: zlib.constants.Z_SYNC_FLUSH };
+    const opts = { finishFlush: zlib.constants.Z_SYNC_FLUSH, ...(Number.isFinite(maxMessage) ? { maxOutputLength: maxMessage } : {}) };
     if (history.length) opts.dictionary = history.subarray(Math.max(0, history.length - WINDOW));
     const out = zlib.inflateRawSync(Buffer.concat([payload, TAIL]), opts);
     history = Buffer.concat([history, out]);
@@ -58,10 +64,22 @@ export function createFrameReader({ inflate = false } = {}) {
   };
 
   return function push(chunk) {
-    buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
+    if (failed) return [];
+    pending.push(chunk);
+    pendingBytes += chunk.length;
+    if (pendingBytes < needed) return [];
+    let buffer = pending.length === 1 ? pending[0] : Buffer.concat(pending, pendingBytes);
     const out = [];
+    const fail = (reason) => {
+      failed = true;
+      pending = [];
+      pendingBytes = 0;
+      out.push({ type: 'error', reason });
+      return out;
+    };
 
     for (;;) {
+      needed = 2;
       if (buffer.length < 2) break;
       const b0 = buffer[0];
       const b1 = buffer[1];
@@ -73,26 +91,32 @@ export function createFrameReader({ inflate = false } = {}) {
       let offset = 2;
 
       if (length === 126) {
-        if (buffer.length < offset + 2) break;
+        needed = offset + 2;
+        if (buffer.length < needed) break;
         length = buffer.readUInt16BE(offset);
         offset += 2;
       } else if (length === 127) {
-        if (buffer.length < offset + 8) break;
+        needed = offset + 8;
+        if (buffer.length < needed) break;
         const big = buffer.readBigUInt64BE(offset);
         // A frame larger than 2^53 cannot be indexed by a JS number. Nothing sends
         // one; refusing is safer than truncating the length in silence.
-        if (big > BigInt(Number.MAX_SAFE_INTEGER)) return [{ type: 'error', reason: 'frame length exceeds Number.MAX_SAFE_INTEGER' }];
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) return fail('frame length exceeds Number.MAX_SAFE_INTEGER');
         length = Number(big);
         offset += 8;
       }
+      const messageBytes = opcode === OPCODE.continuation ? fragmentBytes + length : length;
+      if (messageBytes > maxMessage) return fail(`message exceeds ${maxMessage} bytes`);
 
       let maskKey = null;
       if (masked) {
-        if (buffer.length < offset + 4) break;
+        needed = offset + 4;
+        if (buffer.length < needed) break;
         maskKey = buffer.subarray(offset, offset + 4);
         offset += 4;
       }
-      if (buffer.length < offset + length) break;
+      needed = offset + length;
+      if (buffer.length < needed) break;
 
       let payload = Buffer.from(buffer.subarray(offset, offset + length));
       buffer = buffer.subarray(offset + length);
@@ -111,13 +135,16 @@ export function createFrameReader({ inflate = false } = {}) {
         fragmentOpcode = opcode;
         fragmentCompressed = rsv1;
         fragments = [];
+        fragmentBytes = 0;
       }
       fragments.push(payload);
+      fragmentBytes += payload.length;
 
       if (!fin) continue;
 
       let body = Buffer.concat(fragments);
       fragments = [];
+      fragmentBytes = 0;
       let note;
       if (fragmentCompressed) {
         try {
@@ -136,6 +163,8 @@ export function createFrameReader({ inflate = false } = {}) {
       fragmentCompressed = false;
     }
 
+    pending = buffer.length ? [buffer] : [];
+    pendingBytes = buffer.length;
     return out;
   };
 }

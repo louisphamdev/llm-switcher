@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, IN_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
@@ -168,7 +170,7 @@ function hostnameOf(hostHeader) {
 }
 
 // Block DNS rebinding (unknown Host pointing at 127.0.0.1) and CSRF from other sites (unknown Origin).
-// Without the Host check, a malicious page could read /api/status (contains API key) or burn tokens via /v1/*.
+// Without the Host check, a malicious page could burn tokens via /v1/*.
 function checkRequestOrigin(req) {
   if (req.headers.host && !LOOPBACK_HOSTS.has(hostnameOf(req.headers.host))) {
     return 'Forbidden: untrusted Host header';
@@ -217,43 +219,43 @@ function readBody(req, limit) {
     });
     req.on('end', () => {
       if (tooLarge) return;
-      const raw = Buffer.concat(chunks);
-      const encoding = (req.headers['content-encoding'] || '').toLowerCase().trim();
-      try {
-        if (encoding === 'gzip') {
-          resolve(zlib.gunzipSync(raw));
-        } else if (encoding === 'deflate') {
-          resolve(zlib.inflateSync(raw));
-        } else if (encoding === 'br') {
-          resolve(zlib.brotliDecompressSync(raw));
-        } else if (encoding === 'zstd') {
-          if (typeof zlib.zstdDecompressSync === 'function') {
-            resolve(zlib.zstdDecompressSync(raw));
-          } else {
-            const err = new Error('zstd decompression not supported in this Node.js version');
-            err.status = 415;
-            reject(err);
-          }
-        } else {
-          // Magic bytes detection (e.g. zstd 0x28 0xb5 0x2f 0xfd, gzip 0x1f 0x8b)
-          if (raw.length >= 4 && raw[0] === 0x28 && raw[1] === 0xb5 && raw[2] === 0x2f && raw[3] === 0xfd && typeof zlib.zstdDecompressSync === 'function') {
-            resolve(zlib.zstdDecompressSync(raw));
-          } else if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
-            resolve(zlib.gunzipSync(raw));
-          } else {
-            resolve(raw);
-          }
-        }
-      } catch (err) {
-        err.status = 400;
-        reject(err);
-      }
+      decodeBody(Buffer.concat(chunks), req.headers['content-encoding'], limit).then(resolve, reject);
     });
     req.on('error', err => {
       err.status = 400;
       reject(err);
     });
   });
+}
+
+const INFLATERS = {
+  gzip: promisify(zlib.gunzip),
+  deflate: promisify(zlib.inflate),
+  br: promisify(zlib.brotliDecompress),
+  ...(typeof zlib.zstdDecompress === 'function' ? { zstd: promisify(zlib.zstdDecompress) } : {})
+};
+
+// Decompression runs off the event loop and stops at the raw-body limit: a few KB of gzip can
+// expand to gigabytes.
+async function decodeBody(raw, contentEncoding, limit) {
+  let encoding = String(contentEncoding || '').toLowerCase().trim();
+  if (!['gzip', 'deflate', 'br', 'zstd'].includes(encoding)) {
+    // Magic bytes: some clients compress without saying so.
+    if (raw.length >= 4 && raw[0] === 0x28 && raw[1] === 0xb5 && raw[2] === 0x2f && raw[3] === 0xfd && INFLATERS.zstd) encoding = 'zstd';
+    else if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) encoding = 'gzip';
+    else return raw;
+  }
+  const inflate = INFLATERS[encoding];
+  if (!inflate) throw Object.assign(new Error('zstd decompression not supported in this Node.js version'), { status: 415 });
+  try {
+    return await inflate(raw, { maxOutputLength: limit });
+  } catch (err) {
+    if (err.code === 'ERR_BUFFER_TOO_LARGE') {
+      throw Object.assign(new Error(`Payload Too Large after decompression (max ${Math.round(limit / 1024 / 1024)}MB)`), { status: 413 });
+    }
+    err.status = 400;
+    throw err;
+  }
 }
 
 async function readJsonBody(req, limit = MAX_API_BODY_SIZE) {
@@ -481,10 +483,14 @@ async function* readUpstreamPayloads(upstreamRes) {
   const reader = upstreamRes.body.getReader();
   const decoder = new TextDecoder('utf8');
   let buffer = '';
+  let finished = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        finished = true;
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -497,6 +503,8 @@ async function* readUpstreamPayloads(upstreamRes) {
     const tail = parsePayloadLine(buffer);
     if (tail) yield tail;
   } finally {
+    // A consumer that stops early (an in-band error) must close the upstream connection too.
+    if (!finished) await reader.cancel().catch(() => {});
     try { reader.releaseLock(); } catch {}
   }
 }
@@ -1363,40 +1371,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-function decodeWsFrames(buffer) {
-  const messages = [];
-  let offset = 0;
-  while (offset < buffer.length) {
-    if (offset + 2 > buffer.length) break;
-    const b0 = buffer[offset];
-    const b1 = buffer[offset + 1];
-    const opcode = b0 & 0x0f;
-    const isMasked = Boolean(b1 & 0x80);
-    let len = b1 & 0x7f;
-    let headerLen = 2;
-    if (len === 126) {
-      if (offset + 4 > buffer.length) break;
-      len = buffer.readUInt16BE(offset + 2);
-      headerLen = 4;
-    } else if (len === 127) {
-      if (offset + 10 > buffer.length) break;
-      len = Number(buffer.readBigUInt64BE(offset + 2));
-      headerLen = 10;
-    }
-    const maskLen = isMasked ? 4 : 0;
-    if (offset + headerLen + maskLen + len > buffer.length) break;
-    const mask = isMasked ? buffer.subarray(offset + headerLen, offset + headerLen + 4) : null;
-    const payload = Buffer.alloc(len);
-    const start = offset + headerLen + maskLen;
-    for (let i = 0; i < len; i++) {
-      payload[i] = isMasked ? (buffer[start + i] ^ mask[i % 4]) : buffer[start + i];
-    }
-    offset += headerLen + maskLen + len;
-    messages.push({ opcode, payload, text: opcode === 1 ? payload.toString('utf8') : null });
-  }
-  return { messages, remainder: buffer.subarray(offset) };
-}
-
 function encodeWsFrame(data, opcode = 1) {
   const payload = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
   const len = payload.length;
@@ -1451,7 +1425,8 @@ function geminiSafeTools(tools) {
   });
 }
 
-async function handleWsResponseCreate(socket, payload, req, activeControllerHolder) {
+// One turn of the Codex WS transport. The socket loop runs turns one at a time and owns `ac`.
+async function handleWsResponseCreate(socket, payload, req, ac) {
   const clientFormat = 'responses';
   const { profileKey, profile, error: profileError } = getActiveProfile(clientFormat, req);
   if (!loadConfig()) {
@@ -1481,9 +1456,6 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
   console.log(`[llm-switcher:ws] ${clientFormat} -> ${outFormat} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
   const logBase = { clientFormat: 'responses-ws', outFormat, profile: profileKey, model: mappedModel, stream: true, requestPreview };
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
-
-  const ac = new AbortController();
-  if (activeControllerHolder) activeControllerHolder.ac = ac;
 
   try {
     const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
@@ -1564,6 +1536,7 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
     }
     log({
       status: streamError ? 502 : 200, stream: true,
+      ...(streamError ? { error: streamError } : {}),
       tokens: { prompt: col.prompt, completion },
       thinkingChars: col.think.join('').length,
       responsePreview: col.text.join('').slice(0, 300)
@@ -1573,8 +1546,6 @@ async function handleWsResponseCreate(socket, payload, req, activeControllerHold
     console.error(`[${profileKey}:ws] Error:`, err);
     sendWsFailed(socket, payload?.model || 'main', err.message, 500);
     log({ status: 500, error: err.message });
-  } finally {
-    if (activeControllerHolder?.ac === ac) activeControllerHolder.ac = null;
   }
 }
 
@@ -1615,8 +1586,10 @@ server.on('upgrade', (req, socket) => {
   }
   const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   
+  // The official name or the slot, never the upstream ID. The value goes into a raw header line.
   const { profile } = getActiveProfile('responses', req);
-  const activeModel = profile?.publicModels?.[0] || profile?.defaultModels?.main || 'main';
+  const publicMain = profile ? codexPublicModel(profile, 'main') : '';
+  const activeModel = isSafeModelName(publicMain) ? publicMain : 'main';
 
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +
@@ -1628,67 +1601,69 @@ server.on('upgrade', (req, socket) => {
     'x-codex-turn-state: ready\r\n\r\n'
   );
 
-  let buf = Buffer.alloc(0);
-  const activeControllerHolder = { ac: null };
+  const read = createFrameReader({ maxMessage: MAX_BODY_SIZE });
+  // Turns run one at a time: two at once interleave their events on one socket. Every turn,
+  // queued or running, holds a controller here, so a cancel or a close stops all of them.
+  const turns = new Set();
+  let turnChain = Promise.resolve();
+  const abortTurns = () => { for (const ac of turns) ac.abort(); };
+
+  const handleMessage = (msg) => {
+    if (msg.type === 'response.create') {
+      const ac = new AbortController();
+      turns.add(ac);
+      turnChain = turnChain
+        .then(() => (ac.signal.aborted ? null : handleWsResponseCreate(socket, msg, req, ac)))
+        .catch(err => {
+          // A throw before the handler's own try: Codex ends a turn only on response.failed.
+          console.error('[llm-switcher:ws] Unhandled turn error:', err);
+          if (!ac.signal.aborted) sendWsFailed(socket, msg.model || 'main', err.message, 500);
+        })
+        .finally(() => turns.delete(ac));
+    } else if (msg.type === 'response.cancel') {
+      abortTurns();
+    } else if (msg.type === 'session.update') {
+      if (socket.writable) socket.write(encodeWsFrame(JSON.stringify({ type: 'session.updated', session: msg.session || {} })));
+    } else if (msg.type === 'conversation.item.create') {
+      if (socket.writable) socket.write(encodeWsFrame(JSON.stringify({ type: 'conversation.item.created', item: msg.item || {} })));
+    }
+  };
 
   socket.on('data', (chunk) => {
-    buf = Buffer.concat([buf, chunk]);
-    const { messages, remainder } = decodeWsFrames(buf);
-    buf = remainder;
-
-    for (const m of messages) {
-      if (m.opcode === 8) { // close
+    for (const f of read(chunk)) {
+      if (f.type === 'error') {
+        // 1009 = message too big. The reader has stopped, so the connection cannot continue.
+        const code = Buffer.alloc(2);
+        code.writeUInt16BE(/exceeds/.test(f.reason) ? 1009 : 1002);
+        if (socket.writable) socket.end(encodeWsFrame(code, 8));
+        abortTurns();
+        return;
+      }
+      if (f.type === 'close') {
         if (socket.writable) socket.end(encodeWsFrame(Buffer.alloc(0), 8));
         return;
       }
-      if (m.opcode === 9) { // ping
-        if (socket.writable) socket.write(encodeWsFrame(m.payload, 10)); // pong
+      if (f.type === 'ping') {
+        if (socket.writable) socket.write(encodeWsFrame(f.payload, 10));
         continue;
       }
-      if (m.opcode === 1 && m.text) { // text message
-        try {
-          const msg = JSON.parse(m.text);
-          if (msg.type === 'response.create') {
-            handleWsResponseCreate(socket, msg, req, activeControllerHolder).catch(err => {
-              console.error('[llm-switcher:ws] Unhandled turn error:', err);
-            });
-          } else if (msg.type === 'response.cancel') {
-            if (activeControllerHolder.ac) {
-              activeControllerHolder.ac.abort();
-            }
-          } else if (msg.type === 'session.update') {
-            if (socket.writable) {
-              socket.write(encodeWsFrame(JSON.stringify({
-                type: 'session.updated',
-                session: msg.session || {}
-              })));
-            }
-          } else if (msg.type === 'conversation.item.create') {
-            if (socket.writable) {
-              socket.write(encodeWsFrame(JSON.stringify({
-                type: 'conversation.item.created',
-                item: msg.item || {}
-              })));
-            }
-          }
-        } catch (e) {
-          console.error('[llm-switcher:ws] Bad WS message JSON:', e.message);
-        }
+      if (f.type !== 'text') continue;
+      let msg;
+      try {
+        msg = JSON.parse(f.payload.toString('utf8'));
+      } catch (e) {
+        console.error('[llm-switcher:ws] Bad WS message JSON:', e.message);
+        continue;
       }
+      handleMessage(msg);
     }
   });
 
-  socket.on('close', () => {
-    if (activeControllerHolder.ac) {
-      activeControllerHolder.ac.abort();
-    }
-  });
+  socket.on('close', abortTurns);
 
   socket.on('error', (err) => {
     debugLog('[llm-switcher:ws] Socket error:', err.message);
-    if (activeControllerHolder.ac) {
-      activeControllerHolder.ac.abort();
-    }
+    abortTurns();
   });
 });
 
