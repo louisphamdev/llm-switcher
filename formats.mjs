@@ -160,7 +160,8 @@ function smartReasoning(node) {
   const parts = node.parts || node.content?.parts;
   if (Array.isArray(parts)) {
     const sp = splitParts(parts);
-    if (sp.thinking.length) texts.push(sp.thinking.join(''));
+    // The same thought can arrive in both places; take the parts only when nothing else carried it.
+    if (sp.thinking.length && !texts.length) texts.push(sp.thinking.join(''));
     if (!signature) signature = sp.signature;
   }
   if (!signature) {
@@ -177,11 +178,7 @@ function smartText(node) {
   const c = node.content;
   if (c !== undefined && c !== null) {
     if (typeof c === 'string') return c;
-    if (Array.isArray(c)) {
-      const sp = splitParts(c);
-      const direct = c.filter(x => typeof x === 'string');
-      return [...sp.text, ...direct].join('\n');
-    }
+    if (Array.isArray(c)) return splitParts(c).text.join('\n');
     if (typeof c === 'object') {
       if (Array.isArray(c.parts)) return splitParts(c.parts).text.join('');
       if (typeof c.text === 'string' && c.text) return c.text;
@@ -248,9 +245,11 @@ function smartUsage(u) {
   const outDet = (o.completion_tokens_details && typeof o.completion_tokens_details === 'object')
     ? o.completion_tokens_details
     : (o.output_tokens_details && typeof o.output_tokens_details === 'object') ? o.output_tokens_details : {};
+  // Gemini counts thoughts apart from candidates. Every other API counts them inside the output.
+  const geminiOutput = (Number(o.candidatesTokenCount) || 0) + (Number(o.thoughtsTokenCount) || 0);
   return {
     prompt: num(o.prompt_tokens, o.input_tokens, o.promptTokenCount, o.inputTokens),
-    completion: num(o.completion_tokens, o.output_tokens, o.candidatesTokenCount, o.outputTokens),
+    completion: num(o.completion_tokens, o.output_tokens, geminiOutput, o.outputTokens),
     cached: num(det.cached_tokens, o.cached_tokens, o.cachedContentTokenCount, o.cached_content_token_count, o.cache_read_input_tokens),
     reasoning: num(outDet.reasoning_tokens, outDet.thinking_tokens, o.thoughtsTokenCount, o.reasoning_tokens)
   };
@@ -288,6 +287,8 @@ function smartDelta(choice) {
   return choice;
 }
 
+const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+
 function sanitizeJsonSchema(schema) {
   if (!schema) return { type: 'object', properties: {} };
   if (typeof schema === 'string') {
@@ -299,6 +300,11 @@ function sanitizeJsonSchema(schema) {
   for (const [k, v] of Object.entries(schema)) {
     if (k === '$schema' || k === 'cache_control' || k === 'encrypted') continue;
     if (k === 'format' && ['uri', 'uri-reference'].includes(v)) continue;
+    // A name map: each value is a schema, the map itself is not. A parameter may be named "properties".
+    if (SCHEMA_MAPS.has(k) && v && typeof v === 'object' && !Array.isArray(v)) {
+      clean[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, sanitizeJsonSchema(sub)]));
+      continue;
+    }
     clean[k] = sanitizeJsonSchema(v);
   }
   if (!clean.type && clean.properties) {
@@ -447,7 +453,7 @@ function anthropicToIR(payload) {
   if (typeof payload.temperature === 'number') ir.params.temperature = payload.temperature;
   if (typeof payload.top_p === 'number') ir.params.topP = payload.top_p;
   if (typeof payload.top_k === 'number') ir.params.topK = payload.top_k;
-  if (Array.isArray(payload.stop_sequences) && payload.stop_sequences.length) ir.params.stop = payload.stop_sequences;
+  if (Array.isArray(payload.stop_sequences)) ir.params.stop = stopList(payload.stop_sequences);
 
   ir.thinking = thinkingFromAnthropicParam(payload.thinking, payload.output_config?.effort);
   return ir;
@@ -471,6 +477,20 @@ function isNoReasoningEffort(e) {
 }
 
 // OpenAI Chat Completions -> IR (light normalization).
+// Anthropic rejects an empty stop string, and no upstream can match one.
+function stopList(stop) {
+  return (Array.isArray(stop) ? stop : [stop]).filter(x => typeof x === 'string' && x);
+}
+
+// allowed_tools restricts the call to a subset of the declared tools. Hosted tools are not
+// forwarded, so they never count as allowed.
+function applyAllowedTools(ir, mode, list, nameOf) {
+  const names = new Set((Array.isArray(list) ? list : []).map(nameOf).filter(Boolean));
+  ir.tools = (ir.tools || []).filter(t => names.has(t.name));
+  ir.toolChoice = ir.tools.length ? (mode === 'required' ? 'required' : 'auto') : null;
+  if (!ir.tools.length) delete ir.tools;
+}
+
 function chatToIR(payload) {
   const ir = baseIR();
   ir.model = payload.model || '';
@@ -516,14 +536,14 @@ function chatToIR(payload) {
   const tc = payload.tool_choice;
   if (typeof tc === 'string') ir.toolChoice = tc;
   else if (tc?.type === 'function' && tc.function?.name) ir.toolChoice = { name: tc.function.name };
-  else if (tc?.type === 'allowed_tools') ir.toolChoice = 'required';
+  else if (tc?.type === 'allowed_tools') applyAllowedTools(ir, tc.allowed_tools?.mode, tc.allowed_tools?.tools, t => t?.function?.name);
 
   ir.params.maxTokens = payload.max_tokens ?? payload.max_completion_tokens ?? null;
   if (typeof payload.temperature === 'number') ir.params.temperature = payload.temperature;
   if (typeof payload.top_p === 'number') ir.params.topP = payload.top_p;
   if (typeof payload.presence_penalty === 'number') ir.params.presencePenalty = payload.presence_penalty;
   if (typeof payload.frequency_penalty === 'number') ir.params.frequencyPenalty = payload.frequency_penalty;
-  if (payload.stop !== undefined && payload.stop !== null) ir.params.stop = Array.isArray(payload.stop) ? payload.stop : [payload.stop];
+  if (payload.stop !== undefined && payload.stop !== null) ir.params.stop = stopList(payload.stop);
   if (payload.parallel_tool_calls === false) ir.params.parallelToolCalls = false;
 
   if (payload.thinking && typeof payload.thinking === 'object') {
@@ -705,7 +725,10 @@ function responsesToIR(payload) {
   const tc = payload.tool_choice;
   if (typeof tc === 'string') ir.toolChoice = tc;
   else if ((tc?.type === 'function' || tc?.type === 'custom') && tc.name) ir.toolChoice = { name: responsesToolName(tc.namespace, tc.name) };
-  else if (tc && typeof tc === 'object') ir.toolChoice = 'required';
+  else if (tc?.type === 'allowed_tools') applyAllowedTools(ir, tc.mode, tc.tools, t => (t?.name ? responsesToolName(t.namespace, t.name) : null));
+  else if (['none', 'auto', 'required'].includes(tc?.type)) ir.toolChoice = tc.type;
+  // A hosted tool (web search, file search) is not forwarded, so it cannot be forced.
+  else if (tc && typeof tc === 'object') ir.toolChoice = 'auto';
 
   if (typeof payload.max_output_tokens === 'number') ir.params.maxTokens = payload.max_output_tokens;
   if (typeof payload.temperature === 'number') ir.params.temperature = payload.temperature;
@@ -789,7 +812,7 @@ function vertexToIR(payload) {
   if (typeof gc.maxOutputTokens === 'number') ir.params.maxTokens = gc.maxOutputTokens;
   if (typeof gc.temperature === 'number') ir.params.temperature = gc.temperature;
   if (typeof gc.topP === 'number') ir.params.topP = gc.topP;
-  if (Array.isArray(gc.stopSequences)) ir.params.stop = gc.stopSequences;
+  if (Array.isArray(gc.stopSequences)) ir.params.stop = stopList(gc.stopSequences);
   const th = gc.thinkingConfig || gc.thinking_config;
   if (th && typeof th === 'object') {
     if (th.thinkingBudget === 0) ir.thinking = { type: 'disabled' };
@@ -816,7 +839,8 @@ function hasNativeReasoning(model) {
   // Detect capability families instead of pinning exact versions. Claude Opus
   // model IDs change often, but all current Opus variants support reasoning.
   const m = String(model || '').toLowerCase();
-  return m.includes('thinking') || m.includes('reasoning') || m.includes('opus');
+  return m.includes('thinking') || m.includes('reasoning') || m.includes('reasoner') || m.includes('opus')
+    || /(^|[/_.:-])(o[134]|r1|qwq)([/_.:-]|$)/.test(m);
 }
 
 // Healer Engine: normalize tool call <-> tool result pairs before emitting to any upstream.
@@ -854,13 +878,17 @@ function healToolPairs(messages) {
     deferred = [];
   };
 
+  let unnamed = [];     // ids given to calls that arrived with no id, in order
+
   for (const m of messages) {
     if (!m) continue;
     if (m.role === 'tool') {
-      if (pending && m.toolCallId && pending.has(m.toolCallId)) {
-        const name = pending.get(m.toolCallId);
-        pending.delete(m.toolCallId);
-        out.push({ ...m, name: m.name || name });
+      // A result with no id answers the next call that also had none.
+      const id = m.toolCallId || (pending && unnamed.find(u => pending.has(u)));
+      if (pending && id && pending.has(id)) {
+        const name = pending.get(id);
+        pending.delete(id);
+        out.push({ ...m, toolCallId: id, name: m.name || name });
       } else if (pending) {
         deferred.push(m);
       } else {
@@ -870,9 +898,15 @@ function healToolPairs(messages) {
     }
     flush();
     if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length) {
+      unnamed = [];
       const toolCalls = m.toolCalls
         .filter(tc => tc && tc.name)
-        .map(tc => ({ ...tc, id: tc.id || `call_heal_${seq++}` }));
+        .map(tc => {
+          if (tc.id) return tc;
+          const id = `call_heal_${seq++}`;
+          unnamed.push(id);
+          return { ...tc, id };
+        });
       const msg = { ...m, toolCalls };
       if (!toolCalls.length) delete msg.toolCalls;
       out.push(msg);
@@ -1235,6 +1269,7 @@ function collapseNullableUnion(branches) {
     if (s.type === 'null') return true;
     if (Array.isArray(s.type)) return s.type.length === 1 && s.type[0] === 'null';
     if (Array.isArray(s.enum) && s.enum.length === 1 && s.enum[0] === null) return true;
+    if (Object.hasOwn(s, 'const') && s.const === null) return true;
     return false;
   };
   const rest = branches.filter(s => !isNullBranch(s));
@@ -1301,9 +1336,15 @@ function toGeminiSchema(schema, root, seen) {
   if (!out.type && out.properties) out.type = 'object';
   if (out.type === 'object' && !out.properties) out.properties = {};
   if (out.enum && !out.type) out.type = 'string';
-  if (out.enum && out.type !== 'string') delete out.enum; // Gemini only supports enum for strings
-  if (Array.isArray(out.required) && out.properties) {
-    out.required = out.required.filter(r => Object.hasOwn(out.properties, r));
+  if (out.enum && out.type !== 'string') {
+    // Gemini supports enum for strings only. Keep the constraint as text for the model.
+    const values = (schema.enum || (Object.hasOwn(schema, 'const') ? [schema.const] : [])).filter(x => x !== null);
+    if (values.length) out.description = `${out.description ? `${out.description} ` : ''}Allowed values: ${values.join(', ')}.`;
+    delete out.enum;
+  }
+  if (Array.isArray(out.required)) {
+    out.required = out.type === 'object' && out.properties ? out.required.filter(r => Object.hasOwn(out.properties, r)) : [];
+    if (!out.required.length) delete out.required;
   }
   return out;
 }
@@ -1437,7 +1478,8 @@ function healAnthropicPayload(payload) {
       return { type: 'tool_result', tool_use_id: id, content: MISSING_TOOL_RESULT };
     });
     const newContent = [...head, ...rest];
-    if (JSON.stringify(newContent) === JSON.stringify(blocks)) {
+    // Blocks are reused by reference, so an unchanged turn has the same objects in the same order.
+    if (newContent.length === blocks.length && newContent.every((b, i) => b === blocks[i])) {
       out.push(m);
       continue;
     }
@@ -1549,7 +1591,7 @@ function upstreamError(parsed) {
 }
 
 function normalizeUpstream(parsed, outFormat) {
-  const ev = { think: [], text: [], tools: [], finish: null, usage: { prompt: 0, completion: 0, cached: 0 }, sig: null, error: null };
+  const ev = { think: [], text: [], tools: [], finish: null, usage: { prompt: 0, completion: 0, cached: 0, reasoning: 0 }, sig: null, error: null };
   if (!parsed || typeof parsed !== 'object') return ev;
 
   const err = upstreamError(parsed);
@@ -2154,6 +2196,7 @@ function createResponsesStream(emit, model, opts = {}) {
       const incomplete = canonical === 'length';
       // Codex runs a tool on output_item.done. After a length stop, drop any tool call whose arguments
       // do not parse (upstream arguments are JSON for every tool kind) instead of running it cut off.
+      // Its output_item.added then gets no done. A done would run the call, so this is the safe side.
       if (incomplete) {
         for (const t of tools.values()) {
           if (t.done) continue;
@@ -2218,13 +2261,16 @@ function vertexFinish(canonical) {
   }
 }
 
-function vertexUsage(prompt, completion, cached) {
-  const u = { promptTokenCount: prompt || 0, candidatesTokenCount: completion || 0, totalTokenCount: (prompt || 0) + (completion || 0) };
+function vertexUsage(prompt, completion, cached, reasoning) {
+  const thoughts = Math.min(reasoning || 0, completion || 0);
+  const u = { promptTokenCount: prompt || 0, candidatesTokenCount: (completion || 0) - thoughts };
+  if (thoughts) u.thoughtsTokenCount = thoughts;
+  u.totalTokenCount = (prompt || 0) + (completion || 0);
   if (cached) u.cachedContentTokenCount = cached;
   return u;
 }
 
-function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, sig }) {
+function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig }) {
   const parts = [];
   const thinking = (think || []).join('');
   if (thinking) {
@@ -2243,7 +2289,7 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
   if (!parts.length) parts.push({ text: '' });
   return {
     candidates: [{ content: { role: 'model', parts }, finishReason: vertexFinish(finish), index: 0 }],
-    usageMetadata: vertexUsage(prompt, completion, cached),
+    usageMetadata: vertexUsage(prompt, completion, cached, reasoning),
     modelVersion: model
   };
 }
@@ -2282,7 +2328,7 @@ function createVertexStream(emit, model) {
         });
       emit(null, {
         candidates: [{ content: { role: 'model', parts }, finishReason: vertexFinish(canonical), index: 0 }],
-        usageMetadata: vertexUsage(stats.prompt, stats.completion, stats.cached),
+        usageMetadata: vertexUsage(stats.prompt, stats.completion, stats.cached, stats.reasoning),
         modelVersion: model
       });
     },

@@ -9,7 +9,8 @@ import {
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
   isAntigravityModel, smartUsage,
-  createChatStream, buildChatMessage, chatFinish, anthropicStopReason
+  createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
+  smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -470,7 +471,8 @@ test('toGeminiSchema: garbage required entries and extra keys are stripped', () 
     required: [{ type: 'a' }, 'b'],
     additionalProperties: true
   });
-  assert.deepEqual(out.required, []);
+  // No listed name survives, and an empty required list is dropped (audit BR-05).
+  assert.equal(out.required, undefined);
   assert.equal(out.additionalProperties, undefined);
 });
 
@@ -677,4 +679,103 @@ test('a length stop is never reported as a finished tool call', () => {
   const msg = buildResponsesMessage({ model: 'm', text: [], tools: [{ id: 'c1', name: 'write_file', args: '{"a":"tru' }], finish: 'length' });
   assert.equal(msg.status, 'incomplete');
   assert.ok(!msg.output.some(i => i.type === 'function_call'), 'the non-stream builder applies the same rule');
+});
+
+// ---- Format edge cases from the audit (G01-G04, T07, T08, BR-04..08, S6, null tool id) ----
+
+const fn = (name) => ({ type: 'function', name, parameters: { type: 'object', properties: {} } });
+
+test('Responses tool_choice: allowed_tools restricts the tools and keeps its mode; hosted and object modes are not forced', () => {
+  const base = { model: 'm', input: 'x', tools: [fn('a'), fn('b')] };
+  const allowed = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [{ type: 'function', name: 'a' }] } });
+  assert.deepEqual(allowed.tools.map(t => t.name), ['a']);
+  assert.equal(allowed.toolChoice, 'auto');
+  const required = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'b' }] } });
+  assert.deepEqual(required.tools.map(t => t.name), ['b']);
+  assert.equal(required.toolChoice, 'required');
+  assert.equal(responsesToIR({ ...base, tool_choice: { type: 'web_search_preview' } }).toolChoice, 'auto');
+  assert.equal(responsesToIR({ ...base, tool_choice: { type: 'none' } }).toolChoice, 'none');
+  assert.equal(responsesToIR({ ...base, tool_choice: { type: 'auto' } }).toolChoice, 'auto');
+  assert.deepEqual(responsesToIR({ ...base, tool_choice: { type: 'function', name: 'b' } }).toolChoice, { name: 'b' });
+});
+
+test('Chat tool_choice: allowed_tools restricts the tools and keeps its mode', () => {
+  const tools = ['a', 'b'].map(name => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }));
+  const ir = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }], tools,
+    tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ type: 'function', function: { name: 'b' } }] } } });
+  assert.deepEqual(ir.tools.map(t => t.name), ['b']);
+  assert.equal(ir.toolChoice, 'auto');
+});
+
+test('smartText and smartReasoning return each string once', () => {
+  assert.equal(smartText({ content: ['line 1', 'line 2'] }), 'line 1\nline 2');
+  assert.equal(smartReasoning({ reasoning_content: 'step 1', parts: [{ text: 'step 1', thought: true }] }).text, 'step 1');
+});
+
+test('an empty stop string is dropped in every input format', () => {
+  const msgs = [{ role: 'user', content: 'x' }];
+  assert.deepEqual(chatToIR({ model: 'm', messages: msgs, stop: '' }).params.stop, []);
+  assert.deepEqual(chatToIR({ model: 'm', messages: msgs, stop: ['', 'END'] }).params.stop, ['END']);
+  assert.deepEqual(anthropicToIR({ model: 'm', max_tokens: 10, messages: msgs, stop_sequences: ['', 'END'] }).params.stop, ['END']);
+  assert.deepEqual(vertexToIR({ contents: [{ role: 'user', parts: [{ text: 'x' }] }], generationConfig: { stopSequences: [''] } }).params.stop, []);
+  const body = irToAnthropicBody(chatToIR({ model: 'm', messages: msgs, stop: '' }), 'claude-x');
+  assert.equal(body.stop_sequences, undefined);
+});
+
+test('a tool parameter named "properties" is a parameter, not a schema', () => {
+  const out = sanitizeJsonSchema({ type: 'object', properties: { parent: { type: 'string' }, properties: { type: 'string' } } });
+  assert.deepEqual(Object.keys(out.properties), ['parent', 'properties']);
+});
+
+test('Vertex usage: thoughts count as output, and the Vertex reply splits them back out', () => {
+  const u = smartUsage({ promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 90 });
+  assert.equal(u.completion, 100);
+  assert.equal(u.reasoning, 90);
+  const msg = buildVertexMessage({ model: 'm', think: [], text: ['ok'], tools: [], finish: 'stop', prompt: 5, completion: 100, reasoning: 90, cached: 0 });
+  assert.deepEqual(msg.usageMetadata, { promptTokenCount: 5, candidatesTokenCount: 10, thoughtsTokenCount: 90, totalTokenCount: 105 });
+});
+
+test('reasoning model families get no <think> guide', () => {
+  const ir = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }], reasoning_effort: 'high' });
+  for (const model of ['o3-mini', 'openai/o1', 'o4-mini-high', 'deepseek-r1', 'deepseek-reasoner', 'qwq-32b']) {
+    const sys = irToChatBody(ir, model).messages.find(m => m.role === 'system')?.content || '';
+    assert.ok(!sys.includes('<think>'), `${model} must not get the guide`);
+  }
+  const plain = irToChatBody(ir, 'gpt-4o').messages.find(m => m.role === 'system')?.content || '';
+  assert.ok(plain.includes('<think>'), 'a model without native reasoning keeps the guide');
+});
+
+test('toGeminiSchema: no empty or misplaced required, const null counts as nullable, non-string enums survive as text', () => {
+  const noMatch = toGeminiSchema({ type: 'object', properties: { a: { type: 'string' } }, required: ['x'] });
+  assert.equal(Object.hasOwn(noMatch, 'required'), false);
+  assert.equal(Object.hasOwn(toGeminiSchema({ type: 'string', required: ['x'] }), 'required'), false);
+  assert.deepEqual(toGeminiSchema({ anyOf: [{ type: 'string' }, { const: null }] }), { type: 'string', nullable: true });
+  const num = toGeminiSchema({ type: 'integer', enum: [1, 2, 3], description: 'Level.' });
+  assert.equal(num.enum, undefined);
+  assert.equal(num.description, 'Level. Allowed values: 1, 2, 3.');
+});
+
+test('normalizeUpstream usage always carries reasoning', () => {
+  assert.equal(normalizeUpstream({ choices: [{ delta: { content: 'x' } }] }, 'openai-chat').usage.reasoning, 0);
+  assert.equal(normalizeUpstream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x' } }, 'anthropic').usage.reasoning, 0);
+});
+
+test('healToolPairs pairs a tool result with no id to the call with no id', () => {
+  const out = healToolPairs([
+    { role: 'user', content: 'x' },
+    { role: 'assistant', toolCalls: [{ id: null, name: 'f', args: '{}' }] },
+    { role: 'tool', toolCallId: null, content: 'real result' }
+  ]);
+  const call = out[1].toolCalls[0];
+  assert.ok(call.id);
+  assert.equal(out.length, 3);
+  assert.deepEqual({ role: out[2].role, toolCallId: out[2].toolCallId, content: out[2].content }, { role: 'tool', toolCallId: call.id, content: 'real result' });
+});
+
+test('healAnthropicPayload keeps an unchanged user turn as the same object', () => {
+  const user = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] };
+  const payload = { messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'f', input: {} }] }, user] };
+  const healed = healAnthropicPayload(payload);
+  assert.equal(healed.changed, false);
+  assert.equal(healed.payload.messages[2], user);
 });
