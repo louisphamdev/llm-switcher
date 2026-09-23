@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -601,4 +602,36 @@ test('Gemini thought signature survives a Claude Code round-trip through the gat
   assert.equal(body.contents[1].parts[0].thoughtSignature, 'SIG_HANOI');
   assert.equal(body.contents[2].role, 'user');
   assert.deepEqual(body.contents[2].parts.map(p => p.functionResponse.name), ['get_weather', 'get_weather']);
+});
+
+// A hand edit with a syntax error must not be overwritten by the gateway's cached copy.
+test('Admin API refuses to write while config.json does not parse, and keeps the hand edit after repair', async () => {
+  const cfgPath = path.join(tmpDir, 'config.json');
+  const good = fs.readFileSync(cfgPath, 'utf8');
+  const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+  try {
+    await new Promise(r => setTimeout(r, 20));
+    fs.writeFileSync(cfgPath, '{ invalid');
+    const broken = fs.readFileSync(cfgPath, 'utf8');
+    for (const [p, body] of [['/api/switch', { profile: 'chat' }], ['/api/save-profile', { key: 'chat', profile: { name: 'x' } }]]) {
+      const r = await post(p, body);
+      assert.ok(r.status >= 400, `${p} must refuse, got ${r.status}`);
+      assert.match((await r.json()).error, /config\.json/);
+    }
+    assert.equal(sha(fs.readFileSync(cfgPath, 'utf8')), sha(broken), 'the broken file is not overwritten');
+    const status = await fetch(url('/api/status'), { headers: withToken('/api/status', {}) });
+    assert.ok(status.status >= 400);
+    assert.match((await status.json()).error, /config\.json/);
+
+    const edited = JSON.parse(good);
+    edited.profiles.chat.name = 'Hand edited';
+    await new Promise(r => setTimeout(r, 20));
+    fs.writeFileSync(cfgPath, JSON.stringify(edited, null, 2));
+    const r = await post('/api/switch', { target: 'anthropic', profile: 'chat' });
+    assert.equal(r.status, 200);
+    assert.equal(JSON.parse(fs.readFileSync(cfgPath, 'utf8')).profiles.chat.name, 'Hand edited', 'the repaired hand edit survives the next mutation');
+  } finally {
+    await new Promise(r => setTimeout(r, 20));
+    fs.writeFileSync(cfgPath, good);
+  }
 });

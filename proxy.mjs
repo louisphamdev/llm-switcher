@@ -854,10 +854,17 @@ async function handleCountTokens(req, res, buf) {
 // ----------------------------------------------------
 // Admin API helpers
 // ----------------------------------------------------
+// loadConfig keeps serving the last good copy when config.json stops parsing. The admin API must
+// not act on that copy: a save would replace the user's hand edit with stale data.
 function requireConfig(res) {
   const cfg = loadConfig();
+  const loadError = getConfigLoadError();
+  if (cfg && loadError && fs.existsSync(configPath)) {
+    sendJson(res, 409, { error: `config.json (${configPath}) does not parse: ${loadError.message}. Fix the file; the gateway does not overwrite it until it parses.` });
+    return null;
+  }
   if (!cfg) {
-    sendJson(res, 500, { error: `Config not loaded (${configPath}): ${getConfigLoadError()?.message || 'missing file'}. Copy config.example.json to config.json.` });
+    sendJson(res, 500, { error: `Config not loaded (${configPath}): ${loadError?.message || 'missing file'}. Copy config.example.json to config.json.` });
   }
   return cfg;
 }
