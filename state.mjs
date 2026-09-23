@@ -720,8 +720,22 @@ export function blindfoldPreflight(desired) {
     if (!fs.existsSync(f)) return `Blindfold mode is on, but ${path.basename(f)} is missing in ${certDir}. Build the certificates first: ${build}`;
   }
   // A leaf for another host fails the TLS handshake with an error that reads like a network fault.
-  if (!certCoversHost(fs.readFileSync(path.join(certDir, 'leaf.pem'), 'utf8'), desired.host)) {
+  const leafPem = fs.readFileSync(path.join(certDir, 'leaf.pem'), 'utf8');
+  if (!certCoversHost(leafPem, desired.host)) {
     return `The leaf certificate does not cover "${desired.host}". Rebuild it for that host: ${build}`;
+  }
+  // Files from two different builds fail the same way.
+  try {
+    const leaf = new crypto.X509Certificate(leafPem);
+    const ca = new crypto.X509Certificate(fs.readFileSync(desired.ca));
+    if (!leaf.checkIssued(ca) || !leaf.verify(ca.publicKey)) {
+      return `The leaf certificate was not signed by ${desired.ca}. Rebuild both: ${build}`;
+    }
+    if (!leaf.checkPrivateKey(crypto.createPrivateKey(fs.readFileSync(path.join(certDir, 'leaf.key'))))) {
+      return `leaf.key does not match leaf.pem in ${certDir}. Rebuild both: ${build}`;
+    }
+  } catch (err) {
+    return `Cannot read the certificates in ${certDir}: ${err.message}. Rebuild them: ${build}`;
   }
   return null;
 }

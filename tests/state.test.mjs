@@ -5,7 +5,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deleteProfile,
   computeLaunchState, findProfileKey, isValidProfileKey, resolvePort, redactConfig, MASKED_KEY,
   modelSlotsForProfile, modelForSlot, primaryModel, codexPublicModel, buildCodexCatalog,
-  certCoversHost, ROOT_DIR
+  certCoversHost, blindfoldPreflight, ROOT_DIR
 } from '../state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -469,4 +469,45 @@ test('the dashboard launcher keeps the admin token off the command line', { skip
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A leaf from another build does not chain to ca.pem, and a key from another build does not
+// match the leaf: Codex then fails with a TLS error that reads like a network fault (audit F17).
+test('blindfoldPreflight refuses a leaf that does not chain to ca.pem or does not match leaf.key', (t) => {
+  if (process.platform === 'win32' || !fs.existsSync('/usr/bin/openssl')) return t.skip('needs bash and openssl');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-chain-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const [a, b] = ['a', 'b'].map(n => path.join(dir, n));
+  for (const d of [a, b]) execFileSync('bash', [path.join(ROOT_DIR, 'blindfold', 'make-certs.sh'), 'chatgpt.com', d], { stdio: 'ignore' });
+  const desired = { ca: path.join(a, 'ca.pem'), host: 'chatgpt.com' };
+  assert.equal(blindfoldPreflight(desired), null);
+
+  const keep = (f) => fs.readFileSync(path.join(a, f));
+  const leafPem = keep('leaf.pem');
+  fs.copyFileSync(path.join(b, 'leaf.pem'), path.join(a, 'leaf.pem'));
+  assert.match(blindfoldPreflight(desired) || '', /not signed by/);
+  fs.writeFileSync(path.join(a, 'leaf.pem'), leafPem);
+
+  fs.copyFileSync(path.join(b, 'leaf.key'), path.join(a, 'leaf.key'));
+  assert.match(blindfoldPreflight(desired) || '', /does not match/);
+});
+
+// ca.key signs for every host that Codex trusts it for. The name constraint limits a leaked key
+// to the intercepted host (audit attacker missed-4).
+test('make-certs.sh builds a CA that can sign only for its host', (t) => {
+  if (process.platform === 'win32' || !fs.existsSync('/usr/bin/openssl')) return t.skip('needs bash and openssl');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-nc-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const certs = path.join(dir, 'certs');
+  execFileSync('bash', [path.join(ROOT_DIR, 'blindfold', 'make-certs.sh'), 'chatgpt.com', certs], { stdio: 'ignore' });
+  const ossl = (...args) => execFileSync('openssl', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(ossl('verify', '-CAfile', path.join(certs, 'ca.pem'), path.join(certs, 'leaf.pem')), /OK/);
+
+  // A leaf for another host, signed with the same CA key, must fail verification.
+  ossl('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'evil.key');
+  ossl('req', '-new', '-key', 'evil.key', '-subj', '/CN=evil.test', '-out', 'evil.csr');
+  fs.writeFileSync(path.join(dir, 'evil.ext'), 'subjectAltName = DNS:evil.test\n');
+  ossl('x509', '-req', '-in', 'evil.csr', '-CA', path.join(certs, 'ca.pem'), '-CAkey', path.join(certs, 'ca.key'),
+    '-CAcreateserial', '-days', '1', '-extfile', 'evil.ext', '-out', 'evil.pem');
+  assert.throws(() => ossl('verify', '-CAfile', path.join(certs, 'ca.pem'), 'evil.pem'), /permitted subtree violation/);
 });

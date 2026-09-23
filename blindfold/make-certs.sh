@@ -50,6 +50,8 @@ CN = LLM Switcher Local CA
 basicConstraints = critical,CA:TRUE,pathlen:0
 keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
+# Codex trusts this CA for every host. The constraint limits a leaked ca.key to HOST and its subdomains.
+nameConstraints = critical,permitted;DNS:$HOST
 EOF
 
 cat > "$WORK/leaf.cnf" <<EOF

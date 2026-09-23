@@ -99,6 +99,7 @@ The gateway owns the interceptor. It brings the interceptor in line with `config
 `switch` refuses the activation and writes no file in these cases:
 
 - The CA, the leaf certificate or the leaf key is missing, or the leaf does not cover the host.
+- The leaf was not signed by the CA, or the leaf key does not match the leaf. This occurs when the files come from two different builds.
 - Another process holds the interceptor port or the gateway port.
 
 That refusal is deliberate: blindfold mode replaces the base URL override with `HTTPS_PROXY`, so a half-applied state would point Codex at a port where nothing listens, and Codex would then reach no host at all. If the interceptor fails to start after these checks pass, `switch` restores the previous `config.json` and launcher files and exits with an error.
@@ -195,7 +196,7 @@ The switcher writes `LLM_SWITCHER_CODEX_BASE_URL` again, the gateway stops the i
 
 Read this section before you turn blindfold mode on.
 
-**The CA is trusted for every host, not only the intercepted one.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. The certificate carries no name constraints. Anybody who can read `blindfold/certs/ca.key` can therefore forge a certificate for any host that Codex contacts, not only for `chatgpt.com`. Keep that directory private, and build new certificates if the key leaks.
+**The CA is trusted for every host that Codex contacts.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. A CA that `make-certs.sh` builds now carries a name constraint: it can sign only for the target host and its subdomains. A client that obeys name constraints refuses any other certificate from this CA. OpenSSL, rustls and the macOS and Windows verifiers obey them. A CA that an older version built has no constraint. Anybody who can read its `ca.key` can forge a certificate for any host. Run `make-certs.sh` again to replace it, and keep `blindfold/certs/` private in both cases.
 
 **All traffic to the intercepted host is decrypted by this process.** That includes sign-in and token refresh, because the CONNECT for the whole host is terminated locally. Requests outside the Codex API path are re-originated to the real host over a new TLS session; they are forwarded, not tunneled. The `--verbose` flag prints the method and path of every such request.
 
