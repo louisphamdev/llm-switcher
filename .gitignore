@@ -29,3 +29,7 @@ docs/diagrams/*.visual-check.*
 admin.token
 blindfold.json
 ui-open.html
+# launch-file lock, rotated logs, and the tmp files of atomic writes
+.launch.lock
+*.log.1
+*.tmp
