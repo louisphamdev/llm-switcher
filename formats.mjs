@@ -68,7 +68,9 @@ function canonFinish(raw) {
   return 'stop';
 }
 
+// `length` wins over tool calls: a cut-off tool call must reach the client as truncated, not as done.
 function chatFinish(canonical, hasTools) {
+  if (canonical === 'length') return 'length';
   if (hasTools) return 'tool_calls';
   switch (canonical) {
     case 'length': return 'length';
@@ -1777,6 +1779,7 @@ function rand(n = 6) {
 }
 
 function anthropicStopReason(canonical, hasTools) {
+  if (canonical === 'length') return 'max_tokens';
   if (hasTools) return 'tool_use';
   switch (canonical) {
     case 'length': return 'max_tokens';
@@ -2148,8 +2151,16 @@ function createResponsesStream(emit, model, opts = {}) {
     finish(canonical, stats = {}) {
       closeReasoning();
       closeMessage();
-      closeTools();
       const incomplete = canonical === 'length';
+      // Codex runs a tool on output_item.done. After a length stop, drop a function call whose
+      // arguments do not parse instead of running it with truncated JSON.
+      if (incomplete) {
+        for (const t of tools.values()) {
+          if (t.done || responsesToolItem(toolMeta, { name: t.name, args: t.args }).type !== 'function_call') continue;
+          try { JSON.parse(t.args); } catch { t.done = true; }
+        }
+      }
+      closeTools();
       send({
         type: 'response.completed',
         response: snapshot(incomplete ? 'incomplete' : 'completed', {
@@ -2175,13 +2186,18 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
       content: [{ type: 'output_text', text: body, annotations: [] }]
     });
   }
+  const incomplete = finish === 'length';
   for (const tc of (tools || [])) {
-    output.push(responsesToolItem(toolMeta, {
+    const item = responsesToolItem(toolMeta, {
       callId: tc.id || `call_${rand(24)}`, name: tc.name,
       args: typeof tc.args === 'string' ? tc.args : stringifyArgs(tc.args)
-    }));
+    });
+    // Same rule as the stream: a length stop never hands Codex a call with truncated arguments.
+    if (incomplete && item.type === 'function_call') {
+      try { JSON.parse(item.arguments); } catch { continue; }
+    }
+    output.push(item);
   }
-  const incomplete = finish === 'length';
   const r = reasoning ?? stats?.reasoning;
   return {
     id: id || `resp_${Date.now()}${rand(8)}`, object: 'response', created_at: Math.floor(Date.now() / 1000), model,

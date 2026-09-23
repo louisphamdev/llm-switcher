@@ -9,7 +9,7 @@ import {
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
   isAntigravityModel, smartUsage,
-  createChatStream, buildChatMessage
+  createChatStream, buildChatMessage, chatFinish, anthropicStopReason
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -635,4 +635,35 @@ test('reasoning tokens survive the full parse -> collect -> emit path', () => {
   });
   assert.equal(built.usage.output_tokens_details.reasoning_tokens, 95,
     'the Responses emitter must report what the upstream billed');
+});
+
+// A max_tokens stop can cut a tool call's arguments. Reporting it as a finished tool call makes
+// the client run the tool with truncated JSON (9router backends do stop with `length`).
+test('a length stop is never reported as a finished tool call', () => {
+  assert.equal(chatFinish('length', true), 'length');
+  assert.equal(chatFinish('stop', true), 'tool_calls');
+  assert.equal(anthropicStopReason('length', true), 'max_tokens');
+  assert.equal(anthropicStopReason('stop', true), 'tool_use');
+
+  const events = [];
+  const r = createResponsesStream((event, data) => events.push({ event, data }), 'm');
+  r.start();
+  r.tool({ index: 0, id: 'call_cut', name: 'write_file', args: '{"file_path":"/x","content":"par' });
+  r.finish('length', { prompt: 10, completion: 3, hasTools: true });
+  const done = events.filter(e => e.event === 'response.output_item.done').map(e => e.data.item);
+  assert.ok(!done.some(i => i.type === 'function_call'), 'a function_call with unparseable arguments is not emitted as done');
+  const completed = events.at(-1).data.response;
+  assert.equal(completed.status, 'incomplete');
+  assert.ok(!completed.output.some(i => i?.type === 'function_call'), 'nor listed in the final output');
+
+  const ok = [];
+  const r2 = createResponsesStream((event, data) => ok.push({ event, data }), 'm');
+  r2.start();
+  r2.tool({ index: 0, id: 'call_ok', name: 'shell', args: '{"cmd":"ls"}' });
+  r2.finish('length', { hasTools: true });
+  assert.ok(ok.some(e => e.event === 'response.output_item.done' && e.data.item.type === 'function_call'), 'complete arguments still run');
+
+  const msg = buildResponsesMessage({ model: 'm', text: [], tools: [{ id: 'c1', name: 'write_file', args: '{"a":"tru' }], finish: 'length' });
+  assert.equal(msg.status, 'incomplete');
+  assert.ok(!msg.output.some(i => i.type === 'function_call'), 'the non-stream builder applies the same rule');
 });
