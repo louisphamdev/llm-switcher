@@ -472,10 +472,12 @@ const proxy = http.createServer((req, res) => {
 // destination. It binds to loopback, but every local process can still use it. Refuse
 // a destination that is itself local: without that test it is a way to reach services
 // that only listen on the machine, and the cloud metadata address.
-// Addresses this proxy never tunnels to: loopback, unspecified, private, link-local (the cloud
-// metadata service) and unique-local IPv6. BlockList also matches IPv4-mapped IPv6 forms.
+// Addresses this proxy never tunnels to: loopback, unspecified, private, link-local and shared address
+// space (cloud metadata services live in both), benchmark and IETF blocks, and unique-local IPv6.
+// BlockList also matches IPv4-mapped IPv6 forms.
 const LOCAL_RANGES = new net.BlockList();
-for (const [prefix, bits] of [['0.0.0.0', 8], ['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['169.254.0.0', 16]]) {
+for (const [prefix, bits] of [['0.0.0.0', 8], ['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16],
+  ['169.254.0.0', 16], ['100.64.0.0', 10], ['198.18.0.0', 15], ['192.0.0.0', 24]]) {
   LOCAL_RANGES.addSubnet(prefix, bits, 'ipv4');
 }
 for (const [prefix, bits] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10]]) {
@@ -490,7 +492,30 @@ export function isInterceptedHost(host) {
 // localtest.me all resolve to loopback. Something that is not an address counts as local.
 export function isLocalAddress(address) {
   const family = net.isIP(address);
-  return family === 0 || LOCAL_RANGES.check(address, family === 6 ? 'ipv6' : 'ipv4');
+  if (family === 0) return true;
+  if (LOCAL_RANGES.check(address, family === 6 ? 'ipv6' : 'ipv4')) return true;
+  // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 address; decide on that one. Both also carry
+  // public addresses, so the whole prefix cannot be refused.
+  if (family === 6) {
+    const b = ipv6Bytes(address);
+    const nat64 = b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b.slice(4, 12).every(x => x === 0);
+    const inner = nat64 ? b.slice(12) : b[0] === 0x20 && b[1] === 0x02 ? b.slice(2, 6) : null;
+    if (inner) return isLocalAddress(inner.join('.'));
+  }
+  return false;
+}
+
+function ipv6Bytes(address) {
+  let text = address.toLowerCase();
+  const dotted = /(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (dotted) text = `${text.slice(0, -dotted[1].length)}0:0`;
+  const [head, rest] = text.split('::');
+  const h = head ? head.split(':') : [];
+  const r = rest === undefined ? null : rest ? rest.split(':') : [];
+  const groups = r === null ? h : [...h, ...Array(8 - h.length - r.length).fill('0'), ...r];
+  const bytes = groups.flatMap(g => { const n = parseInt(g || '0', 16); return [n >> 8, n & 0xff]; });
+  if (dotted) bytes.splice(12, 4, ...dotted[1].split('.').map(Number));
+  return bytes;
 }
 
 // Resolve once and connect to the address that was checked: a second lookup could answer with

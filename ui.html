@@ -1157,12 +1157,15 @@
 
   <script>
     // /api/* needs the per-install admin token. `switch ui` passes it in the URL fragment, which
-    // the browser never sends to the server; keep it here and clear the address bar.
+    // the browser never sends to the server; keep it here and clear the address bar. sessionStorage, not
+    // localStorage: while the gateway is off, another account can serve a page on this origin, and that
+    // page must not find the token.
     const ADMIN_TOKEN_KEY = 'llmSwitcherAdminToken';
     (() => {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
       const m = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
       if (m) {
-        localStorage.setItem(ADMIN_TOKEN_KEY, m[1]);
+        sessionStorage.setItem(ADMIN_TOKEN_KEY, m[1]);
         history.replaceState(null, '', location.pathname + location.search);
       }
     })();
@@ -1172,7 +1175,7 @@
     const CHANGE_PATHS = new Set(['/api/switch', '/api/toggle', '/api/save-profile', '/api/delete-profile']);
 
     async function api(path, opts = {}) {
-      const headers = { ...(opts.headers || {}), 'x-llm-switcher-token': localStorage.getItem(ADMIN_TOKEN_KEY) || '' };
+      const headers = { ...(opts.headers || {}), 'x-llm-switcher-token': sessionStorage.getItem(ADMIN_TOKEN_KEY) || '' };
       let body = opts.body;
       if (CHANGE_PATHS.has(path) && typeof body === 'string' && state.revision) {
         body = JSON.stringify({ ...JSON.parse(body), revision: state.revision });

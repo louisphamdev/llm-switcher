@@ -73,3 +73,12 @@ test('routeEvidence reads the right evidence for each CLI and says when it canno
   // macOS ps prints no environment for most processes: that is unknown, not a bypass.
   assert.equal(routeEvidence('claude', 'claude --resume'), null);
 });
+
+// A proxy URL often carries a user and a password. The audit output goes into the agent's context.
+test('MCP audit never prints the credentials inside a URL', async (t) => {
+  const [r] = await mcpCall(t, { vars: { HTTPS_PROXY: 'http://u:s3cret@127.0.0.1:1', ANTHROPIC_BASE_URL: 'https://user:pw-secret@evil.example/v1' } }, [tool('switcher_audit', { verbose: true })]);
+  const out = text(r);
+  assert.ok(!out.includes('s3cret') && !out.includes('pw-secret'), out);
+  assert.match(out, /HTTPS_PROXY=http:\/\/127\.0\.0\.1:1/);
+  assert.match(out, /\[ALERT\] ANTHROPIC_BASE_URL="https:\/\/evil\.example\/v1"/);
+});

@@ -47,8 +47,9 @@ const POSIX_TEMPLATE = (name) => `#!/usr/bin/env bash
 SWITCHER_DIR="${STATE_DIR}"
 SHIM_DIR="\${BASH_SOURCE%/*}"
 
-# Only load env when the gateway is on; when off, let the CLI run as-is.
-if [ -f "$SWITCHER_DIR/active.flag" ] && [ -f "$SWITCHER_DIR/env.sh" ]; then
+# Only load env when the gateway is on; when off, let the CLI run as-is. The shim runs what env.sh says,
+# so the directory and the file must belong to this account: another one could have created them.
+if [ -O "$SWITCHER_DIR" ] && [ -O "$SWITCHER_DIR/env.sh" ] && [ -f "$SWITCHER_DIR/active.flag" ]; then
   . "$SWITCHER_DIR/env.sh"
 fi
 
@@ -72,7 +73,7 @@ if [ -z "$REAL" ]; then
 fi
 
 ${name === 'codex' ? `# Codex-only variables (blindfold proxy + CA). The claude shim must not load these.
-if [ -f "$SWITCHER_DIR/active.flag" ] && [ -f "$SWITCHER_DIR/env-codex.sh" ]; then
+if [ -O "$SWITCHER_DIR" ] && [ -O "$SWITCHER_DIR/env-codex.sh" ] && [ -f "$SWITCHER_DIR/active.flag" ]; then
   . "$SWITCHER_DIR/env-codex.sh"
 fi
 
@@ -80,7 +81,7 @@ CODEX_SWITCHER_ARGS=()
 if [ -n "\${LLM_SWITCHER_CODEX_BASE_URL:-}" ]; then
   CODEX_SWITCHER_ARGS+=(--config "openai_base_url=\${LLM_SWITCHER_CODEX_BASE_URL}")
 fi
-if [ -f "${CODE_X_CATALOG_PATH}" ]; then
+if [ -O "${CODE_X_CATALOG_PATH}" ]; then
   CODEX_SWITCHER_ARGS+=(--config "model_catalog_json=${CODE_X_CATALOG_PATH}")
 fi
 if [ -n "\${LLM_SWITCHER_CODEX_MAIN_MODEL:-}" ]; then

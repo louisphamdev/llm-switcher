@@ -17,6 +17,19 @@ const VERSION = (() => {
   try { return JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version; } catch { return '0.0.0'; }
 })();
 
+// The audit text goes into the calling agent's context, and a proxy URL often carries a password.
+function withoutCredentials(value) {
+  try {
+    const u = new URL(value);
+    if (!u.username && !u.password) return value;
+    u.username = '';
+    u.password = '';
+    return u.toString().replace(/\/$/, value.endsWith('/') ? '/' : '');
+  } catch {
+    return value;
+  }
+}
+
 // A substring test would accept http://localhost.evil.test; the host itself must be loopback.
 function isLoopbackURL(value) {
   try {
@@ -168,9 +181,10 @@ async function handleToolCall(name, args) {
     // 3. The base URL variables this agent process runs with. Codex takes its URL as a --config
     // override from the shim, so it has no variable to check here.
     for (const name of ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL']) {
-      const value = process.env[name];
-      if (!value) continue;
-      if (isLoopbackURL(value)) {
+      const raw = process.env[name];
+      if (!raw) continue;
+      const value = withoutCredentials(raw);
+      if (isLoopbackURL(raw)) {
         findings.push(`[PASS] ${name} points to a local endpoint: ${value}`);
       } else {
         findings.push(`[ALERT] ${name}="${value}" points to an external endpoint! It should point to LLM Switcher (http://127.0.0.1:${port}) or your local optimizer proxy.`);
@@ -181,7 +195,7 @@ async function handleToolCall(name, args) {
       findings.push('');
       findings.push('--- Routing variables of this process ---');
       const names = Object.keys(process.env).filter(k => /^(ANTHROPIC_BASE_URL|OPENAI_BASE_URL|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|CODEX_CA_CERTIFICATE|LLM_SWITCHER_[A-Z0-9_]+)$/.test(k)).sort();
-      for (const k of names) findings.push(`${k}=${process.env[k]}`);
+      for (const k of names) findings.push(`${k}=${withoutCredentials(process.env[k])}`);
       if (!names.length) findings.push('(none set)');
     }
 

@@ -23,7 +23,9 @@ function workspace(t, port, profiles) {
     port, activeProfiles: { anthropic: null, responses: null, 'openai-chat': null, vertex: null },
     profiles: profiles || { plain: { name: 'Plain', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } } }
   }, null, 2), { mode: 0o600 });
-  const ws = { dir, cfgPath, env: { ...process.env, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: path.join(dir, 'claude'), LLM_SWITCHER_PORT: '', PORT: '' } };
+  // HOME too: `switch on` installs shims under the home directory, and a test must never rewrite the real ones.
+  const home = path.join(dir, 'home');
+  const ws = { dir, cfgPath, home, env: { ...process.env, HOME: home, USERPROFILE: home, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: path.join(dir, 'claude'), LLM_SWITCHER_PORT: '', PORT: '' } };
   t.after(async () => {
     await run(ws, ['off']).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
@@ -121,4 +123,14 @@ test('switch port puts config.json and the gateway back when the new gateway doe
   assert.match(r.stderr, new RegExp(`back on port ${port}`));
   assert.equal(readCfg(ws).port, port);
   assert.match((await run(ws, ['status'])).stdout, new RegExp(`RUNNING \\(port ${port}\\)`));
+});
+
+// A shim bakes in the state dir. A temp state dir, deleted later, would make every shim source a path that
+// another account can re-create (audit follow-up attacker-1).
+test('switch on installs no shims when the launch files live outside the checkout', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = workspace(t, await freePort());
+  const r = await run(ws, ['on', 'plain']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /\[Shim\] Not installed automatically/);
+  assert.equal(fs.existsSync(path.join(ws.home, '.llm-switcher', 'bin', 'claude')), false);
 });

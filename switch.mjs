@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import {
-  ROOT_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
+  ROOT_DIR, STATE_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, openLog,
@@ -399,7 +399,11 @@ async function turnOn(profileName, cliTarget) {
 
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
-  try {
+  // A shim bakes in the state dir; outside the checkout that is usually a temporary directory, and the shim
+  // would outlive it.
+  if (STATE_DIR !== ROOT_DIR) {
+    console.log('\n[Shim] Not installed automatically: LLM_SWITCHER_STATE_DIR is set. Run `switch shim install` to install shims for that directory.');
+  } else try {
     const { installed, error } = installShims();
     if (error) console.warn(`[Shim] ${error}`);
     const sh = shimStatus();

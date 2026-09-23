@@ -48,7 +48,8 @@ function makeWorkspace({ certs = false } = {}) {
 }
 
 function envFor(ws) {
-  return { ...process.env, LLM_SWITCHER_CONFIG: ws.cfgPath, LLM_SWITCHER_STATE_DIR: ws.dir, LLM_SWITCHER_BLINDFOLD_CERTS: ws.certDir, CLAUDE_CONFIG_DIR: ws.claudeDir, LLM_SWITCHER_PORT: '', PORT: '' };
+  // HOME: `switch on` installs shims under the home directory; a test must never rewrite the real ones.
+  return { ...process.env, HOME: path.join(ws.dir, 'home'), USERPROFILE: path.join(ws.dir, 'home'), LLM_SWITCHER_CONFIG: ws.cfgPath, LLM_SWITCHER_STATE_DIR: ws.dir, LLM_SWITCHER_BLINDFOLD_CERTS: ws.certDir, CLAUDE_CONFIG_DIR: ws.claudeDir, LLM_SWITCHER_PORT: '', PORT: '' };
 }
 
 function writeConfig(ws, gwPort, bfPort, activeResponses = null) {

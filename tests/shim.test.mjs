@@ -215,3 +215,14 @@ test('the Windows shim tests the catalog with a native path', () => {
   assert.match(body, /if exist "%SWITCHER_DIR%\\model-catalog\.json"/);
   assert.match(body, /--config model_catalog_json=[^\r\n]*\/model-catalog\.json/);
 });
+
+// The shim runs whatever env.sh says. It must not source a file, or a directory, that another account owns.
+test('the POSIX shims source launch files only when this account owns them', () => {
+  for (const name of SHIMMED) {
+    const body = renderShim(name, 'linux');
+    for (const line of body.split('\n').filter(l => /^\s*\. "\$SWITCHER_DIR\//.test(l))) {
+      const file = line.trim().slice(3, -1);
+      assert.match(body, new RegExp(`\\[ -O "\\$SWITCHER_DIR" \\] && \\[ -O "${file.replace(/[$/.]/g, (c) => `\\${c}`)}" \\]`), `${name}: ${file}`);
+    }
+  }
+});

@@ -69,8 +69,13 @@ test('a local or private address is refused', () => {
   ]) {
     assert.equal(isLocalAddress(local), true, `must refuse ${local || '(empty)'}`);
   }
-  // A public address that only looks similar stays allowed.
-  for (const publicHost of ['172.32.0.1', '11.0.0.1', '193.168.1.10', '8.8.8.8', '2606:4700::1111']) {
+  // Shared address space (cloud metadata at 100.100.100.200, CGNAT, Tailscale), benchmark and IETF blocks,
+  // and IPv4 that NAT64 or 6to4 carries inside an IPv6 address.
+  for (const local of ['100.100.100.200', '100.64.0.1', '198.18.0.1', '192.0.0.8', '64:ff9b::a9fe:a9fe', '64:ff9b::10.0.0.5', '2002:7f00:1::1', '2002:c0a8:0101::']) {
+    assert.equal(isLocalAddress(local), true, `must refuse ${local}`);
+  }
+  // A public address that only looks similar stays allowed, also inside NAT64 and 6to4.
+  for (const publicHost of ['172.32.0.1', '11.0.0.1', '193.168.1.10', '8.8.8.8', '2606:4700::1111', '64:ff9b::808:808', '2002:0808:0808::1', '100.128.0.1']) {
     assert.equal(isLocalAddress(publicHost), false, `must not refuse ${publicHost}`);
   }
 });
