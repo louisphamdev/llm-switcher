@@ -13,6 +13,19 @@
 import fs from 'node:fs';
 import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken } from './state.mjs';
 
+const VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version; } catch { return '0.0.0'; }
+})();
+
+// A substring test would accept http://localhost.evil.test; the host itself must be loopback.
+function isLoopbackURL(value) {
+  try {
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
 // /api/* requires the per-install token that the gateway writes next to config.json.
 const adminHeaders = (extra = {}) => ({ 'x-llm-switcher-token': readAdminToken() || '', ...extra });
 
@@ -32,12 +45,13 @@ async function fetchStatus(port) {
   return null;
 }
 
+/** The logs, or null when the gateway does not answer. */
 async function fetchLogs(port) {
   try {
     const r = await fetch(`http://127.0.0.1:${port}/api/logs`, { headers: adminHeaders(), signal: AbortSignal.timeout(1500) });
     if (r.ok) return (await r.json()).logs || [];
   } catch {}
-  return [];
+  return null;
 }
 
 async function postSwitch(port, target, profile) {
@@ -111,7 +125,7 @@ async function handleToolCall(name, args) {
       '=== LLM Switcher Gateway Status ===',
       `Service Running: ${live ? `YES (http://127.0.0.1:${port})` : 'NO / UNREACHABLE'}`,
       `Active Profiles by CLI:`,
-      `  - Claude Code (/v1/messages)       : [${activeMap.anthropic || 'OFF'}] ${live?.is1MActive ? '• 1M Context ACTIVE' : ''}`,
+      `  - Claude Code (/v1/messages)       : [${activeMap.anthropic || 'OFF'}] ${live?.claude1MTiers?.length ? `• 1M Context ACTIVE (${live.claude1MTiers.join(', ')})` : ''}`,
       `  - Codex CLI   (/v1/responses)      : [${activeMap.responses || 'OFF'}] ${live?.isCodex1MActive ? '• 1M Context ACTIVE' : ''}`,
       `  - OpenAI Chat (/v1/chat/completions): [${activeMap['openai-chat'] || 'OFF'}]`,
       `  - Vertex      (/v1beta/models/*)   : [${activeMap.vertex || 'OFF'}]`,
@@ -145,21 +159,30 @@ async function handleToolCall(name, args) {
         } else {
           findings.push(`[PASS] ~/.claude/settings.json is clean (zero-mutation compliant).`);
         }
-      } catch {}
+      } catch (err) {
+        findings.push(`[WARNING] ${claudeSettingsPath} does not parse: ${err.message}. Claude Code may ignore it.`);
+        isClean = false;
+      }
     }
 
-    // 3. Check environment variables
-    const anthBase = process.env.ANTHROPIC_BASE_URL;
-    const oaiBase = process.env.OPENAI_BASE_URL;
-    const cdxBase = process.env.CODEX_BASE_URL;
-
-    if (anthBase) {
-      if (!anthBase.includes('127.0.0.1') && !anthBase.includes('localhost')) {
-        findings.push(`[ALERT] ANTHROPIC_BASE_URL="${anthBase}" points to an external endpoint! It should point to LLM Switcher (http://127.0.0.1:${port}) or your local optimizer proxy.`);
-        isClean = false;
+    // 3. The base URL variables this agent process runs with. Codex takes its URL as a --config
+    // override from the shim, so it has no variable to check here.
+    for (const name of ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL']) {
+      const value = process.env[name];
+      if (!value) continue;
+      if (isLoopbackURL(value)) {
+        findings.push(`[PASS] ${name} points to a local endpoint: ${value}`);
       } else {
-        findings.push(`[PASS] ANTHROPIC_BASE_URL points to a local endpoint: ${anthBase}`);
+        findings.push(`[ALERT] ${name}="${value}" points to an external endpoint! It should point to LLM Switcher (http://127.0.0.1:${port}) or your local optimizer proxy.`);
+        isClean = false;
       }
+    }
+    if (args?.verbose) {
+      findings.push('');
+      findings.push('--- Routing variables of this process ---');
+      const names = Object.keys(process.env).filter(k => /^(ANTHROPIC_BASE_URL|OPENAI_BASE_URL|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|CODEX_CA_CERTIFICATE|LLM_SWITCHER_[A-Z0-9_]+)$/.test(k)).sort();
+      for (const k of names) findings.push(`${k}=${process.env[k]}`);
+      if (!names.length) findings.push('(none set)');
     }
 
     // 4. Layering guidance for compression tools
@@ -192,6 +215,9 @@ async function handleToolCall(name, args) {
   if (name === 'switcher_recent_logs') {
     const limit = Math.min(20, Math.max(1, Number(args?.limit) || 5));
     const logs = await fetchLogs(port);
+    if (!logs) {
+      return { content: [{ type: 'text', text: `The LLM Switcher gateway is unreachable on port ${port}, so no logs can be read. Run 'switch on' to start it.` }], isError: true };
+    }
     const slice = logs.slice(0, limit);
 
     if (!slice.length) {
@@ -250,7 +276,7 @@ process.stdin.on('data', async (chunk) => {
         result: {
           protocolVersion: SUPPORTED_PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOLS[0],
           capabilities: { tools: {} },
-          serverInfo: { name: 'llm-switcher', version: '1.0.0' }
+          serverInfo: { name: 'llm-switcher', version: VERSION }
         }
       });
       continue;

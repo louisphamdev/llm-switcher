@@ -238,6 +238,21 @@ export function suggestedRcFiles(platform = process.platform) {
  * was enabled (or from a shell that hasn't sourced env.sh) will call api.anthropic.com
  * directly. The shim intercepts NEW sessions, but live processes must be detected and reported so they can be restarted.
  */
+// What in a process's command line and environment shows that it goes through the gateway.
+// Codex takes the gateway URL as a --config override, or the interceptor as HTTPS_PROXY.
+const ROUTE_EVIDENCE = {
+  claude: /(^|\s)ANTHROPIC_BASE_URL=/,
+  codex: /(^|\s)(LLM_SWITCHER_CODEX_BASE_URL=|https?_proxy=http:\/\/(127\.0\.0\.1|localhost)[:/]|openai_base_url=http:\/\/(127\.0\.0\.1|localhost)[:/])/i
+};
+
+/** true | false, or null when the dump holds no environment (macOS ps for most processes). */
+export function routeEvidence(name, envDump) {
+  if (!/\s[A-Za-z_][A-Za-z0-9_]*=/.test(envDump)) return null;
+  return ROUTE_EVIDENCE[name].test(envDump);
+}
+
+// `names` are the CLIs whose target is active: a CLI whose target is off uses the official endpoint
+// on purpose, so a missing gateway variable there is not a bypass.
 export function auditRunningProcesses(names = SHIMMED) {
   if (process.platform === 'win32') return { supported: false, procs: [] };
   const procs = [];
@@ -257,13 +272,13 @@ export function auditRunningProcesses(names = SHIMMED) {
       if (!names.some(n => new RegExp(`(^|/|\\s)${n}(\\s|$)`).test(cmd))) continue;
       if (/pgrep|llm-switcher\/(switch|proxy)\.mjs/.test(cmd)) continue;
 
+      const name = names.find(n => new RegExp(`(^|/|\\s)${n}(\\s|$)`).test(cmd));
       let hasEnv = null;  // null = cannot read that process's env
       try {
-        // `ps eww` prints the environ; only works for the user's own processes.
-        const envDump = execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8' });
-        hasEnv = /ANTHROPIC_BASE_URL=/.test(envDump);
+        // `ps eww` appends the environment, but only for processes this account may read.
+        hasEnv = routeEvidence(name, execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8' }));
       } catch {}
-      procs.push({ pid, cmd: cmd.slice(0, 90), hasEnv });
+      procs.push({ pid, name, cmd: cmd.slice(0, 90), hasEnv });
     }
   } catch {
     // pgrep returns a non-zero exit code when there are no processes — not an error.

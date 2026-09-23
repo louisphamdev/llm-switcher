@@ -19,7 +19,7 @@ import {
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
   ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
-  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot
+  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot, computeLaunchState
 } from './state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1181,6 +1181,7 @@ async function routeApi(req, res, method, pathname) {
       activeProfile: cfg.activeProfile || null,
       activeProfiles,
       revision: configRevision(cfg),
+      claude1MTiers: computeLaunchState(cfg, PORT).claude1MTiers,
       ...readLaunchFlags(),
       claudeBaseURL: activeProfiles.anthropic ? `http://127.0.0.1:${PORT} (injected via launcher)` : '(none / official)',
       config: redactConfig(cfg)

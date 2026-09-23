@@ -472,6 +472,12 @@ function describeClaude1M(st) {
   return `ACTIVE (${st.claude1MTiers.map(t => `${t}[1m]`).join(', ')})${st.claude1M ? `, main session ${st.claude1M}` : ''}`;
 }
 
+// Only a CLI whose target is active is expected to go through the gateway.
+function auditActiveClis() {
+  const map = getActiveMap(config);
+  return auditRunningProcesses([map.anthropic && 'claude', map.responses && 'codex'].filter(Boolean));
+}
+
 // settings.json edits are never silent: name every value the switcher removed.
 function reportSettings(result) {
   if (result?.removed?.length) console.log(`[settings.json] Removed switcher-written values: ${result.removed.join(', ')}`);
@@ -711,13 +717,14 @@ async function manageShim(action = 'status') {
     else console.log(`[WARN] ${s.name}: shim installed but '${s.name}' resolves to ${s.effective || '(not found)'} — PATH order wrong`);
   }
 
-  const audit = auditRunningProcesses();
-  if (audit.supported && audit.procs.length) {
+  const audit = auditActiveClis();
+  if (!audit.supported) console.log('\n[INFO] The running-session check is not supported on Windows.');
+  else if (audit.procs.length) {
     console.log('\n--- Running CLI processes ---');
     for (const p of audit.procs) {
-      if (p.hasEnv === true) console.log(`[PASS] pid ${p.pid}: has ANTHROPIC_BASE_URL`);
-      else if (p.hasEnv === false) console.log(`[ALERT] pid ${p.pid}: NO gateway env — this session bypasses the gateway!\n        ${p.cmd}\n        Fix: quit it and re-run from a shell where the shim is on PATH.`);
-      else console.log(`[INFO] pid ${p.pid}: cannot read env (permission)`);
+      if (p.hasEnv === true) console.log(`[PASS] pid ${p.pid} (${p.name}): routed through the gateway`);
+      else if (p.hasEnv === false) console.log(`[ALERT] pid ${p.pid} (${p.name}): NO gateway route — this session bypasses the gateway!\n        ${show(p.cmd)}\n        Fix: quit it and re-run from a shell where the shim is on PATH.`);
+      else console.log(`[INFO] pid ${p.pid} (${p.name}): its environment cannot be read here`);
     }
   }
 }
@@ -800,12 +807,13 @@ async function runDoctor() {
   }
 
   // 7. Running processes missing env => those sessions call the provider directly
-  const audit = auditRunningProcesses();
-  if (audit.supported && audit.procs.length) {
+  const audit = auditActiveClis();
+  if (!audit.supported) console.log('[INFO] The running-session check is not supported on Windows.');
+  else {
     for (const p of audit.procs) {
       if (p.hasEnv === false) {
-        warn(`[ALERT] pid ${p.pid} has NO gateway env — that session bypasses the gateway.`);
-        console.log(`        ${p.cmd}`);
+        warn(`[ALERT] pid ${p.pid} (${p.name}) has NO gateway route — that session bypasses the gateway.`);
+        console.log(`        ${show(p.cmd)}`);
         console.log(`        Fix: quit it, then re-run from a shell where the shim is on PATH.`);
       }
     }
