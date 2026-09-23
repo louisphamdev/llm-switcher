@@ -430,6 +430,8 @@ switch shim install            # Route phiên Claude và Codex mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
 switch shim uninstall          # Gỡ shim khỏi launcher
 switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) và quay về gói Official
+switch contract-probe [--model m] # Chạy các biến thể contract-lab qua gateway
+switch contract-check          # Chuyển các findings hợp đồng còn mở thành test case
 ```
 
 
@@ -505,9 +507,22 @@ trong `PATH`.
       }
     }
   },
-  "debug": false
+  "debug": false,
+  "contractLab": {
+    "url": "https://intact.example.com",
+    "apiKey": "sk-...",
+    "enabled": false
+  }
 }
 ```
+
+### Contract lab
+
+Contract lab tìm các field mà converter làm mất. Mặc định tính năng này tắt.
+
+- Đặt `contractLab: {url, apiKey, enabled}` trong `config.json`. Nếu `enabled` là `true`, gateway gửi một phần các lượt trao đổi hoàn chỉnh lên intact.
+- `switch contract-probe [--model m]` gửi sáu request thử cho mỗi model và mỗi format qua gateway.
+- `switch contract-check` lấy các finding còn mở từ intact và ghi một file test cho mỗi field bị mất.
 
 ---
 

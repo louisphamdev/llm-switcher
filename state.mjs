@@ -167,6 +167,24 @@ export function saveConfig(cfg) {
   }
 }
 
+// ---------------- contract lab ----------------
+
+export const CONTRACT_LAB_OFF = { url: '', apiKey: '', enabled: false };
+
+// The top-level `contractLab` block, normalized. It stays off unless the block names an http(s)
+// intact URL and a key, so a half-filled block never starts sampling.
+export function contractLabSettings(cfg) {
+  const raw = cfg?.contractLab;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...CONTRACT_LAB_OFF };
+  const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+  let url = '';
+  try {
+    const parsed = new URL(typeof raw.url === 'string' ? raw.url.trim() : '');
+    if (['http:', 'https:'].includes(parsed.protocol)) url = String(raw.url).trim().replace(/\/+$/, '');
+  } catch {}
+  return { url, apiKey, enabled: raw.enabled === true && Boolean(url) && Boolean(apiKey) };
+}
+
 // ---------------- helpers ----------------
 
 export function hasProfile(cfg, key) {
@@ -707,6 +725,11 @@ export function redactConfig(cfg) {
       p.hasApiKey = Boolean(p.apiKey);
       p.apiKey = p.apiKey ? MASKED_KEY : '';
     }
+  }
+  const lab = clone.contractLab;
+  if (lab && typeof lab === 'object' && !Array.isArray(lab)) {
+    lab.hasApiKey = Boolean(lab.apiKey);
+    lab.apiKey = lab.apiKey ? MASKED_KEY : '';
   }
   return clone;
 }

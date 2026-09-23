@@ -19,8 +19,10 @@ import {
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
   ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
-  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot, computeLaunchState
+  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot, computeLaunchState,
+  contractLabSettings
 } from './state.mjs';
+import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
@@ -106,6 +108,15 @@ function checkRequestOrigin(req) {
 // The Host/Origin guard stops browser pages only. A local process that is not the owner must
 // also present the token from admin.token (mode 0600) to use /api/*.
 const ADMIN_TOKEN = Buffer.from(ensureAdminToken());
+
+// `switch contract-probe` names the trace id of the exchange it drives, so it can print the id
+// before intact holds it. Only a process that can read admin.token is believed, and the marker
+// header is on BLOCKED_PASSTHROUGH: it never leaves this gateway.
+function probeTraceId(req) {
+  const given = String(req.headers[PROBE_HEADER] || '');
+  if (!given || !TRACE_ID_RE.test(given)) return null;
+  return isAdminRequest(req) ? given : null;
+}
 
 function isAdminRequest(req) {
   const given = Buffer.from(String(req.headers['x-llm-switcher-token'] || ''));
@@ -366,9 +377,12 @@ function resolveOutFormat(profile, mappedModel) {
 
 // Client headers that must NOT be forwarded upstream: client credentials (e.g. the Gemini SDK's x-goog-api-key
 // would leak to a third-party upstream), switcher control headers, and hop-by-hop / network identity headers.
+// x-intact-trace is on this list because a client must never choose the id that joins the two
+// halves of a captured exchange. Only the contract lab of this gateway writes it.
 const BLOCKED_PASSTHROUGH = new Set([
   'x-api-key', 'x-goog-api-key', 'x-goog-user-project', 'x-profile', 'x-llm-profile',
-  'x-real-ip', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port'
+  'x-real-ip', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port',
+  'x-intact-trace', PROBE_HEADER, 'x-llm-switcher-token'
 ]);
 
 function upstreamEndpoint(profile, outFormat, model, stream, req) {
@@ -652,6 +666,10 @@ async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, sig
   return streamError;
 }
 
+// Off unless config.json carries a contractLab block with enabled: true. Every call returns at
+// once, so a slow or absent intact cannot reach the answer the client is waiting for.
+const contractLab = createContractLab({ settings: () => contractLabSettings(loadConfig()) });
+
 // ----------------------------------------------------
 // LLM Switcher generic pipeline: client --parse--> IR --emit--> upstream
 // Client (input) formats : anthropic | openai-chat | responses (Codex) | vertex
@@ -707,6 +725,12 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   const logBase = { clientFormat, outFormat, profile: profileKey, model: mappedModel, stream: ir.stream, requestPreview };
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
 
+  // Contract lab: a sampled request carries a trace id to intact, and the bytes this gateway
+  // writes back are copied for the upload that follows the answer.
+  const traceId = probeTraceId(req) || contractLab.traceFor(mappedModel);
+  const halfTap = traceId ? createHalfTap() : null;
+  if (halfTap) tapClientWrites(res, halfTap);
+
   // AbortController to cancel the upstream fetch as soon as the client disconnects (saves tokens)
   const ac = new AbortController();
   const onClientClose = () => {
@@ -716,14 +740,17 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     }
   };
   res.on('close', onClientClose);
+  let answered = false; // set only after a complete 2xx answer; the half upload depends on it
 
   try {
     // Fast path: anthropic in/out goes straight through, preserving original bytes (including thinking signatures).
     // Note: this branch skips the Healer Engine because it bypasses the IR.
     if (clientFormat === 'anthropic' && outFormat === 'anthropic') {
       const { url, headers } = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
+      if (traceId) headers['x-intact-trace'] = traceId;
       try {
         const r = await forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, mappedModel, ac.signal, profile);
+        answered = !r.error && r.status >= 200 && r.status < 300;
         log({ status: r.status, tokens: r.tokens, responsePreview: r.healed.length ? `(direct forward, healed: ${r.healed.join('; ')})` : '(direct forward)', error: r.error || undefined });
       } catch (err) {
         if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
@@ -735,6 +762,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     }
 
     const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
+    if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
     let upstreamRes;
@@ -782,6 +810,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
         reasoning: col.reasoning, sig: col.sig
       });
       sendJson(res, 200, out);
+      answered = true;
       return log({
         status: 200, tokens: { prompt: col.prompt, completion },
         thinkingChars: think.join('').length, responsePreview: split.text.slice(0, 300)
@@ -814,6 +843,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     // OpenAI Chat clients expect a terminal [DONE] line (Responses API does not use [DONE]).
     if (clientFormat === 'openai-chat') res.write('data: [DONE]\n\n');
     res.end();
+    answered = !streamError;
     log({
       status: streamError ? 502 : 200, stream: true,
       tokens: { prompt: col.prompt, completion },
@@ -823,6 +853,17 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     });
   } finally {
     res.off('close', onClientClose);
+    // A half is uploaded only for a complete 2xx answer: anything else would diff as a loss the
+    // converter never made.
+    if (traceId) {
+      finishHalf(contractLab, traceId, ac.signal.aborted || !answered, {
+        toolRequest: capText(bodyBuffer),
+        toolResponse: halfTap?.text() || '',
+        toolVersion: toolVersionFromUA(req.headers['user-agent']),
+        inFormat: clientFormat,
+        outFormat
+      });
+    }
   }
 }
 
@@ -1407,12 +1448,23 @@ function responsesErrorCode(status) {
   return 'server_error';
 }
 
+// A WS frame carries the event payload alone. The half records the same event in the SSE text of
+// the HTTP /v1/responses path, so one converter keeps one shape in intact whatever the transport.
+// A failure to copy is dropped: the tap must never come between the renderer and the socket.
+function tapWsEvent(tap, event, data) {
+  if (!tap) return;
+  try {
+    tap.push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  } catch {}
+}
+
 // Terminal failure for the WS (responses-ws) transport: Codex ends a turn only on
 // response.completed / response.failed, so a bare {type:'error'} frame leaves the turn
 // hanging. Emit the full created -> in_progress -> failed sequence instead.
-function sendWsFailed(socket, model, message, status = 500) {
+function sendWsFailed(socket, model, message, status = 500, tap = null) {
   if (!socket.writable) return;
   const renderer = createResponsesStream((e, d) => {
+    tapWsEvent(tap, e, d);
     if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
   }, model || 'main');
   renderer.start();
@@ -1462,8 +1514,16 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
   const logBase = { clientFormat: 'responses-ws', outFormat, profile: profileKey, model: mappedModel, stream: true, requestPreview };
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
 
+  // Contract lab: the Codex WS transport is sampled like any other request, and the events of
+  // this turn are copied for the upload that follows it.
+  const traceId = contractLab.traceFor(mappedModel);
+  const halfTap = traceId ? createHalfTap() : null;
+  const halfRequest = traceId ? capJson(payload) : '';
+
+  let answered = false; // set only after a complete answer; the half upload depends on it
   try {
     const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
+    if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
 
     let upstreamRes;
@@ -1472,14 +1532,14 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}:ws] Network error:`, fetchErr.message);
-      sendWsFailed(socket, mappedModel, `Failed to connect to upstream: ${fetchErr.cause?.message || fetchErr.message}`, 502);
+      sendWsFailed(socket, mappedModel, `Failed to connect to upstream: ${fetchErr.cause?.message || fetchErr.message}`, 502, halfTap);
       return log({ status: 502, error: fetchErr.message });
     }
 
     if (!upstreamRes.ok) {
       const errText = await upstreamRes.text().catch(() => '');
       console.error(`[${profileKey}:ws] Error HTTP ${upstreamRes.status}:`, errText.slice(0, 500));
-      sendWsFailed(socket, mappedModel, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, upstreamRes.status);
+      sendWsFailed(socket, mappedModel, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, upstreamRes.status, halfTap);
       return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
     }
 
@@ -1487,6 +1547,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     const col = createCollector();
 
     const renderer = createResponsesStream((e, d) => {
+      tapWsEvent(halfTap, e, d);
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
@@ -1505,6 +1566,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
       renderer.error(streamError);
     } else {
       renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, reasoning: col.reasoning, hasTools: col.tools.size > 0 });
+      answered = true;
     }
     log({
       status: streamError ? 502 : 200, stream: true,
@@ -1516,8 +1578,18 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
   } catch (err) {
     if (ac.signal.aborted) return log({ status: 499, error: 'aborted' });
     console.error(`[${profileKey}:ws] Error:`, err);
-    sendWsFailed(socket, payload?.model || 'main', err.message, 500);
+    sendWsFailed(socket, payload?.model || 'main', err.message, 500, halfTap);
     log({ status: 500, error: err.message });
+  } finally {
+    // The turn is over; the half is queued and posted on a later turn. A cancelled turn has no
+    // complete answer: uploading it would diff as a loss the converter never made.
+    finishHalf(contractLab, traceId, ac.signal.aborted || !answered, {
+      toolRequest: halfRequest,
+      toolResponse: halfTap?.text() || '',
+      toolVersion: toolVersionFromUA(req.headers['user-agent']),
+      inFormat: clientFormat,
+      outFormat
+    });
   }
 }
 

@@ -430,6 +430,8 @@ switch shim install            # Route new Claude and Codex sessions through the
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
 switch shim uninstall          # Remove the launcher shims
 switch off [target]            # Deactivate gateway (or specific target) and restore official
+switch contract-probe [--model m] # Drive the contract-lab variants through the gateway
+switch contract-check          # Turn the open contract findings into failing tests
 ```
 
 The service runs without your shell. `switch service install` therefore copies `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
@@ -507,9 +509,22 @@ re-opened from a shell where the shim is on `PATH`.
       }
     }
   },
-  "debug": false
+  "debug": false,
+  "contractLab": {
+    "url": "https://intact.example.com",
+    "apiKey": "sk-...",
+    "enabled": false
+  }
 }
 ```
+
+### Contract lab
+
+The contract lab finds fields that the converter loses. It is off by default.
+
+- Set `contractLab: {url, apiKey, enabled}` in `config.json`. If `enabled` is `true`, the gateway sends a sample of complete exchanges to intact.
+- `switch contract-probe [--model m]` sends six test requests per model and format through the gateway.
+- `switch contract-check` gets the open findings from intact and writes one test file for each lost field.
 
 ---
 

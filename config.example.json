@@ -75,5 +75,10 @@
       }
     }
   },
-  "debug": false
+  "debug": false,
+  "contractLab": {
+    "url": "https://intact.example.com",
+    "apiKey": "sk-...",
+    "enabled": false
+  }
 }

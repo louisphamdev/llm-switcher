@@ -6,9 +6,11 @@ import {
   ROOT_DIR, STATE_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
-  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, openLog,
-  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher
+  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
+  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher,
+  contractLabSettings
 } from './state.mjs';
+import { runProbe, runCheck } from './contract.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
   suggestedRcFiles, auditRunningProcesses
@@ -833,6 +835,49 @@ async function runDoctor() {
   console.log(`\nDoctor summary: ${allHealthy ? 'ALL CHECKS PASSED (HEALTHY)' : 'ATTENTION RECOMMENDED (CHECK WARNINGS ABOVE)'}`);
 }
 
+// ----------------------------------------------------
+// Contract probe
+// ----------------------------------------------------
+function optionValue(name) {
+  const argv = process.argv.slice(2);
+  const i = argv.indexOf(name);
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : '';
+}
+
+// One line per request, so a run can be read while it is still going. A model name comes from
+// config.json, so it is printed through `show` like any other configured string.
+async function runContractProbe() {
+  const port = getTargetPort();
+  const token = readAdminToken();
+  if (!token) {
+    console.error(`[Error] No admin token yet (${adminTokenPath}). Start the gateway first: switch on`);
+    process.exit(1);
+  }
+  const model = optionValue('--model');
+  console.log(`Probing gateway 127.0.0.1:${port} — model, format, variant, trace id, status`);
+  const { rows, unreachable } = await runProbe({
+    port, token, config, model,
+    log: (line) => console.log(show(line))
+  });
+  if (!rows.length) console.log(model ? `No active profile maps to "${show(model)}".` : 'No active profile maps a model.');
+  const ok = rows.filter(r => r.status === 200).length;
+  console.log(`${rows.length} requests, ${ok} answered 200.`);
+  if (unreachable) {
+    console.error(`[Error] The gateway on port ${port} did not answer. Start it with: switch on`);
+    process.exit(1);
+  }
+}
+
+// The findings and the fixtures are untrusted text, so `runCheck` prints its own sanitized rows
+// and this wrapper only decides the exit code: 2 means intact could not be read.
+async function runContractCheck() {
+  const out = await runCheck({ settings: () => contractLabSettings(config) });
+  if (!out.ok) {
+    console.error(`[Error] ${out.error}`);
+    process.exit(2);
+  }
+}
+
 const [rawCmd = '', subArg = ''] = positionalArgs();
 const cmd = rawCmd.toLowerCase();
 
@@ -850,6 +895,10 @@ if (cmd === 'off' || cmd === 'stop') {
   await turnOn(subArg, TARGET_ALIASES[cmd]);
 } else if (cmd === 'ui' || cmd === 'web' || cmd === 'gui') {
   await openUI();
+} else if (cmd === 'contract-probe') {
+  await runContractProbe();
+} else if (cmd === 'contract-check') {
+  await runContractCheck();
 } else if (cmd === 'status' || cmd === 'st') {
   await showStatus();
 } else if (cmd === 'on' || cmd === 'start') {
@@ -874,5 +923,7 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');
   console.log('  switch shim uninstall          # Remove launcher shims');
   console.log('  switch off [target]            # Restore official endpoints (all, or one target)');
+  console.log('  switch contract-probe [--model m] # Drive the contract-lab variants through the gateway');
+  console.log('  switch contract-check          # Turn the open contract findings into failing tests');
   console.log('\nGlobal option: --port <n> (or env LLM_SWITCHER_PORT)');
 }

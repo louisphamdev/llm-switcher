@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "note": "Intentional normalizations of the converter. `switch contract-check` reports a finding on one of these paths as `excluded` and writes no test for it. intact never reads this file: it holds no evidence, only a decision of this repository. A path is matched exactly, in the drift path syntax of the fixtures.",
+  "exclusions": [
+    {
+      "id": "heal-tool-pairs-placeholder",
+      "direction": "request",
+      "class": "normalized",
+      "reason": "healToolPairs replaces the result of a tool call whose result a token compressor removed from the history with a fixed placeholder text, and turns an orphaned tool result into user text with a prefix. Both providers refuse the unpaired shape, so the text of that block cannot reach the upstream unchanged.",
+      "paths": [
+        "messages[].content[].content",
+        "messages[].content[].content[].text",
+        "input[].output",
+        "contents[].parts[].functionResponse.response"
+      ]
+    },
+    {
+      "id": "heal-tool-pairs-orphan-id",
+      "direction": "request",
+      "class": "normalized",
+      "reason": "healToolPairs drops the call id of an orphaned tool result, because the text turn that carries the result to the upstream has no field for it. The id is kept inside the text of that turn.",
+      "paths": [
+        "messages[].content[].tool_use_id",
+        "messages[].tool_call_id",
+        "input[].call_id"
+      ]
+    },
+    {
+      "id": "gateway-signed-thinking",
+      "direction": "request",
+      "class": "normalized",
+      "reason": "healAnthropicPayload drops a thinking block whose signature the gateway issued (the placeholder signature, or another provider's signature under the lsw1. prefix, both marked by isGatewaySignature). Anthropic verifies the signature and refuses the turn, so such a block can never be sent back.",
+      "paths": [
+        "messages[].content[].thinking",
+        "messages[].content[].signature",
+        "messages[].reasoning_content",
+        "input[].summary[].text"
+      ]
+    }
+  ]
+}
