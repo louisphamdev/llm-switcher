@@ -32,6 +32,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createFrameReader, negotiatesDeflate } from './wsframe.mjs';
 
@@ -91,6 +92,11 @@ export function captureName(method, url, now = Date.now()) {
 }
 
 const CAPTURE_LIMIT = 200000;
+// The capture decodes a copy of each WS message. A larger message is not recorded; the relay
+// itself still forwards every byte.
+const CAPTURE_MAX_MESSAGE = 64 * 1024 * 1024;
+// Captures that wait for their quiet period. A SIGTERM writes them before the process exits.
+const pendingFlushes = new Set();
 const clip = (s) => (s.length > CAPTURE_LIMIT ? s.slice(0, CAPTURE_LIMIT) + '...[truncated]' : s);
 
 // A client asks for gzip, so the bytes on the wire are compressed. Reading them as
@@ -319,7 +325,8 @@ function captureUpgrade(req, clientSocket, target) {
   const collect = (from, frames) => {
     for (const f of frames) {
       if (written >= CAPTURE_LIMIT) return;
-      const text = f.payload.toString('utf8');
+      // An error item has no payload, and its reader decodes nothing more from this side.
+      const text = f.payload ? f.payload.toString('utf8') : '';
       written += text.length;
       messages.push({ from, type: f.type, ...(f.compressed ? { compressed: true } : {}),
         ...(f.note ? { note: f.note } : {}), ...(f.reason ? { reason: f.reason } : {}),
@@ -345,8 +352,8 @@ function captureUpgrade(req, clientSocket, target) {
     if (end === -1) return;
     const text = handshake.subarray(0, end).toString('latin1');
     const inflate = negotiatesDeflate(/^sec-websocket-extensions:(.*)$/im.exec(text)?.[1]);
-    readFromServer = createFrameReader({ inflate });
-    readFromClient = createFrameReader({ inflate });
+    readFromServer = createFrameReader({ inflate, maxMessage: CAPTURE_MAX_MESSAGE });
+    readFromClient = createFrameReader({ inflate, maxMessage: CAPTURE_MAX_MESSAGE });
     const rest = handshake.subarray(end + 4);
     if (rest.length) collect('server', readFromServer(rest));
   });
@@ -362,7 +369,9 @@ function captureUpgrade(req, clientSocket, target) {
   // the traffic goes quiet instead, and keep flushing as more messages arrive.
   let timer = null;
   const flush = () => {
+    if (timer) clearTimeout(timer);
     timer = null;
+    pendingFlushes.delete(flush);
     writeCapture({
       method: req.method,
       url: req.url,
@@ -376,6 +385,7 @@ function captureUpgrade(req, clientSocket, target) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, 800);
     timer.unref?.();
+    pendingFlushes.add(flush);
   };
   for (const s of [clientSocket, target]) {
     s.on('close', flush);
@@ -462,14 +472,51 @@ const proxy = http.createServer((req, res) => {
 // destination. It binds to loopback, but every local process can still use it. Refuse
 // a destination that is itself local: without that test it is a way to reach services
 // that only listen on the machine, and the cloud metadata address.
-const PRIVATE_HOST = /^(localhost$|127\.|0\.0\.0\.0$|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|\[?f[cd])/i;
+// Addresses this proxy never tunnels to: loopback, unspecified, private, link-local (the cloud
+// metadata service) and unique-local IPv6. BlockList also matches IPv4-mapped IPv6 forms.
+const LOCAL_RANGES = new net.BlockList();
+for (const [prefix, bits] of [['0.0.0.0', 8], ['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['169.254.0.0', 16]]) {
+  LOCAL_RANGES.addSubnet(prefix, bits, 'ipv4');
+}
+for (const [prefix, bits] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10]]) {
+  LOCAL_RANGES.addSubnet(prefix, bits, 'ipv6');
+}
 
 export function isInterceptedHost(host) {
   return host === TARGET_HOST;
 }
 
-export function isPrivateDestination(host) {
-  return !host || PRIVATE_HOST.test(host);
+// Decides on an address, never on a spelling: `0`, `2130706433`, `127.1` and names such as
+// localtest.me all resolve to loopback. Something that is not an address counts as local.
+export function isLocalAddress(address) {
+  const family = net.isIP(address);
+  return family === 0 || LOCAL_RANGES.check(address, family === 6 ? 'ipv6' : 'ipv4');
+}
+
+// Resolve once and connect to the address that was checked: a second lookup could answer with
+// a local address (DNS rebinding). Every answer must be public, not only the first.
+export async function checkDestination(host, { lookup = dns.lookup } = {}) {
+  const bare = String(host || '').replace(/^\[(.*)\]$/, '$1');
+  if (!bare) return { refused: 'no host' };
+  let answers;
+  try {
+    answers = await lookup(bare, { all: true, verbatim: true });
+  } catch (err) {
+    return { refused: `cannot resolve: ${err.code || err.message}`, status: 502 };
+  }
+  const local = answers.find(a => isLocalAddress(a.address));
+  if (!answers.length || local) return { refused: `resolves to local address ${local?.address || '(none)'}` };
+  return { address: answers[0].address };
+}
+
+// Refusals are printed without --verbose, once per host: a VPN or split DNS can resolve a
+// public name to a private address, and the user must be able to see why it fails.
+const reportedRefusals = new Set();
+function reportRefusal(target, reason) {
+  log('refused CONNECT', target, reason);
+  if (reportedRefusals.has(target) || reportedRefusals.size > 1000) return;
+  reportedRefusals.add(target);
+  console.error(`[blindfold] refused CONNECT ${target}: ${reason}`);
 }
 
 proxy.on('connect', (req, clientSocket, head) => {
@@ -486,19 +533,24 @@ proxy.on('connect', (req, clientSocket, head) => {
     return mitm.emit('connection', clientSocket);
   }
 
-  if (isPrivateDestination(host)) {
-    log('refused CONNECT', target);
-    clientSocket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
-    return;
-  }
-  tunnel(host, destPort, clientSocket, head);
+  // The lookup is asynchronous: the socket can fail before the answer arrives.
+  clientSocket.on('error', () => clientSocket.destroy());
+  checkDestination(host).then(({ address, refused, status = 403 }) => {
+    if (clientSocket.destroyed) return;
+    if (refused) {
+      reportRefusal(target, refused);
+      clientSocket.end(`HTTP/1.1 ${status} ${status === 403 ? 'Forbidden' : 'Bad Gateway'}\r\nConnection: close\r\n\r\n`);
+      return;
+    }
+    tunnel(address, destPort, clientSocket, head, target);
+  });
 });
 
 // Any other host keeps its own end-to-end TLS: this process only copies bytes and
 // never sees the plaintext.
-function tunnel(host, destPort, clientSocket, head) {
-  log('tunnel CONNECT', `${host}:${destPort}`);
-  const upstream = net.connect(destPort, host, () => {
+function tunnel(address, destPort, clientSocket, head, target) {
+  log('tunnel CONNECT', target, '->', address);
+  const upstream = net.connect(destPort, address, () => {
     clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     if (head?.length) upstream.write(head);
     clientSocket.pipe(upstream).pipe(clientSocket);
@@ -532,6 +584,15 @@ export function start() {
     console.error(`[blindfold] cannot read the leaf certificate in ${CERT_DIR}: ${err.message}`);
     console.error('[blindfold] run blindfold/make-certs.sh first');
     process.exit(1);
+  }
+
+  if (CAPTURE_DIR) {
+    for (const signal of ['SIGTERM', 'SIGINT']) {
+      process.once(signal, () => {
+        for (const flush of [...pendingFlushes]) flush();
+        process.exit(0);
+      });
+    }
   }
 
   proxy.listen(LISTEN_PORT, '127.0.0.1', () => {

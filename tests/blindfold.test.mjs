@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import net from 'node:net';
 import {
-  isGatewayPath, toGatewayPath, isInterceptedHost, isPrivateDestination,
+  isGatewayPath, toGatewayPath, isInterceptedHost, isLocalAddress, checkDestination,
   API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody, writeCaptureFile,
   relayToGateway, relayUpgradeToGateway
 } from '../blindfold/blindfold.mjs';
@@ -56,23 +56,36 @@ test('only the target host is intercepted; every other public host is tunneled',
   assert.equal(isInterceptedHost('chatgpt.com'), true);
   for (const other of ['api.openai.com', 'auth.openai.com', 'example.com', 'chatgpt.com.evil.test']) {
     assert.equal(isInterceptedHost(other), false, `must not intercept ${other}`);
-    assert.equal(isPrivateDestination(other), false, `must tunnel ${other}`);
   }
 });
 
 // The listener is a proxy on loopback, so every local process can ask it for a
 // destination. A local destination would turn it into a way to reach a service that
-// listens only on this machine.
-test('a local or private destination is refused', () => {
+// listens only on this machine. The test runs on the resolved address, never on a spelling.
+test('a local or private address is refused', () => {
   for (const local of [
-    'localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]',
-    '10.0.0.5', '192.168.1.10', '172.16.0.1', '172.31.255.254', '169.254.169.254', ''
+    '127.0.0.1', '127.255.0.9', '0.0.0.0', '::1', '::', '::ffff:127.0.0.1', '::ffff:10.1.2.3',
+    '10.0.0.5', '192.168.1.10', '172.16.0.1', '172.31.255.254', '169.254.169.254', 'fe80::1', 'fd00::1', 'not-an-address', ''
   ]) {
-    assert.equal(isPrivateDestination(local), true, `must refuse ${local || '(empty)'}`);
+    assert.equal(isLocalAddress(local), true, `must refuse ${local || '(empty)'}`);
   }
   // A public address that only looks similar stays allowed.
-  for (const publicHost of ['172.32.0.1', '11.0.0.1', '193.168.1.10']) {
-    assert.equal(isPrivateDestination(publicHost), false, `must not refuse ${publicHost}`);
+  for (const publicHost of ['172.32.0.1', '11.0.0.1', '193.168.1.10', '8.8.8.8', '2606:4700::1111']) {
+    assert.equal(isLocalAddress(publicHost), false, `must not refuse ${publicHost}`);
+  }
+});
+
+test('checkDestination refuses a name when any answer is local, and returns the checked address', async () => {
+  const lookupOf = (answers) => async () => answers.map(address => ({ address, family: address.includes(':') ? 6 : 4 }));
+  assert.deepEqual(await checkDestination('api.example.test', { lookup: lookupOf(['93.184.216.34']) }), { address: '93.184.216.34' });
+  assert.match((await checkDestination('rebind.example.test', { lookup: lookupOf(['93.184.216.34', '127.0.0.1']) })).refused, /local address 127\.0\.0\.1/);
+  assert.match((await checkDestination('[::1]', { lookup: lookupOf(['::1']) })).refused, /local/);
+  assert.match((await checkDestination('', {})).refused, /no host/);
+  const failed = await checkDestination('nx.example.test', { lookup: async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); } });
+  assert.equal(failed.status, 502);
+  // Real resolver, numeric spellings: no network needed.
+  for (const spelling of ['2130706433', '0x7f000001', '0', '127.1', 'localhost']) {
+    assert.ok((await checkDestination(spelling)).refused, `must refuse ${spelling}`);
   }
 });
 

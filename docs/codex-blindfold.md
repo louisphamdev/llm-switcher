@@ -203,6 +203,6 @@ Read this section before you turn blindfold mode on.
 
 **Only one host is intercepted.** If your Codex uses API key authentication instead of ChatGPT authentication, the host is `api.openai.com`. Build the leaf for that host, and start the process with `--host api.openai.com --prefix /v1`.
 
-**The interceptor is a proxy.** It binds to loopback, so a remote machine cannot use it, but every process on this machine can. It refuses a CONNECT to a local or private address, so it cannot be used to reach a service that listens only on this machine.
+**The interceptor is a proxy.** It binds to loopback, so a remote machine cannot use it, but every process on this machine can. It refuses a CONNECT to a local or private address, so it cannot be used to reach a service that listens only on this machine. The interceptor resolves the name first and checks every address in the answer, so a spelling such as `2130706433` or a name that resolves to `127.0.0.1` is also refused. It then connects to the address that it checked. It prints each refused target once, without `--verbose`. A VPN or split DNS can resolve a public name to a private address, and that message shows the cause.
 
 **Some `--config` keys still travel.** Blindfold mode removes the base URL override only. The switcher still passes `model_catalog_json`, the three role names (`model`, `review_model`, `agents.default_subagent_model`) and the two context window keys, because those carry no address and no internal name.
