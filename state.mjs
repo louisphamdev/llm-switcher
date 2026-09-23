@@ -98,9 +98,12 @@ export function getConfigLoadError() {
 }
 
 // Atomic write (tmp + rename) so a running proxy never reads a half-written file.
+// The tmp file is created 0600 and renamed over config.json, so the keys are never readable by
+// another account, even when an earlier release left config.json at 0644.
 export function saveConfig(cfg) {
   const tmp = `${configPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, configPath);
   cachedConfig = cfg;
   try { lastMtime = fs.statSync(configPath).mtimeMs; } catch {}

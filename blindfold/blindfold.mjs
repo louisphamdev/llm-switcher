@@ -114,14 +114,30 @@ export function decodeBody(buffer, contentEncoding) {
   }
 }
 
+// A capture holds full prompts and answers, so the directory is 0700 and each file 0600. A
+// directory that another account owns is refused: it could read the files or plant symlinks.
+export function writeCaptureFile(dir, fileName, record, { uid = process.getuid?.() } = {}) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (uid !== undefined && fs.statSync(dir).uid !== uid) {
+    log('capture refused: directory is owned by another account:', dir);
+    return false;
+  }
+  fs.chmodSync(dir, 0o700);
+  // tmp + rename: a kill mid-write keeps the previous complete file, and the rename replaces a
+  // planted symlink instead of writing through it.
+  const file = path.join(dir, fileName);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, file);
+  return true;
+}
+
 // A capture is a diagnostic. Failing to write one must never fail the request.
 function writeCapture(record, fileName) {
   if (!CAPTURE_DIR) return;
   try {
-    fs.mkdirSync(CAPTURE_DIR, { recursive: true });
-    fs.writeFileSync(
-      path.join(CAPTURE_DIR, fileName || captureName(record.method, record.url)),
-      JSON.stringify(record, null, 2), 'utf8');
+    writeCaptureFile(CAPTURE_DIR, fileName || captureName(record.method, record.url), record);
   } catch (err) {
     log('capture failed:', err.message);
   }

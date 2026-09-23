@@ -11,10 +11,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   isGatewayPath, toGatewayPath, isInterceptedHost, isPrivateDestination,
-  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody
+  API_PREFIX, GATEWAY_PREFIX, redactHeaders, captureName, decodeBody, writeCaptureFile
 } from '../blindfold/blindfold.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('a dot-segment escape never reaches the gateway', () => {
   for (const attack of [
@@ -128,4 +135,48 @@ test('capture filenames carry no path separator', () => {
   assert.match(n, /^1700000000000-POST-/);
   assert.ok(!n.includes('?'), 'the query string must not reach the filename');
   assert.match(captureName('GET', '/'), /-root\.json$/);
+});
+
+// A capture holds full prompts and answers. It must stay private to the owner, and it must
+// never be written into a directory that another account created first.
+test('captures are written 0600 inside a 0700 directory, never into a foreign directory', { skip: process.platform === 'win32' && 'posix modes' }, () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cap-'));
+  try {
+    const dir = path.join(base, 'captures');
+    assert.equal(writeCaptureFile(dir, 'a.json', { ok: true }), true);
+    assert.equal((fs.statSync(dir).mode & 0o777).toString(8), '700');
+    assert.equal((fs.statSync(path.join(dir, 'a.json')).mode & 0o777).toString(8), '600');
+
+    const foreign = path.join(base, 'foreign');
+    fs.mkdirSync(foreign, { mode: 0o777 });
+    const otherUid = (process.getuid?.() ?? 0) + 4242;
+    assert.equal(writeCaptureFile(foreign, 'b.json', { ok: true }, { uid: otherUid }), false);
+    assert.deepEqual(fs.readdirSync(foreign), [], 'nothing is written into a directory owned by another uid');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// make-certs.sh writes the CA key. With a directory in /tmp (the documented recipe) another
+// account can create it first or plant symlinks, so the script must refuse a directory it
+// does not own and must write every file private.
+test('make-certs.sh writes private files and refuses a directory it does not own', { skip: (process.platform === 'win32' || !fs.existsSync('/usr/bin/openssl')) && 'posix + openssl' }, () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-certs-'));
+  const script = path.join(ROOT, 'blindfold', 'make-certs.sh');
+  try {
+    const out = path.join(base, 'certs');
+    execFileSync('bash', [script, 'example.test', out], { stdio: 'ignore' });
+    assert.equal((fs.statSync(out).mode & 0o777).toString(8), '700');
+    for (const f of ['ca.key', 'leaf.key', 'ca.pem', 'leaf.pem']) {
+      assert.equal((fs.statSync(path.join(out, f)).mode & 0o777).toString(8), '600', f);
+    }
+    // /usr/share/doc exists and belongs to root: the script must stop before writing.
+    const rootOwned = '/usr/share/doc';
+    let failed = false;
+    try { execFileSync('bash', [script, 'example.test', rootOwned], { stdio: 'ignore' }); } catch { failed = true; }
+    assert.ok(failed, 'a directory owned by another account is refused with a non-zero exit');
+    assert.ok(!fs.existsSync(path.join(rootOwned, 'ca.key')));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });

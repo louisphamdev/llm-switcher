@@ -9,6 +9,8 @@ import {
 } from '../state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const makeCfg = () => ({
   port: 4000,
@@ -363,4 +365,30 @@ test('helpers: case-insensitive lookup, key validation, port resolution, redacti
   const red = redactConfig(cfg);
   assert.equal(red.profiles.router.apiKey, MASKED_KEY);
   assert.equal(cfg.profiles.router.apiKey, 'sk-1', 'original config untouched');
+});
+
+// config.json holds every API key. It must be private to the owner even when an earlier
+// version left it world-readable, and the tmp file must never be readable before the rename.
+test('saveConfig writes config.json 0600, also over an existing 0644 file', { skip: process.platform === 'win32' && 'posix modes' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-mode-'));
+  try {
+    const cfgPath = path.join(dir, 'config.json');
+    fs.writeFileSync(cfgPath, '{"profiles":{}}', { mode: 0o644 });
+    fs.chmodSync(cfgPath, 0o644);
+    const script = `
+      import fs from 'node:fs';
+      const seen = [];
+      const rename = fs.renameSync;
+      fs.renameSync = (a, b) => { seen.push((fs.statSync(a).mode & 0o777).toString(8)); return rename(a, b); };
+      const s = await import(${JSON.stringify(path.join(ROOT_DIR, 'state.mjs'))});
+      s.saveConfig({ profiles: {} });
+      console.log(JSON.stringify({ tmp: seen[0], final: (fs.statSync(s.configPath).mode & 0o777).toString(8) }));`;
+    const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, LLM_SWITCHER_CONFIG: cfgPath }, encoding: 'utf8'
+    }).trim());
+    assert.equal(out.tmp, '600', 'the tmp file is private before it replaces config.json');
+    assert.equal(out.final, '600', 'config.json ends private');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -18,8 +18,17 @@ OUT_DIR="${2:-$(cd "$(dirname "$0")" && pwd)/certs}"
 CA_DAYS=3650
 LEAF_DAYS=825
 
+# Every file here is private, and the CA key signs for any host. A directory that another
+# account created first (the /tmp recipe) could expose the key or hold planted symlinks.
+umask 077
 mkdir -p "$OUT_DIR"
-chmod 700 "$OUT_DIR" 2>/dev/null || true
+OWNER="$(stat -c %u "$OUT_DIR" 2>/dev/null || stat -f %u "$OUT_DIR")"
+if [ "$OWNER" != "$(id -u)" ]; then
+  echo "[blindfold] refused: $OUT_DIR is owned by uid $OWNER, not by you. Use a directory you own." >&2
+  exit 1
+fi
+chmod 700 "$OUT_DIR"
+( cd "$OUT_DIR" && rm -f ca.cnf leaf.cnf leaf.ext ca.key ca.pem leaf.key leaf.csr leaf.pem ca.srl )
 
 echo "[blindfold] host   : $HOST"
 echo "[blindfold] output : $OUT_DIR"

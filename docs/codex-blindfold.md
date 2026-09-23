@@ -145,10 +145,13 @@ To record a different tool, point the proxy at that tool's host and give it a
 prefix that no path can match, so every request is re-originated and recorded:
 
 ```bash
-bash blindfold/make-certs.sh api.anthropic.com /tmp/anthropic-certs
+bash blindfold/make-certs.sh api.anthropic.com ~/.llm-switcher/anthropic/certs
 node blindfold/blindfold.mjs --host api.anthropic.com --prefix /no-gateway \
-  --port 3458 --certs /tmp/anthropic-certs --capture /tmp/anthropic-captures
+  --port 3458 --certs ~/.llm-switcher/anthropic/certs --capture ~/.llm-switcher/anthropic/captures
 ```
+
+Use directories that you own. `make-certs.sh` and `--capture` refuse a directory that another
+account owns, because that account could read the key or the captures.
 
 Then start the tool with `HTTPS_PROXY=http://127.0.0.1:3458` and the CA in the
 variable that the tool reads. A Node client reads `NODE_EXTRA_CA_CERTS`. Set both
@@ -163,11 +166,14 @@ readable.
 
 CAUTION: The redaction covers headers only. Both bodies are written as they
 travelled, so a capture holds your prompts, your source code and the answers of
-the model. Treat the directory as private. `captures/` is in `.gitignore`; if you
-capture somewhere else, ignore that path too before you commit.
+the model. `captures/` is in `.gitignore`. If you capture somewhere else, add that
+path to `.gitignore` before you commit.
 
-NOTE: Only the HTTP path is recorded. Codex sends its completions over a WebSocket,
-which this proxy relays as raw bytes, so those exchanges do not produce a file.
+The proxy creates the capture directory with mode 0700 and each file with mode 0600.
+
+NOTE: WebSocket sessions are recorded too. Each session gives one file, with every
+message in order, and the proxy updates the file while the session runs. Codex sends
+its completions over a WebSocket, so these files hold the full conversation.
 
 ## How to go back
 
