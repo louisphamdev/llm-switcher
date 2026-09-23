@@ -346,3 +346,48 @@ test('reconcile reports an interceptor that does not stop instead of calling it 
     fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
+
+// While a dashboard change waits for its interceptor check, the CLI can save config.json. The gateway
+// must not then save over it (follow-up RACER-3).
+test('a dashboard change never overwrites a config.json that another process saved during its check', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
+  const ws = makeWorkspace({ certs: true });
+  const gwPort = await freePort();
+  const bfPort = await freePort();
+  writeConfig(ws, gwPort, bfPort, 'bf');
+  // A genuine-looking interceptor that answers each probe after 1 s.
+  const fake = spawn(process.execPath, ['--input-type=module', '-e', `
+    const s = await import(${JSON.stringify(path.join(ROOT, 'state.mjs'))});
+    const http = await import('node:http');
+    s.ensureAdminToken();
+    const port = ${bfPort};
+    http.createServer((req, res) => setTimeout(() => {
+      const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
+      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, host: 'chatgpt.com', prefix: '/backend-api/codex' };
+      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, host: f.host, prefix: f.prefix, proof: s.identityProof(nonce, f) }));
+    }, 1000)).listen(port, '127.0.0.1');
+  `], { env: envFor(ws), stdio: 'ignore' });
+  let gw;
+  try {
+    await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours', 10000);
+    gw = await startGateway(ws, gwPort);
+    await new Promise(r => setTimeout(r, 3000));   // the startup reconcile (two 1 s probes) keeps the fake
+    const pending = fetch(`http://127.0.0.1:${gwPort}/api/save-profile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': token(ws) },
+      body: JSON.stringify({ key: 'bf', profile: { name: 'From the dashboard' } })
+    });
+    await new Promise(r => setTimeout(r, 300));
+    const cli = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+    cli.profiles.plain.name = 'Saved by the CLI';
+    fs.writeFileSync(`${ws.cfgPath}.cli`, JSON.stringify(cli, null, 2));
+    fs.renameSync(`${ws.cfgPath}.cli`, ws.cfgPath);
+    const r = await pending;
+    assert.equal(r.status, 409, await r.text());
+    const onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+    assert.equal(onDisk.profiles.plain.name, 'Saved by the CLI');
+    assert.equal(onDisk.profiles.bf.name, 'Blindfold');
+  } finally {
+    gw?.kill();
+    fake.kill('SIGKILL');
+    fs.rmSync(ws.dir, { recursive: true, force: true });
+  }
+});

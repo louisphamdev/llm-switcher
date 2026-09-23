@@ -269,17 +269,19 @@ function mapModel(requestedModel, profile, clientFormat) {
 }
 
 // Wait until a slow client has taken the buffered bytes, so the gateway does not read the whole
-// upstream stream into memory. A closed client also ends the wait.
-function drained(stream) {
-  if (!stream.writableNeedDrain || stream.destroyed) return null;
+// upstream stream into memory. A closed client, or an aborted turn, also ends the wait.
+function drained(stream, signal) {
+  if (!stream.writableNeedDrain || stream.destroyed || signal?.aborted) return null;
   return new Promise(resolve => {
     const done = () => {
       stream.off('drain', done);
       stream.off('close', done);
+      signal?.removeEventListener('abort', done);
       resolve();
     };
     stream.on('drain', done);
     stream.on('close', done);
+    signal?.addEventListener('abort', done);
   });
 }
 
@@ -638,7 +640,7 @@ async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, sig
         splitter.flush();
         for (const tc of ev.tools) renderer.tool(tc);
       }
-      await drained(sink);
+      await drained(sink, signal);
     }
     if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
   } catch (streamErr) {
@@ -895,10 +897,17 @@ function reconcile(cfg) {
 }
 
 // Returns what the caller must show: removed settings.json values, and a blindfold failure.
-async function commit(cfg) {
+// `base` is the revision the change started from.
+async function commit(cfg, base) {
   // Refuse before saving: a saved interceptor port that a squatter holds would route Codex through it.
   const problem = await checkBlindfoldTarget(cfg, PORT);
   if (problem) return { success: false, error: `Not saved: ${problem}` };
+  // The admin lock covers this process only. The CLI can save config.json during the check above,
+  // and a save now would overwrite it.
+  const current = loadConfig();
+  if (!current || configRevision(current) !== base) {
+    return { success: false, status: 409, error: 'Not saved: config.json changed while this change was checked. Reload and try again.' };
+  }
   saveConfig(cfg);
   const revision = configRevision(cfg);
   const st = applyLaunchState(cfg, PORT);
@@ -1232,8 +1241,9 @@ async function routeConfigApi(res, method, pathname, body) {
   if (!loaded) return;
   // A copy: a refused change must never reach the cached config that other requests read.
   const cfg = structuredClone(loaded);
-  if (typeof body.revision === 'string' && body.revision !== configRevision(loaded)) {
-    return sendJson(res, 409, { error: 'config.json changed since this page loaded it. The page reloads it now; check the change and try again.', revision: configRevision(loaded) });
+  const baseRevision = configRevision(loaded);
+  if (typeof body.revision === 'string' && body.revision !== baseRevision) {
+    return sendJson(res, 409, { error: 'config.json changed since this page loaded it. The page reloads it now; check the change and try again.', revision: baseRevision });
   }
 
   // POST /api/switch  { target?, profile? | null, deactivate? }
@@ -1249,8 +1259,8 @@ async function routeConfigApi(res, method, pathname, body) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    const applied = await commit(cfg);
-    return sendJson(res, applied.success === false ? 502 : 200, { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
+    const applied = await commit(cfg, baseRevision);
+    return sendJson(res, applied.status || (applied.success === false ? 502 : 200), { success: true, activeProfile: cfg.activeProfile, activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/toggle  { target?, enabled }
@@ -1274,8 +1284,8 @@ async function routeConfigApi(res, method, pathname, body) {
       deactivateAll(cfg);
     }
     if (err) return sendJson(res, 400, { error: err });
-    const applied = await commit(cfg);
-    return sendJson(res, applied.success === false ? 502 : 200, { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
+    const applied = await commit(cfg, baseRevision);
+    return sendJson(res, applied.status || (applied.success === false ? 502 : 200), { success: true, enabled: Boolean(body.enabled), activeProfiles: cfg.activeProfiles, ...applied });
   }
 
   // POST /api/save-profile  { key, profile }
@@ -1314,16 +1324,16 @@ async function routeConfigApi(res, method, pathname, body) {
     }
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
-    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg) : (saveConfig(cfg), { revision: configRevision(cfg) });
-    return sendJson(res, applied.success === false ? 502 : 200, { success: true, ...applied });
+    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg, baseRevision) : (saveConfig(cfg), { revision: configRevision(cfg) });
+    return sendJson(res, applied.status || (applied.success === false ? 502 : 200), { success: true, ...applied });
   }
 
   // POST /api/delete-profile  { key }
   if (pathname === '/api/delete-profile') {
     const err = deleteProfile(cfg, body.key);
     if (err) return sendJson(res, 404, { error: err });
-    const applied = await commit(cfg);
-    return sendJson(res, applied.success === false ? 502 : 200, { success: true, ...applied });
+    const applied = await commit(cfg, baseRevision);
+    return sendJson(res, applied.status || (applied.success === false ? 502 : 200), { success: true, ...applied });
   }
 
   // POST /api/blindfold/sync — the CLI asks the owner to bring the interceptor in line with config.json.
@@ -1602,6 +1612,7 @@ server.on('upgrade', (req, socket) => {
         return;
       }
       if (f.type === 'close') {
+        abortTurns();
         if (socket.writable) socket.end(encodeWsFrame(Buffer.alloc(0), 8));
         return;
       }
