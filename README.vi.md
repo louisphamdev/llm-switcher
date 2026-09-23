@@ -396,6 +396,8 @@ Một server Model Context Protocol (MCP) chạy qua `stdio` cực nhẹ (Zero-d
 - `switcher_switch_profile`: Cho phép agent tự động chuyển đổi profile theo nhu cầu bài toán.
 - `switcher_recent_logs`: Đọc log gần nhất để tự debug khi output bị cắt cụt.
 
+LƯU Ý: `switcher_recent_logs` trả 150 ký tự đầu của mỗi prompt gần đây, từ mọi client đã dùng gateway. Agent gọi tool này đọc được chúng.
+
 Thêm vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_config.json`, hoặc Cursor):
 ```json
 "mcp": {
@@ -519,13 +521,15 @@ trong `PATH`.
 | `profile.thinkingMode` | `auto` (mặc định, cho gateway như 9Router): phục hồi thinking bị xoá, chèn hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
 | `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |
 | `profile.endpoints` | Ghi đè URL upstream theo từng format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
+| `LLM_SWITCHER_STATE_DIR` | Chuyển file launcher và log ra khỏi thư mục checkout. Test dùng biến này; shim đọc thư mục đã đặt lúc cài shim. |
 | `CLAUDE_CONFIG_DIR` | Được tôn trọng khi tìm `settings.json` của Claude Code. |
 
 ## Mô hình Bảo mật
 
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
 - Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. `switch ui` mở dashboard kèm token này, MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
-- API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được dùng với `baseURL` đã lưu của chính profile đó.
+- API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được gửi tới `baseURL` và `endpoints` đã lưu của chính profile đó. Lần lưu nào đổi một trong hai thì phải nhập lại key.
+- Mỗi thay đổi từ dashboard mang theo revision của config mà trang đã tải. Nếu tab khác, CLI hoặc MCP server đã lưu trước đó, gateway trả 409 và trang tải lại thay vì ghi đè thay đổi kia.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream. Các header `x-*` khác, `traceparent` và `tracestate` được chuyển tiếp. Gateway bỏ header điều khiển của chính nó (`x-profile`, `x-llm-profile`) và header định danh mạng (`x-forwarded-*`, `x-real-ip`).
 - `config.json` được ghi atomic với mode 0600. `~/.claude/settings.json` chỉ bị ghi lại để gỡ các giá trị do chính switcher ghi. `ANTHROPIC_AUTH_TOKEN`, các key `*_MODEL_NAME` và giá trị model/URL của bạn được giữ nguyên, và `switch` in tên từng giá trị đã gỡ.
 

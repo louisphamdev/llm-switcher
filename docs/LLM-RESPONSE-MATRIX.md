@@ -115,7 +115,7 @@ Notes:
 | Vertex native | `parts: [{functionCall:{name, args:{...}}}]` (args is an **object**), no id |
 | plain (gh) | same shape; stream interleaves `content:null` chunks |
 
-Missing ids are synthesized as `call_<ts>_<index>`; args objects are stringified
+Missing ids are synthesized as `call_<24 random chars>` (Vertex: `call_vtx_<n>_<name>`, healer: `call_heal_<n>`); args objects are stringified
 for OpenAI-shaped outputs and parsed back to objects for Anthropic/Vertex outputs.
 
 ## 4. Usage accounting (live)
@@ -127,8 +127,10 @@ for OpenAI-shaped outputs and parsed back to objects for Anthropic/Vertex output
 | nvidia | `usage: null` per chunk, one real total at end (`estimated` flag) | same keys as OpenAI-style |
 | openai (gpt-oss) | **none in stream** | count deltas manually |
 
-Rule used by the proxy: `prompt = MAX(seen)`, `completion = MAX(SUM(deltas), LAST)`,
-fallback to locally counted deltas when upstream sends nothing.
+Rule used by the proxy: `prompt = MAX(seen)`. For per-chunk deltas, `completion = SUM(deltas)`.
+For cumulative usage, `completion = LAST`. The shape is detected per stream. When upstream sends
+nothing, the proxy counts the deltas itself. Gemini counts thoughts apart from candidates, so its
+completion is `candidatesTokenCount + thoughtsTokenCount`.
 
 ## 5. Finish reasons, ids, errors (live)
 

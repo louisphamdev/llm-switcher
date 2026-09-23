@@ -1899,7 +1899,7 @@
       } catch (err) {
         showToast(`Fetch error: ${err.message}`, true);
       } finally {
-        btn.innerText = '🔄 Fetch Upstream Models';
+        btn.innerText = 'Fetch models';
         btn.disabled = false;
       }
     }
@@ -2123,7 +2123,7 @@
         sampleBox.textContent = err.message;
         showToast('Network error testing upstream', true);
       } finally {
-        btn.innerText = '⚡ Test Connection';
+        btn.innerText = 'Test connection';
         btn.disabled = false;
       }
     }

@@ -49,7 +49,11 @@ Codex reads a custom certificate authority from the `CODEX_CA_CERTIFICATE` varia
 - No line in the `hosts` file, so no administrator rights.
 - No change to `~/.codex/config.toml`.
 
-To stop the interception, run `switch off`. Nothing remains on the machine.
+To stop the interception, run `switch off`. It stops the interceptor and removes the launch files (`active.flag`, the `env*` files and the model catalog). These items stay until you remove them:
+
+- The certificates in `blindfold/certs/`, including `ca.key`. Delete the directory when you do not use blindfold mode again.
+- `blindfold.log` and `proxy.log`. Delete them by hand.
+- The shims in `~/.llm-switcher/bin`. Run `switch shim uninstall` to remove them.
 
 ## Before you start
 
@@ -176,8 +180,9 @@ readable.
 
 CAUTION: The redaction covers headers only. Both bodies are written as they
 travelled, so a capture holds your prompts, your source code and the answers of
-the model. `captures/` is in `.gitignore`. If you capture somewhere else, add that
-path to `.gitignore` before you commit.
+the model. A body can also hold a secret, for example a token that a tool printed.
+`captures/` is in `.gitignore`. If you capture somewhere else, add that
+path to `.gitignore` before you commit. Delete a capture when you do not need it.
 
 The proxy creates the capture directory with mode 0700 and each file with mode 0600.
 

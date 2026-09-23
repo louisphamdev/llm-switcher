@@ -396,6 +396,8 @@ A zero-dependency Model Context Protocol (MCP) server communicating over `stdio`
 - `switcher_switch_profile`: Programmatically switch a CLI's active profile.
 - `switcher_recent_logs`: Inspect recent request logs, token usage, and thinking extraction.
 
+NOTE: `switcher_recent_logs` returns the first 150 characters of each recent prompt, from every client that used the gateway. The agent that calls the tool can read them.
+
 Add to your MCP configuration (e.g. `opencode.jsonc`, `claude_desktop_config.json`, or Cursor):
 ```json
 "mcp": {
@@ -522,12 +524,14 @@ re-opened from a shell where the shim is on `PATH`.
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
 | `profile.endpoints` | Override upstream URLs per format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
 | `CLAUDE_CONFIG_DIR` | Respected when locating Claude Code's `settings.json`. |
+| `LLM_SWITCHER_STATE_DIR` | Move the launch files and the logs out of the checkout. The tests use it; the shims read the directory that was set when they were installed. |
 
 ## Security Model
 
 - The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
 - The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. `switch ui` opens the dashboard with this token, and the MCP server reads the file. `/v1/*` and `/health` need no token.
-- API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key is used only with the stored `baseURL` of that profile.
+- API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key goes only to the stored `baseURL` and `endpoints` of that profile. A save that changes either one must carry the key again.
+- Every dashboard change carries the config revision that the page loaded. If another tab, the CLI or the MCP server saved in the meantime, the gateway answers 409 and the page reloads instead of overwriting that change.
 - Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams. Other `x-*` headers, `traceparent` and `tracestate` pass through. The gateway drops its own control headers (`x-profile`, `x-llm-profile`) and the network identity headers (`x-forwarded-*`, `x-real-ip`).
 - `config.json` is written atomically with mode 0600. `~/.claude/settings.json` is rewritten only to remove values that the switcher wrote itself. `ANTHROPIC_AUTH_TOKEN`, `*_MODEL_NAME` and your own model or URL values stay, and `switch` prints the name of every value it removes.
 
