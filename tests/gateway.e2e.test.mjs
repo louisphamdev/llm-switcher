@@ -898,3 +898,47 @@ test('/v1/models windows follow model1M and the entry comes from codex-catalog-t
   const main = await (await fetch(url('/v1/models/gpt-5.6-sol'), { headers: { 'x-llm-profile': 'pub' } })).json();
   assert.equal(main.context_window, 1000000);
 });
+
+// ---- Admin API: stale dashboard writes, control characters, key destination (F06, F33, keeper next-time) ----
+
+test('a dashboard change based on a stale revision is refused with 409 and changes nothing', async () => {
+  const { revision } = await (await fetch(url('/api/status'), { headers: withToken('/api/status', {}) })).json();
+  assert.match(revision, /^[0-9a-f]{16}$/);
+  const first = await post('/api/save-profile', { key: 'rev1', revision, profile: { name: 'Rev', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k' } });
+  assert.equal(first.status, 200);
+  const next = (await first.json()).revision;
+  assert.notEqual(next, revision);
+  const before = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8');
+  const stale = await post('/api/save-profile', { key: 'rev1', revision, profile: { name: 'Stale' } });
+  assert.equal(stale.status, 409);
+  assert.equal(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8'), before);
+  // A caller that sends no revision (the MCP server) is not checked.
+  assert.equal((await post('/api/delete-profile', { key: 'rev1' })).status, 200);
+});
+
+test('save-profile refuses control characters in the name', async () => {
+  const r = await post('/api/save-profile', { key: 'ctl', profile: { name: 'bad\u001b[2J', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k' } });
+  assert.equal(r.status, 400);
+});
+
+test('a kept API key is never pointed at a new baseURL or new endpoints', async () => {
+  const create = await post('/api/save-profile', { key: 'keydest', profile: { name: 'K', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'sk-keydest' } });
+  assert.equal(create.status, 200);
+  try {
+    for (const change of [{ endpoints: { 'openai-chat': 'http://evil.test/v1/chat/completions' } }, { baseURL: 'http://evil.test/v1' }, { baseURL: 'http://evil.test/v1', apiKey: MASKED }]) {
+      const r = await post('/api/save-profile', { key: 'keydest', profile: change });
+      assert.equal(r.status, 400, JSON.stringify(change));
+    }
+    const stored = JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8')).profiles.keydest;
+    assert.equal(stored.baseURL, 'http://127.0.0.1:9/v1');
+    assert.equal(stored.endpoints, undefined);
+    assert.equal(stored.apiKey, 'sk-keydest');
+    // A new key typed together with the new URL is accepted.
+    assert.equal((await post('/api/save-profile', { key: 'keydest', profile: { baseURL: 'http://127.0.0.1:8/v1', apiKey: 'sk-new' } })).status, 200);
+    // The same destination keeps the key without retyping it.
+    assert.equal((await post('/api/save-profile', { key: 'keydest', profile: { name: 'K2', apiKey: MASKED } })).status, 200);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8')).profiles.keydest.apiKey, 'sk-new');
+  } finally {
+    await post('/api/delete-profile', { key: 'keydest' });
+  }
+});

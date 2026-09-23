@@ -887,11 +887,13 @@ async function commit(cfg) {
   const problem = await checkBlindfoldTarget(cfg, PORT);
   if (problem) return { success: false, error: `Not saved: ${problem}` };
   saveConfig(cfg);
+  const revision = configRevision(cfg);
   const st = applyLaunchState(cfg, PORT);
   const removed = st.settings?.removed || [];
   if (removed.length) console.log(`[llm-switcher] settings.json: removed switcher-written values: ${removed.join(', ')}`);
   const bf = await reconcile(cfg);
   return {
+    revision,
     settingsRemoved: removed,
     ...(st.envWriteError ? { envWriteError: st.envWriteError } : {}),
     ...(bf.ok ? {} : { success: false, error: `Saved, but the blindfold interceptor is not in line: ${bf.error}` })
@@ -900,8 +902,14 @@ async function commit(cfg) {
 
 const VALID_MODES = ['hybrid', 'convert', 'direct'];
 
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+
 function validateProfileInput(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return 'Profile must be an object';
+  // These strings reach the terminal through `switch status`; a control character could rewrite it.
+  for (const k of ['name', 'baseURL', 'optimizerURL']) {
+    if (typeof p[k] === 'string' && CONTROL_CHARS.test(p[k])) return `${k} must not contain control characters`;
+  }
   if (p.inFormat && p.inFormat !== 'auto' && !IN_FORMATS.includes(p.inFormat)) return `Invalid inFormat "${p.inFormat}"`;
   if (p.outFormat && !OUT_FORMATS.includes(p.outFormat)) return `Invalid outFormat "${p.outFormat}"`;
   if (p.mode && !VALID_MODES.includes(p.mode)) return `Invalid mode "${p.mode}"`;
@@ -945,6 +953,14 @@ function validateProfileInput(p) {
 // API keys are masked with MASKED_KEY in the UI; if the client sends back the masked value, reuse the stored real key.
 // Only for the stored baseURL: otherwise the masked value would send the real key to any host the caller names.
 const sameBaseURL = (a, b) => String(a || '').replace(/\/+$/, '') === String(b || '').replace(/\/+$/, '');
+// endpoints override baseURL per format, so they are part of where the key goes.
+const sameDestination = (a, b) => sameBaseURL(a.baseURL, b.baseURL) && JSON.stringify(a.endpoints || {}) === JSON.stringify(b.endpoints || {});
+
+// Changes when config.json changes. The dashboard sends it back, so a change made from a stale
+// page is refused instead of overwriting what another tab or the CLI saved.
+function configRevision(cfg) {
+  return crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16);
+}
 
 function resolveApiKey(cfg, profileKey, apiKey, baseURL) {
   if (apiKey !== MASKED_KEY) return apiKey || '';
@@ -1164,6 +1180,7 @@ async function routeApi(req, res, method, pathname) {
       port: PORT,
       activeProfile: cfg.activeProfile || null,
       activeProfiles,
+      revision: configRevision(cfg),
       ...readLaunchFlags(),
       claudeBaseURL: activeProfiles.anthropic ? `http://127.0.0.1:${PORT} (injected via launcher)` : '(none / official)',
       config: redactConfig(cfg)
@@ -1202,6 +1219,9 @@ async function routeConfigApi(res, method, pathname, body) {
   if (!loaded) return;
   // A copy: a refused change must never reach the cached config that other requests read.
   const cfg = structuredClone(loaded);
+  if (typeof body.revision === 'string' && body.revision !== configRevision(loaded)) {
+    return sendJson(res, 409, { error: 'config.json changed since this page loaded it. The page reloads it now; check the change and try again.', revision: configRevision(loaded) });
+  }
 
   // POST /api/switch  { target?, profile? | null, deactivate? }
   if (pathname === '/api/switch') {
@@ -1257,8 +1277,13 @@ async function routeConfigApi(res, method, pathname, body) {
     const existing = hasProfile(cfg, key) ? cfg.profiles[key] : {};
     // Merge so unmanaged UI fields are not lost (e.g. `endpoints`).
     const merged = { ...existing, ...profile };
-    // A payload without apiKey keeps the stored key; only an explicit value replaces it.
-    merged.apiKey = Object.hasOwn(profile, 'apiKey') ? resolveApiKey(cfg, key, profile.apiKey, profile.baseURL) : (existing.apiKey || '');
+    // A payload without apiKey, or with the mask, keeps the stored key, but only for the destination
+    // it was stored with: otherwise one request could send the real key to any host.
+    const keepsKey = !Object.hasOwn(profile, 'apiKey') || profile.apiKey === MASKED_KEY;
+    if (keepsKey && existing.apiKey && !sameDestination(merged, existing)) {
+      return sendJson(res, 400, { error: 'The stored API key is sent only to the baseURL and endpoints it was saved with. Enter the key again to use a new URL.' });
+    }
+    merged.apiKey = keepsKey ? (existing.apiKey || '') : String(profile.apiKey || '');
     for (const k of ['outFormat', 'optimizerURL', 'thinkingMode']) {
       if (Object.hasOwn(profile, k) && !profile[k]) delete merged[k];
     }
@@ -1276,7 +1301,7 @@ async function routeConfigApi(res, method, pathname, body) {
     }
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
-    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg) : (saveConfig(cfg), {});
+    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg) : (saveConfig(cfg), { revision: configRevision(cfg) });
     return sendJson(res, applied.success === false ? 502 : 200, { success: true, ...applied });
   }
 

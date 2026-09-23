@@ -1167,10 +1167,19 @@
       }
     })();
 
+    // A config change carries the revision this page loaded. The gateway answers 409 when another tab
+    // or the CLI saved in the meantime; the page then reloads instead of overwriting that change.
+    const CHANGE_PATHS = new Set(['/api/switch', '/api/toggle', '/api/save-profile', '/api/delete-profile']);
+
     async function api(path, opts = {}) {
       const headers = { ...(opts.headers || {}), 'x-llm-switcher-token': localStorage.getItem(ADMIN_TOKEN_KEY) || '' };
-      const res = await fetch(path, { ...opts, headers });
+      let body = opts.body;
+      if (CHANGE_PATHS.has(path) && typeof body === 'string' && state.revision) {
+        body = JSON.stringify({ ...JSON.parse(body), revision: state.revision });
+      }
+      const res = await fetch(path, { ...opts, headers, body });
       if (res.status === 401) showToast('Not authorized. Open the dashboard with `switch ui`.', true);
+      if (res.status === 409) setTimeout(loadStatus, 0);
       return res;
     }
 
@@ -1361,10 +1370,12 @@
       formDirty = true;
     }
 
-    // The Codex tab only applies to a profile that serves the Responses protocol.
-    // Showing it elsewhere would offer settings that nothing reads.
+    // The Codex tab applies to every profile that can serve the Responses protocol: `responses` and
+    // `auto`. The gateway applies these settings to both, so hiding them would hide live settings.
+    const servesCodex = (format) => format === 'responses' || !format || format === 'auto';
+
     function renderCodexTab(format) {
-      const applies = format === 'responses';
+      const applies = servesCodex(format);
       const btn = document.getElementById('tab-button-codex');
       if (btn) btn.hidden = !applies;
       if (!applies && document.getElementById('tab-codex')?.classList.contains('active')) {
@@ -1402,7 +1413,7 @@
     // resolves, publicModels is the flat list /v1/models serves. Writing only one of
     // them lets the two drift apart.
     function collectCodexValues(profile) {
-      if (profile.inFormat !== 'responses') return;
+      if (!servesCodex(profile.inFormat)) return;
 
       const roles = {};
       const published = [];
@@ -2191,8 +2202,9 @@
 
     async function clearInspectorLogs() {
       try {
-        await api('/api/logs/clear', { method: 'POST' });
+        const res = await api('/api/logs/clear', { method: 'POST' });
         loadInspectorLogs();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         showToast('Logs cleared');
       } catch (err) {
         showToast('Failed to clear logs', true);
