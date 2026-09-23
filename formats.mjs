@@ -451,7 +451,6 @@ function applyAllowedTools(ir, mode, list, nameOf) {
   const names = new Set((Array.isArray(list) ? list : []).map(nameOf).filter(Boolean));
   ir.tools = (ir.tools || []).filter(t => names.has(t.name));
   ir.toolChoice = ir.tools.length ? (mode === 'required' ? 'required' : 'auto') : null;
-  if (!ir.tools.length) delete ir.tools;
 }
 
 function chatToIR(payload) {

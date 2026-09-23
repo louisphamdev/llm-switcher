@@ -779,3 +779,16 @@ test('healAnthropicPayload keeps an unchanged user turn as the same object', () 
   assert.equal(healed.changed, false);
   assert.equal(healed.payload.messages[2], user);
 });
+
+test('allowed_tools that matches no declared tool gives a request without tools, not a crash', () => {
+  const chat = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }],
+    tools: [{ type: 'function', function: { name: 'a', parameters: { type: 'object', properties: {} } } }],
+    tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ type: 'function', function: { name: 'b' } }] } } });
+  const hosted = responsesToIR({ model: 'm', input: 'x', tools: [fn('a')], tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] } });
+  for (const ir of [chat, hosted]) {
+    for (const body of [irToChatBody(ir, 'm'), irToAnthropicBody(ir, 'claude-x'), irToVertexBody(ir, 'gemini-x')]) {
+      assert.equal(body.tools, undefined);
+      assert.equal(body.tool_choice, undefined);
+    }
+  }
+});

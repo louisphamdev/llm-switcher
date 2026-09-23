@@ -248,8 +248,10 @@ const ROUTE_EVIDENCE = {
 
 /** true | false, or null when the dump holds no environment (macOS ps for most processes). */
 export function routeEvidence(name, envDump) {
-  if (!/\s[A-Za-z_][A-Za-z0-9_]*=/.test(envDump)) return null;
-  return ROUTE_EVIDENCE[name].test(envDump);
+  // The shim's own `--config key=value` arguments look like variables; only the rest can be environment.
+  if (ROUTE_EVIDENCE[name].test(envDump)) return true;
+  const rest = envDump.replace(/(^|\s)(--config|-c)\s+\S+/g, ' ');
+  return /\s[A-Za-z_][A-Za-z0-9_]*=/.test(rest) ? false : null;
 }
 
 // `names` are the CLIs whose target is active: a CLI whose target is off uses the official endpoint

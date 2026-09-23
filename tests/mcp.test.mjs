@@ -82,3 +82,10 @@ test('MCP audit never prints the credentials inside a URL', async (t) => {
   assert.match(out, /HTTPS_PROXY=http:\/\/127\.0\.0\.1:1/);
   assert.match(out, /\[ALERT\] ANTHROPIC_BASE_URL="https:\/\/evil\.example\/v1"/);
 });
+
+test('routeEvidence does not take the shim --config arguments for an environment', () => {
+  assert.equal(routeEvidence('codex', '/usr/local/bin/codex --config model_catalog_json=/s/model-catalog.json --config model="gpt-5.5"'), null);
+  assert.equal(routeEvidence('codex', '/usr/local/bin/codex -c model="gpt-5.5" exec'), null);
+  // The override on the command line is proof enough, with or without a readable environment.
+  assert.equal(routeEvidence('codex', '/usr/local/bin/codex --config openai_base_url=http://127.0.0.1:3456/v1 exec'), true);
+});
