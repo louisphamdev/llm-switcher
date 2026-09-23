@@ -1376,7 +1376,8 @@
       const published = Array.isArray(p.publicModels) ? p.publicModels : [];
       CODEX_ROLE_SLOTS.forEach((slot, i) => {
         const input = document.getElementById(`p-public-${slot}`);
-        if (input) input.value = roles[slot] || published[i] || '';
+        // A saved role key wins even when blank; the position fallback is for profiles without codexRoles.
+        if (input) input.value = Object.hasOwn(roles, slot) ? (roles[slot] || '') : (published[i] || '');
       });
 
       const chk = document.getElementById('p-blindfold');

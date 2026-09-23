@@ -435,3 +435,14 @@ test('cleanClaudeSettings removes only switcher-written values and keeps the fil
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The dashboard saves every role key, a blank one as '', and a compacted publicModels list.
+// A blank role means "no override"; it must never pick up another role's name by position.
+test('an explicit blank Codex role stays blank and never shifts the other roles', () => {
+  const uiShaped = { inFormat: 'responses', codexRoles: { main: '', review: 'gpt-review', subagent: 'gpt-sub' }, publicModels: ['gpt-review', 'gpt-sub'] };
+  assert.equal(codexPublicModel(uiShaped, 'main'), '');
+  assert.equal(codexPublicModel(uiShaped, 'review'), 'gpt-review');
+  assert.equal(codexPublicModel(uiShaped, 'subagent'), 'gpt-sub');
+  const e2eFixture = { inFormat: 'responses', publicModels: ['gpt-5.6-sol', 'ag/mock-flash'], codexRoles: { main: 'gpt-5.6-sol', review: '', subagent: '' } };
+  assert.equal(codexPublicModel(e2eFixture, 'review'), '', 'no upstream id reaches the CLI');
+});

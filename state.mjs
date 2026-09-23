@@ -203,8 +203,8 @@ export function model1MForSlot(profile, slot) {
 //
 // `codexRoles` overrides a single role when position is not the wanted pairing.
 export function codexPublicModel(profile, slot) {
-  const explicit = Object.hasOwn(profile?.codexRoles || {}, slot) ? profile.codexRoles[slot] : null;
-  if (explicit) return String(explicit);
+  // A present key wins even when it is '': the dashboard saves a blank role as "no override".
+  if (Object.hasOwn(profile?.codexRoles || {}, slot)) return String(profile.codexRoles[slot] || '');
   // Read by POSITION, without compacting the array. Dropping a blank entry first would
   // move every later role onto the wrong model, and /review would run on the subagent.
   const published = Array.isArray(profile?.publicModels) ? profile.publicModels : [];
