@@ -600,6 +600,56 @@ function cleanSchemaDeep(obj) {
   return res;
 }
 
+// The upstream request of the HTTP and the WS transport: the IR as an upstream body, with tool schemas
+// made acceptable to the target:
+// 1. Strip disallowed keywords ('encrypted', '$schema', 'cache_control')
+// 2. Fix invalid schema values where a property has a string value "object" instead of a valid schema object
+// 3. For ag/* targets (Gemini behind 9Router): rewrite to the strict Schema subset
+function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req) {
+  const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
+  if (upBody?.tools && Array.isArray(upBody.tools)) {
+    upBody.tools = cleanSchemaDeep(upBody.tools);
+    if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
+      upBody.tools = geminiSafeTools(upBody.tools);
+    }
+  }
+  const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
+  return { url, headers, upBody };
+}
+
+// Feeds upstream stream events to a client renderer until the stream ends, fails or is aborted.
+// Returns the stream error, or null. `sink` is the client stream whose backpressure it waits for.
+async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal, sink, tag }) {
+  let streamError = null;
+  let events = 0;
+  try {
+    for await (const parsed of readUpstreamPayloads(upstreamRes)) {
+      events++;
+      const ev = normalize(parsed);
+      col.add(ev);
+      if (ev.error) {
+        streamError = ev.error;
+        break;
+      }
+      for (const t of ev.think) renderer.think(t.text, t.sig);
+      if (ev.sig) renderer.think('', ev.sig);
+      for (const t of ev.text) splitter.push(t);
+      if (ev.tools.length) {
+        splitter.flush();
+        for (const tc of ev.tools) renderer.tool(tc);
+      }
+      await drained(sink);
+    }
+    if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
+  } catch (streamErr) {
+    if (!signal.aborted) {
+      console.error(`[${tag}] Stream error:`, streamErr.message);
+      streamError = streamErr.message || 'stream interrupted';
+    }
+  }
+  return streamError;
+}
+
 // ----------------------------------------------------
 // LLM Switcher generic pipeline: client --parse--> IR --emit--> upstream
 // Client (input) formats : anthropic | openai-chat | responses (Codex) | vertex
@@ -682,18 +732,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       return;
     }
 
-    const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
-    // Clean and fix tool schemas for Gemini / 9router compatibility:
-    // 1. Strip disallowed keywords ('encrypted', '$schema', 'cache_control')
-    // 2. Fix invalid schema values where a property has a string value "object" instead of a valid schema object
-    // 3. For ag/* targets (Gemini behind 9Router): rewrite to the strict Schema subset
-    if (upBody?.tools && Array.isArray(upBody.tools)) {
-      upBody.tools = cleanSchemaDeep(upBody.tools);
-      if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
-        upBody.tools = geminiSafeTools(upBody.tools);
-      }
-    }
-    const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
     let upstreamRes;
@@ -757,33 +796,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta });
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
-    let streamError = null;
-    let events = 0;
-    try {
-      for await (const parsed of readUpstreamPayloads(upstreamRes)) {
-        events++;
-        const ev = normalize(parsed);
-        col.add(ev);
-        if (ev.error) {
-          streamError = ev.error;
-          break;
-        }
-        for (const t of ev.think) renderer.think(t.text, t.sig);
-        if (ev.sig) renderer.think('', ev.sig);
-        for (const t of ev.text) splitter.push(t);
-        if (ev.tools.length) {
-          splitter.flush();
-          for (const tc of ev.tools) renderer.tool(tc);
-        }
-        await drained(res);
-      }
-      if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
-    } catch (streamErr) {
-      if (!ac.signal.aborted) {
-        console.error(`[${profileKey}] Stream error:`, streamErr.message);
-        streamError = streamErr.message || 'stream interrupted';
-      }
-    }
+    const streamError = await pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal: ac.signal, sink: res, tag: profileKey });
 
     if (ac.signal.aborted) {
       return log({ status: 499, error: 'client disconnected mid-stream', responsePreview: col.text.join('').slice(0, 300) });
@@ -1440,14 +1453,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
 
   try {
-    const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
-    if (upBody?.tools && Array.isArray(upBody.tools)) {
-      upBody.tools = cleanSchemaDeep(upBody.tools);
-      if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
-        upBody.tools = geminiSafeTools(upBody.tools);
-      }
-    }
-    const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, true, req);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
 
     let upstreamRes;
@@ -1478,34 +1484,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
 
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
-    let streamError = null;
-    let events = 0;
-
-    try {
-      for await (const parsed of readUpstreamPayloads(upstreamRes)) {
-        events++;
-        const ev = normalize(parsed);
-        col.add(ev);
-        if (ev.error) {
-          streamError = ev.error;
-          break;
-        }
-        for (const t of ev.think) renderer.think(t.text, t.sig);
-        if (ev.sig) renderer.think('', ev.sig);
-        for (const t of ev.text) splitter.push(t);
-        if (ev.tools.length) {
-          splitter.flush();
-          for (const tc of ev.tools) renderer.tool(tc);
-        }
-        await drained(socket);
-      }
-      if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
-    } catch (streamErr) {
-      if (!ac.signal.aborted) {
-        console.error(`[${profileKey}:ws] Stream error:`, streamErr.message);
-        streamError = streamErr.message || 'stream interrupted';
-      }
-    }
+    const streamError = await pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal: ac.signal, sink: socket, tag: `${profileKey}:ws` });
 
     if (ac.signal.aborted) {
       return log({ status: 499, error: 'client disconnected mid-stream', responsePreview: col.text.join('').slice(0, 300) });
@@ -1519,7 +1498,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     }
     log({
       status: streamError ? 502 : 200, stream: true,
-      ...(streamError ? { error: streamError } : {}),
+      ...(streamError ? { error: String(streamError).slice(0, 300) } : {}),
       tokens: { prompt: col.prompt, completion },
       thinkingChars: col.think.join('').length,
       responsePreview: col.text.join('').slice(0, 300)
