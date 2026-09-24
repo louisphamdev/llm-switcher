@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.4
+## Thay đổi trong bản 1.1.5
+
+- **Bảo mật contract lab.** Việc che giờ dùng allowlist. Mọi giá trị string đều bị che, trừ các giá trị enum mà intact đọc. Bản 1.1.4 che theo danh sách key nội dung và bỏ sót 16 field (trích dẫn, tiêu đề tài liệu và trang web, câu truy vấn web search, token logprobs, tên và URI file, stop sequence, tên người tham gia, thông báo lỗi, mô tả tool).
+
+### Thay đổi trong bản 1.1.4
 
 - **Bảo mật contract lab.** Mẫu mà gateway gửi lên intact không chứa nội dung của client. Prompt, câu trả lời, tham số và kết quả của tool, file và user id bị che ngay trên máy trước khi gửi. Các field mà intact cần để phân tích được giữ nguyên.
 
@@ -556,7 +560,7 @@ trong `PATH`.
 
 Contract lab tìm các field mà converter làm mất. Mặc định tính năng này tắt.
 
-Trước khi gửi mẫu, gateway che nội dung của client: prompt, câu trả lời, system text, thinking, tham số và kết quả của tool, file, ảnh và user id đều thành chuỗi `x` cùng độ dài. Tên key, type, role, tên model, tên và schema của tool, số và tên event được giữ nguyên, để intact phân tích được hình dạng.
+Trước khi gửi mẫu, gateway che mọi giá trị string bằng chuỗi `x` cùng độ dài. Chỉ các giá trị enum ngắn mà intact đọc được giữ nguyên: `type`, `role`, `object`, `model`, `status`, `event`, `finish_reason` và `stop_reason`. Số, flag, tên event SSE và tên key của API cũng được giữ. Trong dữ liệu người dùng (tham số tool, input của tool, `metadata`), tên key cũng bị che. intact chỉ lưu độ dài của các string khác, nên phân tích không mất gì.
 
 - Đặt `contractLab: {url, apiKey, enabled}` trong `config.json`. Nếu `enabled` là `true`, gateway gửi một phần các lượt trao đổi hoàn chỉnh lên intact.
 - `switch contract-probe [--model m]` gửi sáu request thử cho mỗi model và mỗi format qua gateway.

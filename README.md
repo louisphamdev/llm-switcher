@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.4
+## Changes in 1.1.5
+
+- **Contract lab privacy.** Masking now uses an allowlist. Every string value is masked except the enum values that intact reads. 1.1.4 masked a list of content keys and missed 16 fields (citations, document and web titles, web search queries, logprobs tokens, file names and URIs, stop sequences, participant names, error messages, tool descriptions).
+
+### Changes in 1.1.4
 
 - **Contract lab privacy.** A sample that the gateway sends to intact carries no client content. Prompts, answers, tool arguments and results, files and user ids are masked on this machine before the upload. The fields that intact needs for analysis stay.
 
@@ -556,7 +560,7 @@ re-opened from a shell where the shim is on `PATH`.
 
 The contract lab finds fields that the converter loses. It is off by default.
 
-Before it sends a sample, the gateway masks the content of the client: prompts, answers, system text, thinking, tool arguments and results, files, images and user ids become `x` of the same length. Keys, types, roles, model names, tool names and schemas, numbers and event names stay, so intact can analyse the shape.
+Before it sends a sample, the gateway masks every string value with `x` of the same length. Only the short enum values that intact reads stay: `type`, `role`, `object`, `model`, `status`, `event`, `finish_reason` and `stop_reason`. Numbers, flags, SSE event names and the keys of the API also stay. Inside user data (tool arguments, tool input, `metadata`) the keys are masked too. intact keeps only the length of any other string, so the analysis loses nothing.
 
 - Set `contractLab: {url, apiKey, enabled}` in `config.json`. If `enabled` is `true`, the gateway sends a sample of complete exchanges to intact.
 - `switch contract-probe [--model m]` sends six test requests per model and format through the gateway.

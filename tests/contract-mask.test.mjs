@@ -6,8 +6,8 @@ const SECRET = 'SECRET-PII-marker';
 const KEEP = 'keep-model-name';
 const bytes = (s) => Buffer.byteLength(s);
 
-// Every body puts SECRET in each place a client writes its own content, and KEEP in fields that
-// analysis needs. After masking, SECRET must be gone and KEEP must stay.
+// Every body puts SECRET in each place a client writes its own content, and KEEP in the model name,
+// an enum value that analysis needs. After masking, SECRET must be gone and KEEP must stay.
 const bodies = {
   anthropic: {
     model: KEEP, max_tokens: 64, system: [{ type: 'text', text: `sys ${SECRET}` }],
@@ -56,7 +56,7 @@ for (const [name, body] of Object.entries(bodies)) {
     assert.ok(!out.includes(SECRET), `${name} leaks content: ${out}`);
     const parsed = JSON.parse(out);
     if (body.model) assert.equal(parsed.model, KEEP);
-    assert.ok(out.includes('get_weather'), 'tool names stay');
+    assert.ok(!out.includes('get_weather'), 'tool names are not enum values: masked');
     if (raw.includes('"type":')) assert.ok(out.includes('"type":'), 'types stay');
   });
 }
@@ -67,11 +67,12 @@ test('masking keeps the byte length of every masked string', () => {
   assert.match(out.messages[0].content, /^x+$/);
 });
 
-test('a JSON string argument keeps its keys and masks its values', () => {
+test('a JSON string argument keeps its shape and masks its keys and values', () => {
   const out = JSON.parse(maskHalf(JSON.stringify(bodies.openaiChat)));
   const args = JSON.parse(out.messages[2].tool_calls[0].function.arguments);
-  assert.deepEqual(Object.keys(args), ['city']);
-  assert.match(args.city, /^x+$/);
+  assert.equal(Object.keys(args).length, 1);
+  assert.ok(!('city' in args), 'keys of user data are masked: the reducer collapses them to {*}');
+  assert.match(Object.values(args)[0], /^x+$/);
 });
 
 test('an SSE stream masks every data line and keeps event names', () => {

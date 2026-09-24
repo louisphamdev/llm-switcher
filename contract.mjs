@@ -62,43 +62,36 @@ export function switcherVersion() {
 
 /** Copies what the gateway writes to the client. Past the cap the side is dropped, not cut. */
 // ---------------- masking of client content ----------------
-// A half leaves this machine. The client's own content (prompts, answers, tool arguments and results,
-// files, user ids) is replaced by "x" of the same byte length; everything intact needs to analyse the
-// shape (keys, types, roles, models, tool names, numbers, flags, event names) stays as sent.
-const TEXT_KEYS = new Set(['text', 'content', 'thinking', 'system', 'instructions', 'delta', 'reasoning_content',
-  'refusal', 'output', 'input', 'data', 'url', 'file_data', 'encrypted_content', 'user', 'user_id', 'prompt',
-  'summary', 'output_text', 'partial_json', 'arguments', 'args']);
+// A half leaves this machine, so every string value is masked with "x" of the same byte length,
+// except the enum values that intact's reducer reads: the same key list, value shape and exclusions as
+// enumLeafNames / validEnumValue in intact internal/contract/reduce.go. The reducer keeps only the
+// length and a hash of any other string, so masking it loses nothing for the analysis. An allowlist,
+// not a list of content keys: a new content field in any API is masked by default.
+const ENUM_KEYS = new Set(['type', 'role', 'object', 'finish_reason', 'stop_reason', 'status', 'event', 'model']);
+const ENUM_VALUE_RE = /^[A-Za-z0-9_.:/-]{1,64}$/;
+// Under these the reducer collapses keys to {*}: they hold user data, so their keys are masked too.
+const DATA_PARENTS = new Set(['args', 'arguments', 'metadata', 'client_metadata', 'extra_body', 'headers']);
 const SSE_EVENT_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 const maskString = (s) => 'x'.repeat(Buffer.byteLength(s));
 
-// Inside a payload (tool arguments, tool input, a function response) every value belongs to the client.
-function maskPayload(v) {
-  if (typeof v === 'string') return maskString(v);
-  if (Array.isArray(v)) return v.map(maskPayload);
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, c]) => [k, maskPayload(c)]));
-  return v;
-}
-
-// A string that holds JSON (tool arguments) keeps its keys, so intact still sees the nested shape.
-function maskJsonString(s) {
-  const t = s.trim();
-  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-    try { return JSON.stringify(maskPayload(JSON.parse(t))); } catch {}
+// ctx.data: inside user data (a data parent, a JSON string, a tool's input) — no enum kept, keys masked.
+function maskValue(v, key = '', ctx = { data: false }) {
+  if (typeof v === 'string') {
+    if (!ctx.data && ENUM_KEYS.has(key) && ENUM_VALUE_RE.test(v)) return v;
+    const t = v.trim();
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try { return JSON.stringify(maskValue(JSON.parse(t), key, { data: true })); } catch {}
+    }
+    return maskString(v);
   }
-  return maskString(s);
-}
-
-function maskValue(v, parentKey = '') {
-  if (Array.isArray(v)) return v.map((c) => maskValue(c, parentKey));
+  if (Array.isArray(v)) return v.map((c) => maskValue(c, key, ctx));
   if (!v || typeof v !== 'object') return v;
   const out = {};
+  let i = 0;
   for (const [k, c] of Object.entries(v)) {
-    const payload = k === 'args' || k === 'arguments' || (k === 'input' && c && typeof c === 'object' && !Array.isArray(c))
-      || (k === 'response' && parentKey === 'functionResponse');
-    if (payload) out[k] = typeof c === 'string' ? maskJsonString(c) : maskPayload(c);
-    else if (typeof c === 'string' && TEXT_KEYS.has(k)) out[k] = (k === 'partial_json') ? maskJsonString(c) : maskString(c);
-    else out[k] = maskValue(c, k);
+    const data = ctx.data || DATA_PARENTS.has(k) || (k === 'input' && c && typeof c === 'object' && !Array.isArray(c));
+    out[ctx.data ? `k${i++}` : k] = maskValue(c, k, { data });
   }
   return out;
 }
@@ -109,18 +102,20 @@ export function maskHalf(text) {
   try { return JSON.stringify(maskValue(JSON.parse(text))); } catch {}
   const lines = text.split('\n');
   if (!lines.some((l) => l.startsWith('data:'))) return maskString(text);
-  return lines.map((line) => {
-    if (line === '' || line === '\r' || line.startsWith(':')) return line;
+  return lines.map((raw) => {
+    const cr = raw.endsWith('\r') ? '\r' : '';
+    const line = cr ? raw.slice(0, -1) : raw;
+    if (line === '' || line.startsWith(':')) return raw;
     if (line.startsWith('event:')) {
       const name = line.slice(6).trim();
-      return SSE_EVENT_RE.test(name) ? line : `event: ${maskString(name)}`;
+      return (SSE_EVENT_RE.test(name) ? line : `event: ${maskString(name)}`) + cr;
     }
     if (line.startsWith('data:')) {
       const data = line.slice(5).trim();
-      if (data === '[DONE]') return line;
-      try { return `data: ${JSON.stringify(maskValue(JSON.parse(data)))}`; } catch { return `data: ${maskString(data)}`; }
+      if (data === '[DONE]') return raw;
+      try { return `data: ${JSON.stringify(maskValue(JSON.parse(data)))}${cr}`; } catch { return `data: ${maskString(data)}${cr}`; }
     }
-    return maskString(line);
+    return maskString(line) + cr;
   }).join('\n');
 }
 
