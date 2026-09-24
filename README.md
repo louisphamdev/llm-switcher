@@ -193,7 +193,7 @@ flowchart LR
 
 ## Changes in 1.1.10
 
-- **README.** A new section, "Self-improvement with intact", explains how this gateway and intact correct their own faults. intact is now public and on npm as `intact-proxy`.
+- **README.** A new section, "Self-improvement with intact", explains how this gateway and intact correct their own faults. intact is now public and on npm as `intact-gateway`.
 
 ### Changes in 1.1.9
 

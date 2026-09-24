@@ -193,7 +193,7 @@ flowchart LR
 
 ## Thay đổi trong bản 1.1.10
 
-- **README.** Mục mới "Tự cải thiện cùng intact" giải thích cách gateway này và intact tự sửa lỗi của nhau. intact giờ đã public và có trên npm với tên `intact-proxy`.
+- **README.** Mục mới "Tự cải thiện cùng intact" giải thích cách gateway này và intact tự sửa lỗi của nhau. intact giờ đã public và có trên npm với tên `intact-gateway`.
 
 ### Thay đổi trong bản 1.1.9
 
