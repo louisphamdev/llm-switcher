@@ -14,7 +14,14 @@
 set -euo pipefail
 
 HOST="${1:-chatgpt.com}"
-OUT_DIR="${2:-$(cd "$(dirname "$0")" && pwd)/certs}"
+# The default must match the folder the gateway reads (state.mjs paths.blindfoldCA): an npm
+# install keeps its data in ~/.llm-switcher, a git checkout next to the code.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -n "${LLM_SWITCHER_BLINDFOLD_CERTS:-}" ]; then DEFAULT_OUT="$LLM_SWITCHER_BLINDFOLD_CERTS"
+elif [ -n "${LLM_SWITCHER_HOME:-}" ]; then DEFAULT_OUT="$LLM_SWITCHER_HOME/blindfold/certs"
+elif [ -d "$ROOT/.git" ]; then DEFAULT_OUT="$ROOT/blindfold/certs"
+else DEFAULT_OUT="$HOME/.llm-switcher/blindfold/certs"; fi
+OUT_DIR="${2:-$DEFAULT_OUT}"
 CA_DAYS=3650
 LEAF_DAYS=825
 

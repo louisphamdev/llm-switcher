@@ -235,19 +235,18 @@ Bản checkout lưu dữ liệu cạnh mã nguồn như trước. Muốn dùng t
 
 Điền URL và API key của các nhà cung cấp vào `config.json`.
 
-Bản cài bằng npm chạy lệnh `switch <lệnh>`. Bản checkout chạy `node switch.mjs <lệnh>` hoặc thêm thư mục checkout vào `PATH`.
+**Thư mục dữ liệu** là `~/.llm-switcher` với bản cài bằng npm, và là thư mục checkout với bản git clone. Các ví dụ bên dưới dùng bản cài bằng npm. Với bản checkout, chạy `node switch.mjs <lệnh>` thay cho `switch <lệnh>`, hoặc thêm thư mục checkout vào `PATH`.
 
 ### 3. Khởi động Gateway
 ```bash
 # Bật gateway chạy ngầm:
-node switch.mjs on
+switch on
 
-# Hoặc chạy trực tiếp trên terminal:
-node proxy.mjs
+# Hoặc chạy trực tiếp trên terminal (bản cài bằng npm):
+node "$(npm root -g)/llm-switcher/proxy.mjs"
 ```
 
-Repo có sẵn hai launcher cho cùng một script: `switch` cho Linux và macOS, `switch.cmd`
-cho Windows. Thêm thư mục repo vào PATH là `switch <lệnh>` chạy giống nhau trên cả ba.
+`switch <lệnh>` chạy giống nhau trên Linux, macOS và Windows. Bản checkout có sẵn hai launcher: `switch` cho Linux và macOS, `switch.cmd` cho Windows.
 Khác biệt giữa các nền tảng, và hai tính năng không chạy ở mọi nơi, nằm trong
 [📖 `docs/cross-platform.md`](docs/cross-platform.md).
 
@@ -259,22 +258,24 @@ Mở Bảng điều khiển Web Dashboard tại: **[http://127.0.0.1:3456/ui](ht
 
 ### Bộ nạp Biến Môi trường Toàn năng (`env.cmd` / `env.sh`)
 
-Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh file nạp môi trường tương ứng:
+Mỗi khi bạn chuyển đổi profile, LLM Switcher sinh file nạp môi trường trong thư mục dữ liệu:
 
 - **Trên Windows (CMD / PowerShell wrapper):**
   ```cmd
-  call "path\to\llm-switcher\env.cmd"
+  call "%USERPROFILE%\.llm-switcher\env.cmd"
   ```
 - **Trên macOS / Linux (Bash / Zsh):**
   ```bash
-  source "path/to/llm-switcher/env.sh"
+  source ~/.llm-switcher/env.sh
   ```
+
+Với bản checkout, dùng các file này trong thư mục checkout.
 
 ---
 
 ### Cấu hình cho Claude Code (Windows)
 
-1. Tạo file wrapper trong thư mục PATH (ví dụ `cc-switch.cmd`):
+1. Với bản cài bằng npm, `switch` đã có sẵn trong `PATH`. Với bản checkout, tạo file wrapper trong `PATH` (ví dụ `cc-switch.cmd`):
    ```cmd
    @echo off
    node "path\to\llm-switcher\switch.mjs" %*
@@ -283,18 +284,18 @@ Mỗi khi bạn chuyển đổi profile, LLM Switcher sẽ tự động sinh fil
 2. Thêm đoạn mã sau vào wrapper chính của Claude Code (`claude.cmd` trong thư mục global npm):
    ```cmd
    SETLOCAL EnableDelayedExpansion
-   IF EXIST "path\to\llm-switcher\active.flag" (
+   IF EXIST "%USERPROFILE%\.llm-switcher\active.flag" (
      SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
      SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
    )
-   IF EXIST "path\to\llm-switcher\1m.flag" (
-     SET /P M1M=<"path\to\llm-switcher\1m.flag"
+   IF EXIST "%USERPROFILE%\.llm-switcher\1m.flag" (
+     SET /P M1M=<"%USERPROFILE%\.llm-switcher\1m.flag"
      IF "!M1M!"=="" SET "M1M=opus[1m]"
      SET "ANTHROPIC_MODEL=!M1M!"
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
-   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "path\to\llm-switcher\env.cmd"` rồi `claude %*`. Chỉ `env.cmd` / `env.sh` mới có các biến `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` theo từng tier.
+   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "%USERPROFILE%\.llm-switcher\env.cmd"` rồi `claude %*`. Với bản checkout, thay `%USERPROFILE%\.llm-switcher` bằng thư mục checkout. Chỉ `env.cmd` / `env.sh` mới có các biến `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` theo từng tier.
 
 ---
 
@@ -337,7 +338,7 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold xóa dòng đó. Codex giữ nguyên endpoint chính thức, switcher chặn ở tầng mạng. Không cần quyền admin, không cài chứng chỉ vào system trust store, không sửa `~/.codex/config.toml`.
 
 ```bash
-bash blindfold/make-certs.sh chatgpt.com   # chạy một lần
+bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh" chatgpt.com   # chạy một lần; bản checkout chạy blindfold/make-certs.sh
 # rồi đặt "blindfold": true trong profile Codex
 switch codex <profile>                     # gateway khởi động interceptor
 ```
@@ -414,12 +415,12 @@ Một server Model Context Protocol (MCP) chạy qua `stdio` cực nhẹ (Zero-d
 
 LƯU Ý: `switcher_recent_logs` trả 150 ký tự đầu của mỗi prompt gần đây, từ mọi client đã dùng gateway. Agent gọi tool này đọc được chúng.
 
-Thêm vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_config.json`, hoặc Cursor):
+Thêm server vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_config.json`, hoặc Cursor). Chạy `npm root -g` để biết thư mục chứa `llm-switcher/mcp.mjs`. Với bản checkout, dùng `mcp.mjs` trong thư mục checkout.
 ```json
 "mcp": {
   "llm-switcher": {
     "type": "local",
-    "command": ["node", "path/to/llm-switcher/mcp.mjs"],
+    "command": ["node", "/path/from/npm-root-g/llm-switcher/mcp.mjs"],
     "enabled": true
   }
 }
@@ -546,13 +547,14 @@ Contract lab tìm các field mà converter làm mất. Mặc định tính năng
 
 | Tuỳ chọn | Mô tả |
 |---|---|
-| `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài repo (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
+| `LLM_SWITCHER_HOME=/path` | Dùng thư mục này làm thư mục dữ liệu (config, admin token, file launcher, log) cho cả bản npm lẫn bản checkout. |
+| `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài thư mục dữ liệu (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe (ưu tiên: flag > env > `config.port`). |
 | Header `x-llm-profile: <key>` (tên khác `x-profile`) hoặc `?profile=<key>` | Định tuyến riêng 1 request qua profile chỉ định. Key không tồn tại trả HTTP 400 thay vì âm thầm dùng profile khác. |
 | `profile.thinkingMode` | `auto` (mặc định, cho gateway như 9Router): phục hồi thinking bị xoá, chèn hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
 | `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |
 | `profile.endpoints` | Ghi đè URL upstream theo từng format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
-| `LLM_SWITCHER_STATE_DIR` | Chuyển file launcher và log ra khỏi thư mục checkout. Test dùng biến này; shim đọc thư mục đã đặt lúc cài shim. |
+| `LLM_SWITCHER_STATE_DIR` | Chuyển file launcher và log ra khỏi thư mục dữ liệu. Test dùng biến này; shim đọc thư mục đã đặt lúc cài shim. |
 | `CLAUDE_CONFIG_DIR` | Được tôn trọng khi tìm `settings.json` của Claude Code. |
 
 ## Mô hình Bảo mật

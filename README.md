@@ -235,21 +235,18 @@ A checkout keeps its data next to the code, as before. To use another folder in 
 
 Edit `config.json` with your provider base URLs and API keys.
 
-With the npm install, run `switch <command>`. With a checkout, run `node switch.mjs <command>` or put the checkout on `PATH`.
+The **data folder** is `~/.llm-switcher` for an npm install and the checkout folder for a git clone. The examples below use the npm install. For a checkout, run `node switch.mjs <command>` instead of `switch <command>`, or put the checkout folder on `PATH`.
 
 ### 3. Start the Gateway
 ```bash
-# Start in foreground or background
-node switch.mjs on
+# Start the gateway in the background:
+switch on
 
-# Or run directly:
-node proxy.mjs
+# Or run it in the foreground (npm install):
+node "$(npm root -g)/llm-switcher/proxy.mjs"
 ```
 
-The repository ships two launchers for the same script: `switch` for Linux and macOS,
-`switch.cmd` for Windows. Put the repository directory on PATH and `switch <command>`
-works the same on all three. Platform differences, and the two features that are not
-available everywhere, are in [📖 `docs/cross-platform.md`](docs/cross-platform.md).
+`switch <command>` works the same on Linux, macOS and Windows. A checkout has its own launchers: `switch` for Linux and macOS, `switch.cmd` for Windows. Platform differences, and the two features that are not available everywhere, are in [📖 `docs/cross-platform.md`](docs/cross-platform.md).
 
 Open the Web Dashboard at: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
 
@@ -259,22 +256,24 @@ Open the Web Dashboard at: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui
 
 ### Universal Environment Loader (`env.cmd` / `env.sh`)
 
-Every time you switch profiles, LLM Switcher writes ready-to-use environment loaders:
+Every time you switch profiles, LLM Switcher writes ready-to-use environment loaders into the data folder:
 
 - **Windows (Command Prompt / PowerShell wrapper):**
   ```cmd
-  call "path\to\llm-switcher\env.cmd"
+  call "%USERPROFILE%\.llm-switcher\env.cmd"
   ```
 - **macOS / Linux (Bash / Zsh):**
   ```bash
-  source "path/to/llm-switcher/env.sh"
+  source ~/.llm-switcher/env.sh
   ```
+
+For a checkout, use the same files in the checkout folder.
 
 ---
 
 ### Claude Code Setup (Windows)
 
-1. Create a quick wrapper in your PATH (e.g. `cc-switch.cmd`):
+1. With the npm install, `switch` is already on `PATH`. With a checkout, create a wrapper on your `PATH` (for example `cc-switch.cmd`):
    ```cmd
    @echo off
    node "path\to\llm-switcher\switch.mjs" %*
@@ -283,18 +282,18 @@ Every time you switch profiles, LLM Switcher writes ready-to-use environment loa
 2. Patch your global Claude Code launcher (`claude.cmd` in your npm global directory):
    ```cmd
    SETLOCAL EnableDelayedExpansion
-   IF EXIST "path\to\llm-switcher\active.flag" (
+   IF EXIST "%USERPROFILE%\.llm-switcher\active.flag" (
      SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
      SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
    )
-   IF EXIST "path\to\llm-switcher\1m.flag" (
-     SET /P M1M=<"path\to\llm-switcher\1m.flag"
+   IF EXIST "%USERPROFILE%\.llm-switcher\1m.flag" (
+     SET /P M1M=<"%USERPROFILE%\.llm-switcher\1m.flag"
      IF "!M1M!"=="" SET "M1M=opus[1m]"
      SET "ANTHROPIC_MODEL=!M1M!"
      SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
    )
    ```
-   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "path\to\llm-switcher\env.cmd"` and then `claude %*`. Only `env.cmd` / `env.sh` carry the per-tier `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` variables.
+   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "%USERPROFILE%\.llm-switcher\env.cmd"` and then `claude %*`. For a checkout, replace `%USERPROFILE%\.llm-switcher` with the checkout folder. Only `env.cmd` / `env.sh` carry the per-tier `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` variables.
 
 ---
 
@@ -337,7 +336,7 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold mode removes that line. Codex keeps its official endpoint, and the switcher intercepts the network hop instead. It needs no administrator rights, no certificate in a system trust store, and no change to `~/.codex/config.toml`.
 
 ```bash
-bash blindfold/make-certs.sh chatgpt.com   # once
+bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh" chatgpt.com   # once; a checkout runs blindfold/make-certs.sh
 # then set "blindfold": true in the Codex profile
 switch codex <profile>                     # the gateway starts the interceptor
 ```
@@ -414,12 +413,12 @@ A zero-dependency Model Context Protocol (MCP) server communicating over `stdio`
 
 NOTE: `switcher_recent_logs` returns the first 150 characters of each recent prompt, from every client that used the gateway. The agent that calls the tool can read them.
 
-Add to your MCP configuration (e.g. `opencode.jsonc`, `claude_desktop_config.json`, or Cursor):
+Add the server to your MCP configuration (for example `opencode.jsonc`, `claude_desktop_config.json`, or Cursor). Run `npm root -g` to get the folder that holds `llm-switcher/mcp.mjs`. For a checkout, use the `mcp.mjs` in the checkout folder.
 ```json
 "mcp": {
   "llm-switcher": {
     "type": "local",
-    "command": ["node", "path/to/llm-switcher/mcp.mjs"],
+    "command": ["node", "/path/from/npm-root-g/llm-switcher/mcp.mjs"],
     "enabled": true
   }
 }
@@ -548,14 +547,15 @@ The contract lab finds fields that the converter loses. It is off by default.
 
 | Option | Description |
 |---|---|
-| `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the repo (the proxy, `switch` and `mcp.mjs` all honour it). |
+| `LLM_SWITCHER_HOME=/path` | Use this folder as the data folder (config, admin token, launch files, logs) for an npm install or a checkout. |
+| `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the data folder (the proxy, `switch` and `mcp.mjs` all honour it). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port (priority: flag > env > `config.port`). |
 | `x-llm-profile: <key>` header (alias `x-profile`) or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
 | `profile.thinkingMode` | `auto` (default, for gateways like 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
 | `profile.endpoints` | Override upstream URLs per format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
 | `CLAUDE_CONFIG_DIR` | Respected when locating Claude Code's `settings.json`. |
-| `LLM_SWITCHER_STATE_DIR` | Move the launch files and the logs out of the checkout. The tests use it; the shims read the directory that was set when they were installed. |
+| `LLM_SWITCHER_STATE_DIR` | Move the launch files and the logs out of the data folder. The tests use it; the shims read the directory that was set when they were installed. |
 
 ## Security Model
 
