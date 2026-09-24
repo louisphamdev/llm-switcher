@@ -253,22 +253,24 @@ function smartDelta(choice) {
 const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
 
 function sanitizeJsonSchema(schema) {
-  if (!schema) return { type: 'object', properties: {} };
-  if (typeof schema === 'string') {
-    return schema;
-  }
-  if (typeof schema !== 'object') return schema;
-  if (Array.isArray(schema)) return schema.map(sanitizeJsonSchema);
+  if (schema === null || schema === undefined) return { type: 'object', properties: {} };
+  return sanitizeSchemaNode(schema);
+}
+
+// Inside a schema 0, false, "" and null are values (minimum: 0, additionalProperties: false), not a missing schema.
+function sanitizeSchemaNode(schema) {
+  if (schema === null || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaNode);
   const clean = {};
   for (const [k, v] of Object.entries(schema)) {
     if (k === '$schema' || k === 'cache_control' || k === 'encrypted') continue;
     if (k === 'format' && ['uri', 'uri-reference'].includes(v)) continue;
     // A name map: each value is a schema, the map itself is not. A parameter may be named "properties".
     if (SCHEMA_MAPS.has(k) && v && typeof v === 'object' && !Array.isArray(v)) {
-      clean[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, sanitizeJsonSchema(sub)]));
+      clean[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, sanitizeSchemaNode(sub)]));
       continue;
     }
-    clean[k] = sanitizeJsonSchema(v);
+    clean[k] = sanitizeSchemaNode(v);
   }
   if (!clean.type && clean.properties) {
     clean.type = 'object';

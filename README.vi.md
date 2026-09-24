@@ -191,7 +191,12 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.7
+## Thay đổi trong bản 1.1.8
+
+- **Tool của Claude Code.** Giá trị `0`, `false`, `""` hoặc `null` trong schema của tool (ví dụ `minimum: 0`) bị đổi thành schema object rỗng. Gemini từ chối mọi request của Claude Code với HTTP 400 "Starting an object on a scalar field". Giờ các giá trị này được giữ nguyên.
+- **Thứ tự PATH của shim.** Nếu thư mục shim có trong `PATH` nhưng đứng sau `claude` hoặc `codex` thật, `switch shim status` và `switch doctor` giờ chỉ cách sửa: đặt dòng export ở cuối các file cấu hình shell.
+
+### Thay đổi trong bản 1.1.7
 
 - **Tool của Codex.** Khi có `publicModels`, Codex mất hết tool và dừng sau một câu trả lời. Model catalog chép metadata của một model OpenAI thật, và metadata này đưa Codex sang dạng "Responses Lite". Giờ catalog giữ Codex ở chế độ tool trực tiếp, và gateway cũng đọc tool gửi đến dưới dạng input item `additional_tools`.
 

@@ -233,6 +233,15 @@ export function suggestedRcFiles(platform = process.platform) {
   return [path.join(home, '.profile')];
 }
 
+// The shim is on PATH but behind the real binary: a line that runs later prepends another directory
+// (npm-global, Homebrew). Login shells read the profile file, interactive shells the rc file.
+export function pathOrderHint(platform = process.platform) {
+  const files = suggestedRcFiles(platform);
+  if (!files.length) return [`Run this command, then open a new terminal: ${pathExportLine(platform)}`];
+  return [`Put this line LAST in ${files.join(' and ')}, after every other PATH line, then open a new terminal:`,
+    `    ${pathExportLine(platform)}`];
+}
+
 /**
  * Check whether running CLI processes have the gateway env.
  * This is the hardest failure to spot: a `claude` session opened BEFORE the gateway

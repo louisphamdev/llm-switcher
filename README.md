@@ -191,7 +191,12 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.7
+## Changes in 1.1.8
+
+- **Claude Code tools.** A tool schema value of `0`, `false`, `""` or `null` (for example `minimum: 0`) became an empty object schema. Gemini refused every Claude Code request with HTTP 400 "Starting an object on a scalar field". These values now stay as they are.
+- **Shim PATH order.** If the shim folder is on `PATH` but after the real `claude` or `codex`, `switch shim status` and `switch doctor` now tell you to put the export line last in your shell files.
+
+### Changes in 1.1.7
 
 - **Codex tools.** With `publicModels` set, Codex lost its tools and ended after one answer. The model catalog copied the metadata of a real OpenAI model, which puts Codex in the "Responses Lite" form. The catalog now keeps Codex in its direct tool mode, and the gateway also reads tools that arrive as an `additional_tools` input item.
 

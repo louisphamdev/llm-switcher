@@ -799,3 +799,19 @@ test('responsesToIR reads additional_tools items and sends a tool once', () => {
   assert.deepEqual(ir.tools.map(t => t.name), ['exec_command', 'apply_patch']);
   assert.equal(ir.messages.length, 0, 'the item is not a message');
 });
+
+// ISS-CC-LS-001: a falsy value inside a schema (minimum: 0, additionalProperties: false) is a value,
+// not a missing schema. Gemini refuses an object where it expects a number.
+test('tool schemas keep 0, false, "" and null values', () => {
+  const schema = { type: 'object', additionalProperties: false, properties: {
+    total: { type: 'integer', minimum: 0, maximum: 9007199254740991 },
+    tags: { type: 'array', minItems: 0, items: { type: 'string', default: '' } },
+    note: { type: ['string', 'null'], default: null } } };
+  const ir = responsesToIR({ model: 'm', input: 'hi', tools: [{ type: 'function', name: 'f', parameters: schema }] });
+  const p = ir.tools[0].parameters;
+  assert.equal(p.additionalProperties, false);
+  assert.equal(p.properties.total.minimum, 0);
+  assert.equal(p.properties.tags.minItems, 0);
+  assert.equal(p.properties.tags.items.default, '');
+  assert.equal(p.properties.note.default, null);
+});

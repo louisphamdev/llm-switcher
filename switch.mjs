@@ -13,7 +13,7 @@ import {
 } from './state.mjs';
 import { runProbe, runCheck } from './contract.mjs';
 import {
-  SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine,
+  SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine, pathOrderHint,
   suggestedRcFiles, auditRunningProcesses
 } from './shim.mjs';
 import {
@@ -739,6 +739,7 @@ async function manageShim(action = 'status') {
     if (s.active) console.log(`[PASS] ${s.name}: shim active → ${s.effective}`);
     else console.log(`[WARN] ${s.name}: shim installed but '${s.name}' resolves to ${s.effective || '(not found)'} — PATH order wrong`);
   }
+  if (st.onPath && st.shims.some(s => s.installed && !s.active)) for (const line of pathOrderHint()) console.log(`       ${line}`);
 
   const audit = auditActiveClis();
   if (!audit.supported) console.log('\n[INFO] The running-session check is not supported on Windows.');
@@ -832,6 +833,7 @@ async function runDoctor() {
     else if (!s.active) warn(`[WARN] '${s.name}' resolves to ${s.effective || '(not found)'} instead of the shim — PATH order wrong.`);
     else console.log(`[PASS] '${s.name}' routed through shim.`);
   }
+  if (sh.onPath && sh.shims.some(s => s.installed && !s.active)) for (const line of pathOrderHint()) console.log(`       ${line}`);
 
   // 7. Running processes missing env => those sessions call the provider directly
   const audit = auditActiveClis();

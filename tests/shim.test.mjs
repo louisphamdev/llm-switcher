@@ -19,7 +19,7 @@ const ROOT = path.resolve(__dirname, '..');
 const STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'shimstate-'));
 process.env.LLM_SWITCHER_STATE_DIR = STATE;
 
-const { SHIM_DIR, SHIMMED, pathExportLine, suggestedRcFiles, shimStatus, renderShim } =
+const { SHIM_DIR, SHIMMED, pathExportLine, pathOrderHint, suggestedRcFiles, shimStatus, renderShim } =
   await import(pathToFileURL(path.join(ROOT, 'shim.mjs')).href);
 
 // The behavioural tests run the CURRENT template, rendered into a temp dir. Running the copy
@@ -224,5 +224,21 @@ test('the POSIX shims source launch files only when this account owns them', () 
       const file = line.trim().slice(3, -1);
       assert.match(body, new RegExp(`\\[ -O "\\$SWITCHER_DIR" \\] && \\[ -O "${file.replace(/[$/.]/g, (c) => `\\${c}`)}" \\]`), `${name}: ${file}`);
     }
+  }
+});
+
+// ISS-CC-LS-002: on zsh a later line in .zshrc or .zprofile can prepend npm-global or Homebrew
+// ahead of the shim. The hint names both files and says the line must come last.
+test('pathOrderHint tells a zsh user to put the export last in .zshrc and .zprofile', () => {
+  const shell = process.env.SHELL;
+  process.env.SHELL = '/bin/zsh';
+  try {
+    const text = pathOrderHint('darwin').join('\n');
+    assert.match(text, /LAST/);
+    assert.match(text, /\.zshrc/);
+    assert.match(text, /\.zprofile/);
+    assert.ok(text.includes(pathExportLine('darwin')));
+  } finally {
+    if (shell === undefined) delete process.env.SHELL; else process.env.SHELL = shell;
   }
 });
