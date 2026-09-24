@@ -940,7 +940,7 @@
         <button id="tab-button-general" type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-general" tabindex="0" onclick="switchTab('tab-general')">General</button>
         <button id="tab-button-routing" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-routing" tabindex="-1" onclick="switchTab('tab-routing')">Routing</button>
         <button id="tab-button-models" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-models" tabindex="-1" onclick="switchTab('tab-models')">Models</button>
-        <button id="tab-button-codex" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-codex" tabindex="-1" onclick="switchTab('tab-codex')" hidden>Codex</button>
+        <button id="tab-button-codex" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-codex" tabindex="-1" onclick="switchTab('tab-codex')" hidden>Blindfold</button>
         <button id="tab-button-inspector" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-inspector" tabindex="-1" onclick="switchTab('tab-inspector'); loadInspectorLogs();">Request log</button>
       </div>
 
@@ -1037,23 +1037,10 @@
             <!-- Dynamically populated via renderModelSlots -->
           </div>
 
-          <!-- Model Explorer Box -->
-          <div class="form-group full" id="model-browser" style="display: none; margin-top: 14px;">
-            <div class="model-browser">
-              <div class="model-browser-header">
-                <span id="model-count-label" style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Available Upstream Models</span>
-                <label class="sr-only" for="model-filter">Filter upstream models</label>
-                <input type="search" id="model-filter" placeholder="Filter models" style="padding: 5px 9px; font-size: 11px; width: 200px;" oninput="filterModels()">
-              </div>
-              <div id="model-items" class="model-list-scroll"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tab 4: Live Inspector -->
-        <!-- Tab 4: Codex — only the names this CLI is allowed to observe -->
-        <div id="tab-codex" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-codex" hidden>
-          <div class="warning-callout">
+          <!-- Codex model config lives with the other model config; only the interceptor stays on its own tab. -->
+          <div id="codex-names" style="margin-top: 16px;" hidden>
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Names Codex sees</span>
+            <div class="warning-callout">
             <span class="badge badge-convert">NOTE</span>
             <div>
               <strong>Codex sees only these names.</strong> The slot aliases <code>main</code>, <code>review</code> and
@@ -1076,7 +1063,24 @@
               <input type="text" id="p-public-subagent" list="model-options" placeholder="e.g. gpt-5.6-luna">
             </div>
           </div>
+          </div>
 
+          <!-- Model Explorer Box -->
+          <div class="form-group full" id="model-browser" style="display: none; margin-top: 14px;">
+            <div class="model-browser">
+              <div class="model-browser-header">
+                <span id="model-count-label" style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">Available Upstream Models</span>
+                <label class="sr-only" for="model-filter">Filter upstream models</label>
+                <input type="search" id="model-filter" placeholder="Filter models" style="padding: 5px 9px; font-size: 11px; width: 200px;" oninput="filterModels()">
+              </div>
+              <div id="model-items" class="model-list-scroll"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Live Inspector -->
+        <!-- Tab 4: Codex — only the names this CLI is allowed to observe -->
+        <div id="tab-codex" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-codex" hidden>
           <div class="form-grid" style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
             <div class="form-group full">
               <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; text-transform: none;">
@@ -1382,6 +1386,8 @@
       const applies = servesCodex(format);
       const btn = document.getElementById('tab-button-codex');
       if (btn) btn.hidden = !applies;
+      const names = document.getElementById('codex-names');
+      if (names) names.hidden = !applies;
       if (!applies && document.getElementById('tab-codex')?.classList.contains('active')) {
         switchTab('tab-general');
       }
@@ -1468,6 +1474,11 @@
       try {
         const res = await api('/api/status');
         const data = await res.json();
+        if (res.status === 401) {
+          document.getElementById('status-title').textContent = 'Dashboard locked';
+          document.getElementById('status-sub').textContent = 'Run `switch ui` in a terminal. It opens this page with its access token.';
+          return;
+        }
         if (!res.ok) {
           showToast(data.error || `Gateway error HTTP ${res.status}`, true);
           return;

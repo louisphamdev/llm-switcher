@@ -191,7 +191,12 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.2
+## Changes in 1.1.3
+
+- **Dashboard.** Opened without its access token, the page no longer waits on "Checking status...". It says that it is locked and names `switch ui`, which opens it with the token.
+- **Dashboard.** The Codex model names (session, review, subagent) are on the **Models** tab, next to the other model settings. The **Blindfold** tab holds only the interceptor settings.
+
+### Changes in 1.1.2
 
 - **npm package.** Install with `npm install -g llm-switcher` and run `switch`. An npm install keeps its data in `~/.llm-switcher`, so an upgrade does not erase your configuration. A git checkout keeps its data next to the code, as before.
 - **Contract lab.** The gateway can send a small sample of complete exchanges to an [intact](https://github.com/louisphamdev/intact) server, which finds fields that the converter loses. It is off by default. See "Contract lab" below.

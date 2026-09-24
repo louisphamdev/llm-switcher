@@ -191,7 +191,12 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.2
+## Thay đổi trong bản 1.1.3
+
+- **Dashboard.** Khi mở mà thiếu access token, trang không còn đứng ở "Checking status...". Trang báo đang bị khoá và chỉ lệnh `switch ui`, lệnh này mở trang kèm token.
+- **Dashboard.** Tên model của Codex (session, review, subagent) nằm ở tab **Models**, cạnh các cấu hình model khác. Tab **Blindfold** chỉ còn cấu hình interceptor.
+
+### Thay đổi trong bản 1.1.2
 
 - **Gói npm.** Cài bằng `npm install -g llm-switcher` rồi chạy `switch`. Bản cài bằng npm lưu dữ liệu trong `~/.llm-switcher`, nên nâng cấp không xoá cấu hình. Bản git checkout vẫn lưu dữ liệu cạnh mã nguồn như trước.
 - **Contract lab.** Gateway có thể gửi một phần nhỏ các lượt trao đổi hoàn chỉnh lên server [intact](https://github.com/louisphamdev/intact) để tìm field mà converter làm mất. Mặc định tính năng này tắt. Xem mục "Contract lab" bên dưới.
