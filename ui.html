@@ -1160,18 +1160,15 @@
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
-    // /api/* needs the per-install admin token. `switch ui` passes it in the URL fragment, which
-    // the browser never sends to the server; keep it here and clear the address bar. sessionStorage, not
-    // localStorage: while the gateway is off, another account can serve a page on this origin, and that
-    // page must not find the token.
+    // /api/* needs the admin token. The gateway puts it in this page; an older `switch ui` link still
+    // brings it in the URL fragment, which is cleared from the address bar.
     const ADMIN_TOKEN_KEY = 'llmSwitcherAdminToken';
     (() => {
       localStorage.removeItem(ADMIN_TOKEN_KEY);
+      const served = document.querySelector('meta[name="llm-switcher-token"]')?.content;
       const m = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
-      if (m) {
-        sessionStorage.setItem(ADMIN_TOKEN_KEY, m[1]);
-        history.replaceState(null, '', location.pathname + location.search);
-      }
+      if (served || m) sessionStorage.setItem(ADMIN_TOKEN_KEY, served || m[1]);
+      if (m) history.replaceState(null, '', location.pathname + location.search);
     })();
 
     // A config change carries the revision this page loaded. The gateway answers 409 when another tab

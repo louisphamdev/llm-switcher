@@ -1114,7 +1114,10 @@ async function route(req, res) {
         'X-Frame-Options': 'DENY',
         'X-Content-Type-Options': 'nosniff'
       });
-      return res.end(fs.readFileSync(uiHtmlPath, 'utf8'));
+      // One gateway serves one user, so the page opened at /ui carries its own token. The Host and Origin
+      // guard above keeps it from other sites; the token is hex, so it needs no escaping.
+      const meta = `<meta name="llm-switcher-token" content="${ADMIN_TOKEN.toString()}">`;
+      return res.end(fs.readFileSync(uiHtmlPath, 'utf8').replace('<head>', `<head>\n  ${meta}`));
     }
   }
 

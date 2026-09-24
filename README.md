@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.8
+## Changes in 1.1.9
+
+- **Dashboard.** Open `http://127.0.0.1:3456/ui` directly. The page no longer needs the link from `switch ui`: the gateway puts the admin token in the page. Pages of other sites still cannot read it.
+
+### Changes in 1.1.8
 
 - **Claude Code tools.** A tool schema value of `0`, `false`, `""` or `null` (for example `minimum: 0`) became an empty object schema. Gemini refused every Claude Code request with HTTP 400 "Starting an object on a scalar field". These values now stay as they are.
 - **Shim PATH order.** If the shim folder is on `PATH` but after the real `claude` or `codex`, `switch shim status` and `switch doctor` now tell you to put the export line last in your shell files.
@@ -609,7 +613,7 @@ Before it sends a sample, the gateway masks every string value with `x` of the s
 ## Security Model
 
 - The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
-- The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. `switch ui` opens the dashboard with this token, and the MCP server reads the file. The dashboard keeps the token in `sessionStorage` of that tab only, so a page that another account serves on the same port while the gateway is off cannot read it; open the dashboard with `switch ui` again after the browser restarts. `/v1/*` and `/health` need no token.
+- The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. The gateway puts this token in the dashboard page, so `http://127.0.0.1:3456/ui` works when you open it directly. The Host and Origin checks keep the page and the token from other sites. The MCP server reads the file. `/v1/*` and `/health` need no token.
 - API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key goes only to the stored `baseURL` and `endpoints` of that profile. A save that changes either one must carry the key again.
 - Every dashboard change carries the config revision that the page loaded. If another tab, the CLI or the MCP server saved in the meantime, the gateway answers 409 and the page reloads instead of overwriting that change.
 - Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams. Other `x-*` headers, `traceparent` and `tracestate` pass through. The gateway drops its own control headers (`x-profile`, `x-llm-profile`) and the network identity headers (`x-forwarded-*`, `x-real-ip`).

@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.8
+## Thay đổi trong bản 1.1.9
+
+- **Dashboard.** Mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Trang không cần link từ `switch ui` nữa: gateway đặt admin token vào trang. Trang của web khác vẫn không đọc được token.
+
+### Thay đổi trong bản 1.1.8
 
 - **Tool của Claude Code.** Giá trị `0`, `false`, `""` hoặc `null` trong schema của tool (ví dụ `minimum: 0`) bị đổi thành schema object rỗng. Gemini từ chối mọi request của Claude Code với HTTP 400 "Starting an object on a scalar field". Giờ các giá trị này được giữ nguyên.
 - **Thứ tự PATH của shim.** Nếu thư mục shim có trong `PATH` nhưng đứng sau `claude` hoặc `codex` thật, `switch shim status` và `switch doctor` giờ chỉ cách sửa: đặt dòng export ở cuối các file cấu hình shell.
@@ -609,7 +613,7 @@ Trước khi gửi mẫu, gateway che mọi giá trị string bằng chuỗi `x`
 ## Mô hình Bảo mật
 
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
-- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. `switch ui` mở dashboard kèm token này, MCP server đọc token từ file. Dashboard giữ token trong `sessionStorage` của đúng tab đó, nên một trang do tài khoản khác phục vụ trên cùng cổng lúc gateway tắt không đọc được token; sau khi khởi động lại trình duyệt, mở dashboard bằng `switch ui` lần nữa. `/v1/*` và `/health` không cần token.
+- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. Gateway đặt token này vào trang dashboard, nên mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Lớp kiểm tra Host và Origin ngăn trang web khác đọc trang và token. MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
 - API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được gửi tới `baseURL` và `endpoints` đã lưu của chính profile đó. Lần lưu nào đổi một trong hai thì phải nhập lại key.
 - Mỗi thay đổi từ dashboard mang theo revision của config mà trang đã tải. Nếu tab khác, CLI hoặc MCP server đã lưu trước đó, gateway trả 409 và trang tải lại thay vì ghi đè thay đổi kia.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream. Các header `x-*` khác, `traceparent` và `tracestate` được chuyển tiếp. Gateway bỏ header điều khiển của chính nó (`x-profile`, `x-llm-profile`) và header định danh mạng (`x-forwarded-*`, `x-real-ip`).

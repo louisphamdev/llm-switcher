@@ -530,6 +530,25 @@ test('Security: foreign Host / Origin are rejected (DNS rebinding & CSRF)', asyn
 
 // Any local process can reach loopback. Without a token it must get nothing from /api/*,
 // and a masked key must never be resolved for a baseURL the profile does not have.
+// One gateway serves one user on one machine: the dashboard opened at /ui, with no link from `switch ui`,
+// carries its own token. A page of another site and a rebound Host still get nothing.
+test('Dashboard: /ui opened directly carries the admin token, other sites do not get it', async () => {
+  for (const p of ['/ui', '/']) {
+    const html = await (await fetch(url(p))).text();
+    assert.ok(html.includes(`<meta name="llm-switcher-token" content="${adminToken()}">`), `${p} has no token`);
+  }
+  const foreign = await fetch(url('/ui'), { headers: { origin: 'https://evil.example' } });
+  assert.equal(foreign.status, 403);
+  assert.ok(!(await foreign.text()).includes(adminToken()));
+  const rebound = await new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: proxyPort, path: '/ui', headers: { host: 'evil.example' } }, res => {
+      let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b }));
+    }).on('error', reject);
+  });
+  assert.equal(rebound.status, 403);
+  assert.ok(!rebound.body.includes(adminToken()));
+});
+
 test('Security: the admin API refuses a caller without the token and changes nothing', async () => {
   const hits = [];
   const sink = http.createServer((req, res) => { hits.push(req.headers); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[]}'); });
@@ -560,10 +579,6 @@ test('Security: the admin API refuses a caller without the token and changes not
     assert.equal(hits.length, 1);
     assert.ok(!JSON.stringify(hits[0]).includes('sk-secret-chat'), 'the stored key is not sent to a foreign baseURL');
 
-    for (const p of ['/', '/ui']) {
-      const page = await (await fetch(url(p))).text();
-      assert.ok(!page.includes(adminToken()), `${p} must not embed the token`);
-    }
     assert.equal((await fetch(url('/health'))).status, 200, '/health needs no token');
     assert.equal((fs.statSync(path.join(tmpDir, 'admin.token')).mode & 0o777).toString(8), '600');
   } finally {
