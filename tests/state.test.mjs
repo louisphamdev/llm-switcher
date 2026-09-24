@@ -514,7 +514,9 @@ test('make-certs.sh builds a CA that can sign only for its host', (t) => {
   fs.writeFileSync(path.join(dir, 'evil.ext'), 'subjectAltName = DNS:evil.test\n');
   ossl('x509', '-req', '-in', 'evil.csr', '-CA', path.join(certs, 'ca.pem'), '-CAkey', path.join(certs, 'ca.key'),
     '-CAcreateserial', '-days', '1', '-extfile', 'evil.ext', '-out', 'evil.pem');
-  assert.throws(() => ossl('verify', '-CAfile', path.join(certs, 'ca.pem'), 'evil.pem'), /permitted subtree violation/);
+  // LibreSSL prints the verify error on stdout, OpenSSL 3 on stderr.
+  assert.throws(() => ossl('verify', '-CAfile', path.join(certs, 'ca.pem'), 'evil.pem'),
+    (e) => /permitted subtree violation/.test(`${e.stdout}${e.stderr}`));
 });
 
 // ---- Launch state, config cache, logs, probes (audit F28, F31, F42, M5, racer "blocked gateway") ----
@@ -593,6 +595,30 @@ test('a port that accepts but never answers probes as silent, not as foreign', a
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   t.after(() => server.close());
   assert.equal(await probeGateway(server.address().port), 'silent');
+});
+
+// A gateway from before 1.1.1 answers /health without an identity proof. It is ours in spirit but
+// cannot be proven, so it is never stopped; the CLI names it instead of calling it a foreign process.
+test('a pre-1.1.1 gateway answers without a proof and probes as legacy, not as foreign', async (t) => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher', port: server.address().port, configLoaded: true }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  assert.equal(await probeGateway(server.address().port), 'legacy');
+});
+
+test('an llm-switcher answer with a wrong proof is still foreign', async (t) => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher', port: server.address().port, pid: 1, proof: 'forged' }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  assert.equal(await probeGateway(server.address().port), 'foreign');
 });
 
 // Codex parses an unquoted --config value as TOML first. The Windows shim passes names unquoted, so a

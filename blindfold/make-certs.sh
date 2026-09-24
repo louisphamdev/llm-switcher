@@ -2,6 +2,7 @@
 # Build the private CA and the leaf certificate that blindfold.mjs presents.
 #
 # Windows: run this from Git Bash. The openssl that ships with Git for Windows works.
+# macOS: /usr/bin/openssl is LibreSSL. Use only options that LibreSSL also has (it has no `x509 -ext`).
 # The earlier attempt used PowerShell New-SelfSignedCertificate, whose leaf was refused
 # with "unsuitable certificate purpose" because it carried no serverAuth extended key
 # usage. The extension files below are what fix that, so do not drop them.
@@ -92,4 +93,4 @@ mv -f "$WORK/ca.key" "$WORK/ca.pem" "$WORK/leaf.key" "$WORK/leaf.pem" "$OUT_DIR/
 
 echo "[blindfold] CA     : $OUT_DIR/ca.pem"
 echo "[blindfold] leaf   : $OUT_DIR/leaf.pem"
-openssl x509 -in "$OUT_DIR/leaf.pem" -noout -ext extendedKeyUsage,subjectAltName
+openssl x509 -in "$OUT_DIR/leaf.pem" -noout -text | grep -A1 -E "Extended Key Usage|Subject Alternative Name"

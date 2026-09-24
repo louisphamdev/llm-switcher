@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { resolveDataDir } from '../state.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-sw-datadir-'));
@@ -34,4 +35,17 @@ test('package.json is publishable and exposes the switch command', () => {
   assert.notEqual(pkg.private, true);
   assert.equal(pkg.bin?.switch, 'switch.mjs');
   assert.ok(fs.existsSync(new URL('../LICENSE', import.meta.url)), 'LICENSE file exists');
+});
+
+// macOS ships LibreSSL as /usr/bin/openssl. It has no `x509 -ext`; the script must not depend on it.
+test('make-certs.sh runs with an openssl that lacks LibreSSL-missing options', { skip: process.platform === 'win32' }, () => {
+  const dir = tmp();
+  const real = execFileSync('sh', ['-c', 'command -v openssl'], { encoding: 'utf8' }).trim();
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'openssl'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = "-ext" ] && { echo "unknown option -ext" >&2; exit 1; }; done\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  const out = path.join(dir, 'certs');
+  const script = new URL('../blindfold/make-certs.sh', import.meta.url).pathname;
+  execFileSync('bash', [script, 'chatgpt.com', out], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, stdio: 'pipe' });
+  for (const f of ['ca.pem', 'leaf.pem', 'leaf.key']) assert.ok(fs.existsSync(path.join(out, f)), f);
 });

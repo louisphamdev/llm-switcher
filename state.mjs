@@ -792,13 +792,15 @@ function getJson(port, pathname, timeoutMs = 3000) {
 
 const newNonce = () => crypto.randomBytes(16).toString('hex');
 
-/** 'ours' | 'foreign' | 'silent' | 'free'. Treat 'silent' like 'foreign' in every decision. */
+/** 'ours' | 'legacy' | 'foreign' | 'silent' | 'free'. Treat 'legacy' and 'silent' like 'foreign' in every decision. */
 export async function probeGateway(port) {
   const nonce = newNonce();
   const r = await getJson(port, `/health?challenge=${nonce}`);
   if (r.state !== 'answered') return r.state;
   const b = r.body;
   if (b?.proxy !== 'llm-switcher' || b.port !== port) return 'foreign';
+  // Gateways before 1.1.1 answer without a proof: name them, but never trust them enough to stop them.
+  if (!('proof' in b)) return 'legacy';
   const proof = identityProof(nonce, { role: 'gateway', port, pid: b.pid });
   return proof && b.proof === proof ? 'ours' : 'foreign';
 }

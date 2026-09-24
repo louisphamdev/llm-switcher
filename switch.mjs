@@ -82,9 +82,14 @@ function startProxyBackground(port) {
 }
 
 // 'silent' is a listener that never answered: a hung gateway of ours, or another program.
-const isHeld = (state) => state === 'foreign' || state === 'silent';
+const isHeld = (state) => state === 'foreign' || state === 'silent' || state === 'legacy';
 
 function refuseForeignPort(port, owner, state = 'foreign') {
+  if (state === 'legacy') {
+    console.error(`[Error] An llm-switcher gateway older than 1.1.1 runs on port ${port}. Stop it, then run \`switch on\` again.`);
+    console.error('        It cannot prove its identity, so this switcher does not stop it. Nothing was changed.');
+    process.exit(1);
+  }
   console.error(state === 'silent'
     ? `[Error] Port ${port} accepts connections but does not answer. A hung ${owner} or another program holds it.`
     : `[Error] Port ${port} is held by another process, not by ${owner}.`);
@@ -204,7 +209,7 @@ function listeningPids(port) {
   return [...pids];
 }
 
-// Returns 'stopped', 'not-running', 'not-ours', 'silent' or 'still-running'. The kill targets the process that
+// Returns 'stopped', 'not-running', 'not-ours', 'legacy', 'silent' or 'still-running'. The kill targets the process that
 // listens on the port, right after the identity probe confirmed that listener is this switcher.
 async function stopProxy(port) {
   const state = await probeGateway(port);
@@ -226,6 +231,7 @@ async function stopProxy(port) {
     return 'stopped';
   }
   if (state === 'foreign') return 'not-ours';
+  if (state === 'legacy') return 'legacy';
   if (state === 'silent') {
     if (ownUnit) {
       serviceStop(svc);
@@ -465,6 +471,10 @@ async function turnOff(targetArg) {
     console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
     process.exit(1);
   }
+  if (result === 'legacy') {
+    console.error(`[Error] An llm-switcher gateway older than 1.1.1 runs on port ${port}. Stop it, then run \`switch on\` again.`);
+    process.exit(1);
+  }
   if (result === 'not-ours' || result === 'silent') {
     console.error(result === 'silent'
       ? `[Error] Port ${port} accepts connections but does not answer, so it is not proven to be this switcher. It was not stopped.`
@@ -502,7 +512,7 @@ async function showStatus() {
   const flagged = fs.existsSync(paths.activeFlag);
 
   console.log('=== LLM Switcher Status ===');
-  const held = { foreign: `PORT ${port} HELD BY ANOTHER PROCESS`, silent: `PORT ${port} DOES NOT ANSWER (hung gateway or another program)` };
+  const held = { legacy: `OLD GATEWAY (< 1.1.1) ON PORT ${port}: stop it, then run \`switch on\``, foreign: `PORT ${port} HELD BY ANOTHER PROCESS`, silent: `PORT ${port} DOES NOT ANSWER (hung gateway or another program)` };
   console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : held[gateway] || 'STOPPED'}`);
   console.log(`Web UI:         http://127.0.0.1:${port}/ui`);
   console.log(`Launcher Flag:  ${flagged ? 'active.flag present' : 'absent (launchers use official endpoints)'}`);

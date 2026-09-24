@@ -191,7 +191,15 @@ flowchart LR
 
 ---
 
-## Thay đổi trong lần cập nhật này
+## Thay đổi trong bản 1.1.2
+
+- **Gói npm.** Cài bằng `npm install -g llm-switcher` rồi chạy `switch`. Bản cài bằng npm lưu dữ liệu trong `~/.llm-switcher`, nên nâng cấp không xoá cấu hình. Bản git checkout vẫn lưu dữ liệu cạnh mã nguồn như trước.
+- **Contract lab.** Gateway có thể gửi một phần nhỏ các lượt trao đổi hoàn chỉnh lên server [intact](https://github.com/louisphamdev/intact) để tìm field mà converter làm mất. Mặc định tính năng này tắt. Xem mục "Contract lab" bên dưới.
+- **macOS.** `blindfold/make-certs.sh` giờ chạy được với LibreSSL, là `openssl` mặc định trên macOS.
+- **Nâng cấp từ 1.1.0 trở xuống.** Gateway cũ hơn 1.1.1 không chứng minh được danh tính. `switch` giờ gọi đúng tên nó và không tự dừng nó. Dừng nó bằng tay một lần, rồi chạy `switch on`.
+- **Test.** `npm test` chỉ chạy `tests/**/*.test.mjs`, kể cả trên Node.js 18 và 20.
+
+### Các thay đổi trước đó
 
 - Dashboard cho máy tính nay có bố cục gọn như một công cụ dành cho lập trình viên. Các điều khiển route rõ hơn, tab dùng được bằng bàn phím, trường model có nhãn đầy đủ và không còn emoji trang trí.
 - Profile Codex dùng ba vai trò theo tài liệu chính thức: `main`, `review` và `subagent`.
@@ -221,6 +229,8 @@ cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
 ```
 
 Bản cài bằng npm lưu `config.json`, `admin.token` và các file khởi chạy trong `~/.llm-switcher`. Khi nâng cấp, npm chỉ thay thư mục package, nên cấu hình của bạn vẫn còn.
+
+Nếu bạn nâng cấp từ 1.1.0 trở xuống, hãy dừng gateway đang chạy trước khi chạy `switch`. Gateway cũ không chứng minh được danh tính, nên `switch` không tự dừng nó.
 
 **Cách B: git clone**
 ```bash

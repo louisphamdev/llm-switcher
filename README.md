@@ -191,7 +191,15 @@ flowchart LR
 
 ---
 
-## Changes in this update
+## Changes in 1.1.2
+
+- **npm package.** Install with `npm install -g llm-switcher` and run `switch`. An npm install keeps its data in `~/.llm-switcher`, so an upgrade does not erase your configuration. A git checkout keeps its data next to the code, as before.
+- **Contract lab.** The gateway can send a small sample of complete exchanges to an [intact](https://github.com/louisphamdev/intact) server, which finds fields that the converter loses. It is off by default. See "Contract lab" below.
+- **macOS.** `blindfold/make-certs.sh` now runs with LibreSSL, the default `openssl` on macOS.
+- **Upgrade from 1.1.0 or older.** A running gateway older than 1.1.1 cannot prove its identity. `switch` now names it and does not stop it. Stop it by hand once, then run `switch on`.
+- **Tests.** `npm test` runs only `tests/**/*.test.mjs`, also on Node.js 18 and 20.
+
+### Earlier changes
 
 - The desktop dashboard now uses a compact developer-tool layout. It has clearer route controls, keyboard-accessible tabs, labeled model fields, and no decorative emoji.
 - Codex profiles now use three documented roles: `main`, `review`, and `subagent`.
@@ -221,6 +229,8 @@ cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
 ```
 
 An npm install keeps `config.json`, `admin.token` and the launch files in `~/.llm-switcher`. An upgrade replaces the package folder only, so your configuration stays.
+
+If you upgrade from 1.1.0 or older, stop the running gateway before you run `switch`. An older gateway cannot prove its identity, so `switch` does not stop it for you.
 
 **Option B: git clone**
 ```bash
