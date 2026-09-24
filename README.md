@@ -206,11 +206,23 @@ The Codex shim no longer relies on `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS`, or
 ## Quick Start
 
 ### 1. Requirements
-- Node.js 18+ installed on your system.
-- No `npm install` needed!
+- Node.js 18.17 or later.
+- The gateway has no npm dependencies.
 
-### 2. Setup Configuration
-Clone this repository and create your local configuration:
+### 2. Install and configure
+
+**Option A: npm (recommended)**
+```bash
+npm install -g llm-switcher
+
+# Copy the example configuration into your data folder.
+mkdir -p ~/.llm-switcher
+cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
+```
+
+An npm install keeps `config.json`, `admin.token` and the launch files in `~/.llm-switcher`. An upgrade replaces the package folder only, so your configuration stays.
+
+**Option B: git clone**
 ```bash
 git clone https://github.com/louisphamdev/llm-switcher.git
 cd llm-switcher
@@ -219,7 +231,11 @@ cd llm-switcher
 cp config.example.json config.json
 ```
 
+A checkout keeps its data next to the code, as before. To use another folder in either case, set `LLM_SWITCHER_HOME`.
+
 Edit `config.json` with your provider base URLs and API keys.
+
+With the npm install, run `switch <command>`. With a checkout, run `node switch.mjs <command>` or put the checkout on `PATH`.
 
 ### 3. Start the Gateway
 ```bash

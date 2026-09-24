@@ -206,11 +206,23 @@ Shim Codex không còn dựa vào `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS` ho�
 ## Hướng dẫn Bắt đầu Nhanh
 
 ### 1. Yêu cầu hệ thống
-- Máy đã cài sẵn Node.js 18 trở lên.
-- Không cần cài thêm bất kỳ gói npm nào!
+- Node.js 18.17 trở lên.
+- Gateway không cần gói npm phụ thuộc nào.
 
-### 2. Cài đặt Cấu hình
-Clone repo và tạo file cấu hình cá nhân:
+### 2. Cài đặt và cấu hình
+
+**Cách A: npm (khuyên dùng)**
+```bash
+npm install -g llm-switcher
+
+# Chép file cấu hình mẫu vào thư mục dữ liệu.
+mkdir -p ~/.llm-switcher
+cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
+```
+
+Bản cài bằng npm lưu `config.json`, `admin.token` và các file khởi chạy trong `~/.llm-switcher`. Khi nâng cấp, npm chỉ thay thư mục package, nên cấu hình của bạn vẫn còn.
+
+**Cách B: git clone**
 ```bash
 git clone https://github.com/louisphamdev/llm-switcher.git
 cd llm-switcher
@@ -219,7 +231,11 @@ cd llm-switcher
 cp config.example.json config.json
 ```
 
+Bản checkout lưu dữ liệu cạnh mã nguồn như trước. Muốn dùng thư mục khác ở cả hai cách, đặt biến `LLM_SWITCHER_HOME`.
+
 Điền URL và API key của các nhà cung cấp vào `config.json`.
+
+Bản cài bằng npm chạy lệnh `switch <lệnh>`. Bản checkout chạy `node switch.mjs <lệnh>` hoặc thêm thư mục checkout vào `PATH`.
 
 ### 3. Khởi động Gateway
 ```bash

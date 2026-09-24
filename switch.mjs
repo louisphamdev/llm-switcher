@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -28,7 +29,7 @@ if (!config) {
   const err = getConfigLoadError();
   console.error(`[Error] Cannot load ${configPath}: ${err ? err.message : 'file not found'}`);
   if (!fs.existsSync(configPath)) {
-    console.error(`Create it first:  cp config.example.json config.json   (then edit baseURL / apiKey)`);
+    console.error(`Create it first:  cp "${path.join(ROOT_DIR, 'config.example.json')}" "${configPath}"   (then edit baseURL / apiKey)`);
   }
   process.exit(1);
 }
@@ -406,7 +407,7 @@ async function turnOn(profileName, cliTarget) {
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
   // A shim bakes in the state dir; outside the checkout that is usually a temporary directory, and the shim
   // would outlive it.
-  if (STATE_DIR !== ROOT_DIR) {
+  if (process.env.LLM_SWITCHER_STATE_DIR) {
     console.log('\n[Shim] Not installed automatically: LLM_SWITCHER_STATE_DIR is set. Run `switch shim install` to install shims for that directory.');
   } else try {
     const { installed, error } = installShims();

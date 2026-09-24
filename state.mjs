@@ -16,6 +16,18 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const ROOT_DIR = __dirname;
+
+// A git checkout keeps its data next to the code. An npm install must not: an upgrade replaces
+// the package directory. LLM_SWITCHER_HOME overrides both.
+export function resolveDataDir(rootDir, env = process.env, home = os.homedir()) {
+  if (env.LLM_SWITCHER_HOME) return path.resolve(env.LLM_SWITCHER_HOME);
+  return fs.existsSync(path.join(rootDir, '.git')) ? rootDir : path.join(home, '.llm-switcher');
+}
+export const DATA_DIR = resolveDataDir(ROOT_DIR);
+// Outside a checkout the data dir starts empty; config, token and launch files all write into it.
+if (DATA_DIR !== ROOT_DIR) {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); } catch {}
+}
 export const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
 export const DEFAULT_PORT = 3456;
 export const DEFAULT_BLINDFOLD_PORT = 3457;
@@ -51,7 +63,7 @@ const SLOT_LEGACY_KEYS = {
 
 export const configPath = process.env.LLM_SWITCHER_CONFIG
   ? path.resolve(process.env.LLM_SWITCHER_CONFIG)
-  : path.join(ROOT_DIR, 'config.json');
+  : path.join(DATA_DIR, 'config.json');
 
 // Any local process can reach loopback, so /api/* needs a secret that only the owner can read.
 // It lives next to config.json so a test config in a temp dir gets its own token.
@@ -98,7 +110,7 @@ export const claudeSettingsPath = path.join(claudeDir, 'settings.json');
 
 // The shims read the launch files from the checkout. LLM_SWITCHER_STATE_DIR moves them for tests,
 // which must not rewrite the launch state of a switcher that is in use.
-export const STATE_DIR = process.env.LLM_SWITCHER_STATE_DIR ? path.resolve(process.env.LLM_SWITCHER_STATE_DIR) : ROOT_DIR;
+export const STATE_DIR = process.env.LLM_SWITCHER_STATE_DIR ? path.resolve(process.env.LLM_SWITCHER_STATE_DIR) : DATA_DIR;
 
 export const paths = {
   activeFlag: path.join(STATE_DIR, 'active.flag'),
@@ -113,7 +125,7 @@ export const paths = {
   proxyLog: path.join(STATE_DIR, 'proxy.log'),
   blindfoldLog: path.join(STATE_DIR, 'blindfold.log'),
   codexCatalogTemplate: path.join(ROOT_DIR, 'codex-catalog-template.json'),
-  blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(ROOT_DIR, 'blindfold', 'certs'), 'ca.pem')
+  blindfoldCA: path.join(process.env.LLM_SWITCHER_BLINDFOLD_CERTS || path.join(DATA_DIR, 'blindfold', 'certs'), 'ca.pem')
 };
 
 // ---------------- config IO ----------------
