@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.3
+## Changes in 1.1.4
+
+- **Contract lab privacy.** A sample that the gateway sends to intact carries no client content. Prompts, answers, tool arguments and results, files and user ids are masked on this machine before the upload. The fields that intact needs for analysis stay.
+
+### Changes in 1.1.3
 
 - **Dashboard.** Opened without its access token, the page no longer waits on "Checking status...". It says that it is locked and names `switch ui`, which opens it with the token.
 - **Dashboard.** The Codex model names (session, review, subagent) are on the **Models** tab, next to the other model settings. The **Blindfold** tab holds only the interceptor settings.
@@ -551,6 +555,8 @@ re-opened from a shell where the shim is on `PATH`.
 ### Contract lab
 
 The contract lab finds fields that the converter loses. It is off by default.
+
+Before it sends a sample, the gateway masks the content of the client: prompts, answers, system text, thinking, tool arguments and results, files, images and user ids become `x` of the same length. Keys, types, roles, model names, tool names and schemas, numbers and event names stay, so intact can analyse the shape.
 
 - Set `contractLab: {url, apiKey, enabled}` in `config.json`. If `enabled` is `true`, the gateway sends a sample of complete exchanges to intact.
 - `switch contract-probe [--model m]` sends six test requests per model and format through the gateway.

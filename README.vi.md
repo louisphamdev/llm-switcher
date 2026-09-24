@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.3
+## Thay đổi trong bản 1.1.4
+
+- **Bảo mật contract lab.** Mẫu mà gateway gửi lên intact không chứa nội dung của client. Prompt, câu trả lời, tham số và kết quả của tool, file và user id bị che ngay trên máy trước khi gửi. Các field mà intact cần để phân tích được giữ nguyên.
+
+### Thay đổi trong bản 1.1.3
 
 - **Dashboard.** Khi mở mà thiếu access token, trang không còn đứng ở "Checking status...". Trang báo đang bị khoá và chỉ lệnh `switch ui`, lệnh này mở trang kèm token.
 - **Dashboard.** Tên model của Codex (session, review, subagent) nằm ở tab **Models**, cạnh các cấu hình model khác. Tab **Blindfold** chỉ còn cấu hình interceptor.
@@ -551,6 +555,8 @@ trong `PATH`.
 ### Contract lab
 
 Contract lab tìm các field mà converter làm mất. Mặc định tính năng này tắt.
+
+Trước khi gửi mẫu, gateway che nội dung của client: prompt, câu trả lời, system text, thinking, tham số và kết quả của tool, file, ảnh và user id đều thành chuỗi `x` cùng độ dài. Tên key, type, role, tên model, tên và schema của tool, số và tên event được giữ nguyên, để intact phân tích được hình dạng.
 
 - Đặt `contractLab: {url, apiKey, enabled}` trong `config.json`. Nếu `enabled` là `true`, gateway gửi một phần các lượt trao đổi hoàn chỉnh lên intact.
 - `switch contract-probe [--model m]` gửi sáu request thử cho mỗi model và mỗi format qua gateway.

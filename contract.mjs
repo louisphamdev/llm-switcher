@@ -61,6 +61,69 @@ export function switcherVersion() {
 }
 
 /** Copies what the gateway writes to the client. Past the cap the side is dropped, not cut. */
+// ---------------- masking of client content ----------------
+// A half leaves this machine. The client's own content (prompts, answers, tool arguments and results,
+// files, user ids) is replaced by "x" of the same byte length; everything intact needs to analyse the
+// shape (keys, types, roles, models, tool names, numbers, flags, event names) stays as sent.
+const TEXT_KEYS = new Set(['text', 'content', 'thinking', 'system', 'instructions', 'delta', 'reasoning_content',
+  'refusal', 'output', 'input', 'data', 'url', 'file_data', 'encrypted_content', 'user', 'user_id', 'prompt',
+  'summary', 'output_text', 'partial_json', 'arguments', 'args']);
+const SSE_EVENT_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+const maskString = (s) => 'x'.repeat(Buffer.byteLength(s));
+
+// Inside a payload (tool arguments, tool input, a function response) every value belongs to the client.
+function maskPayload(v) {
+  if (typeof v === 'string') return maskString(v);
+  if (Array.isArray(v)) return v.map(maskPayload);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, c]) => [k, maskPayload(c)]));
+  return v;
+}
+
+// A string that holds JSON (tool arguments) keeps its keys, so intact still sees the nested shape.
+function maskJsonString(s) {
+  const t = s.trim();
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+    try { return JSON.stringify(maskPayload(JSON.parse(t))); } catch {}
+  }
+  return maskString(s);
+}
+
+function maskValue(v, parentKey = '') {
+  if (Array.isArray(v)) return v.map((c) => maskValue(c, parentKey));
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  for (const [k, c] of Object.entries(v)) {
+    const payload = k === 'args' || k === 'arguments' || (k === 'input' && c && typeof c === 'object' && !Array.isArray(c))
+      || (k === 'response' && parentKey === 'functionResponse');
+    if (payload) out[k] = typeof c === 'string' ? maskJsonString(c) : maskPayload(c);
+    else if (typeof c === 'string' && TEXT_KEYS.has(k)) out[k] = (k === 'partial_json') ? maskJsonString(c) : maskString(c);
+    else out[k] = maskValue(c, k);
+  }
+  return out;
+}
+
+/** Masks the client's content in a request or response body: JSON, SSE, or anything else (masked whole). */
+export function maskHalf(text) {
+  if (!text) return '';
+  try { return JSON.stringify(maskValue(JSON.parse(text))); } catch {}
+  const lines = text.split('\n');
+  if (!lines.some((l) => l.startsWith('data:'))) return maskString(text);
+  return lines.map((line) => {
+    if (line === '' || line === '\r' || line.startsWith(':')) return line;
+    if (line.startsWith('event:')) {
+      const name = line.slice(6).trim();
+      return SSE_EVENT_RE.test(name) ? line : `event: ${maskString(name)}`;
+    }
+    if (line.startsWith('data:')) {
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return line;
+      try { return `data: ${JSON.stringify(maskValue(JSON.parse(data)))}`; } catch { return `data: ${maskString(data)}`; }
+    }
+    return maskString(line);
+  }).join('\n');
+}
+
 export function createHalfTap(limit = MAX_HALF_BYTES) {
   const chunks = [];
   let size = 0;
@@ -206,8 +269,8 @@ export function createContractLab(options = {}) {
 
   async function send(s, { traceId, half }) {
     const body = JSON.stringify({
-      toolRequest: half.toolRequest || '',
-      toolResponse: half.toolResponse || '',
+      toolRequest: maskHalf(half.toolRequest || ''),
+      toolResponse: maskHalf(half.toolResponse || ''),
       ...(half.toolVersion ? { toolVersion: half.toolVersion } : {}),
       switcherVersion: version(),
       converter: { inFormat: half.inFormat, outFormat: half.outFormat }
