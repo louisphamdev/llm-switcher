@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.9
+## Thay đổi trong bản 1.1.10
+
+- **README.** Mục mới "Tự cải thiện cùng intact" giải thích cách gateway này và intact tự sửa lỗi của nhau. intact giờ đã public và có trên npm với tên `intact-proxy`.
+
+### Thay đổi trong bản 1.1.9
 
 - **Dashboard.** Mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Trang không cần link từ `switch ui` nữa: gateway đặt admin token vào trang. Trang của web khác vẫn không đọc được token.
 
@@ -593,6 +597,15 @@ Trước khi gửi mẫu, gateway che mọi giá trị string bằng chuỗi `x`
 - Đặt `contractLab: {url, apiKey, enabled}` trong `config.json`. Nếu `enabled` là `true`, gateway gửi một phần các lượt trao đổi hoàn chỉnh lên intact.
 - `switch contract-probe [--model m]` gửi sáu request thử cho mỗi model và mỗi format qua gateway.
 - `switch contract-check` lấy các finding còn mở từ intact và ghi một file test cho mỗi field bị mất.
+
+### Tự cải thiện cùng intact
+
+[intact](https://github.com/louisphamdev/intact) là proxy giữ credential mà gateway này có thể dùng làm upstream. Hai công cụ tự tìm và tự sửa lỗi của nhau theo hai vòng.
+
+- **intact sửa những gì provider từ chối.** intact ghi lại mọi lỗi của provider và gom các lỗi lặp lại thành nhóm. Với 429 giả, intact gửi lại request lỗi và bỏ dần từng nửa system prompt. Đoạn nhỏ nhất mà provider từ chối được lưu thành filter trong database của intact. Mọi máy nhận bản sửa ngay, gateway này không cần cập nhật. Hai ví dụ: Antigravity trả 429 giả cho "You are Codex, an agent based on GPT-5" và cho "You are a Claude agent, built on Anthropic's Claude Agent SDK".
+- **Gateway này sửa những gì converter làm mất.** Khi bật contract lab, gateway gửi các mẫu đã che lên intact. intact so mỗi mẫu với request mà intact nhận được, rồi ghi lại mỗi field mà phép chuyển đổi làm mất. `switch contract-check` ghi một test đỏ cho mỗi finding, và bản sửa nằm trong converter.
+
+Nhờ cách chia này, fingerprint của provider không bao giờ là rule trong gateway này. Nó là filter trong intact, do intact tự tìm và chứng minh bằng cách gửi lại request.
 
 ---
 

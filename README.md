@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.9
+## Changes in 1.1.10
+
+- **README.** A new section, "Self-improvement with intact", explains how this gateway and intact correct their own faults. intact is now public and on npm as `intact-proxy`.
+
+### Changes in 1.1.9
 
 - **Dashboard.** Open `http://127.0.0.1:3456/ui` directly. The page no longer needs the link from `switch ui`: the gateway puts the admin token in the page. Pages of other sites still cannot read it.
 
@@ -593,6 +597,15 @@ Before it sends a sample, the gateway masks every string value with `x` of the s
 - Set `contractLab: {url, apiKey, enabled}` in `config.json`. If `enabled` is `true`, the gateway sends a sample of complete exchanges to intact.
 - `switch contract-probe [--model m]` sends six test requests per model and format through the gateway.
 - `switch contract-check` gets the open findings from intact and writes one test file for each lost field.
+
+### Self-improvement with intact
+
+[intact](https://github.com/louisphamdev/intact) is the credential proxy that this gateway can use as its upstream. The two tools find and correct their own faults, in two loops.
+
+- **intact corrects what providers refuse.** It records every provider error and groups the errors that recur. For a fake 429, intact replays the failing request and removes the system prompt text in halves. It keeps the smallest text that the provider refuses as a filter in its database. Every machine gets the fix at once, and this gateway needs no update. Two examples: Antigravity answered a fake 429 to "You are Codex, an agent based on GPT-5" and to "You are a Claude agent, built on Anthropic's Claude Agent SDK".
+- **This gateway corrects what its converter loses.** With the contract lab on, the gateway sends masked samples to intact. intact compares each sample with the request that it received, and records each field that the conversion lost. `switch contract-check` writes one failing test for each finding, and the fix goes into the converter.
+
+Because of this split, a provider fingerprint is never a rule in this gateway. It is a filter in intact, which intact finds and proves by replay.
 
 ---
 
