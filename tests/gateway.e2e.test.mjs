@@ -784,9 +784,10 @@ test('Codex WS: a frame larger than the body cap closes the socket before it is 
   assert.equal(close.payload.readUInt16BE(0), 1009);
 });
 
-test('Codex WS: 101 reply names the public main model or the slot, never the upstream id', async () => {
+test('Codex WS: 101 reply names the public main model, or no model, never the upstream id', async () => {
   const hidden = await rawWs({ 'x-llm-profile': 'agmock' });
-  assert.match(hidden.reply, /\r\nOpenAI-Model: main\r\n/i);
+  // With no public name the header is left out: Codex reads a different name as a reroute (LS-2).
+  assert.ok(!/\r\nOpenAI-Model:/i.test(hidden.reply), hidden.reply);
   assert.ok(!hidden.reply.includes('ag/mock-flash'));
   hidden.socket.destroy();
   const published = await rawWs({ 'x-llm-profile': 'pub' });
@@ -802,6 +803,45 @@ test('Codex WS: overlapping response.create turns run one after the other', asyn
   assert.ok(await until(() => ends() === 2, 10000), 'both turns end');
   const order = ws.messages.filter(m => /^response\.(created|completed|failed)$/.test(m.type)).map(m => m.type);
   assert.deepEqual(order, ['response.created', 'response.completed', 'response.created', 'response.completed']);
+  ws.socket.destroy();
+});
+
+// LS-1: from turn 2 Codex sends previous_response_id and only the new items; the gateway must put the
+// earlier turns back, or the model loses the task and loops.
+test('Codex WS: previous_response_id brings back the earlier turns', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'remember the code word ZEBRA-42' })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.completed')), 'turn 1 ends');
+  const firstId = ws.messages.find(m => m.type === 'response.completed').response.id;
+  const before = received.length;
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', previous_response_id: firstId,
+    input: [{ type: 'function_call_output', call_id: 'call_1', output: 'tool says ok' }] })));
+  assert.ok(await until(() => ws.messages.filter(m => m.type === 'response.completed' || m.type === 'response.failed').length === 2), 'turn 2 ends');
+  const sent = JSON.stringify(received.slice(before).at(-1).body);
+  assert.ok(sent.includes('ZEBRA-42'), `turn 2 upstream lost turn 1: ${sent.slice(0, 400)}`);
+  assert.ok(sent.includes('tool says ok'), 'turn 2 keeps its own new item');
+  ws.socket.destroy();
+});
+
+test('Codex WS: an unknown previous_response_id fails the turn without an upstream call', async () => {
+  const ws = await rawWs();
+  const before = received.length;
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', previous_response_id: 'resp_unknown', input: [] })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.failed')), 'the turn fails');
+  assert.equal(ws.messages.find(m => m.type === 'response.failed').response.error.code, 'previous_response_not_found');
+  assert.equal(received.length, before, 'no upstream call');
+  ws.socket.destroy();
+});
+
+// LS-3: Codex opens a session with generate:false. It carries the whole tool list and needs no answer.
+test('Codex WS: a generate:false warmup is answered locally, never sent upstream', async () => {
+  const ws = await rawWs();
+  const before = received.length;
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', generate: false, input: [], tools: [] })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.completed')), 'the warmup completes');
+  const done = ws.messages.find(m => m.type === 'response.completed');
+  assert.deepEqual(done.response.output, []);
+  assert.equal(received.length, before, 'no upstream call for a warmup');
   ws.socket.destroy();
 });
 

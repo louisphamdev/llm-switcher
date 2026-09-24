@@ -191,7 +191,15 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.5
+## Thay đổi trong bản 1.1.6
+
+- **Codex qua WebSocket.** Gateway giữ các lượt của mỗi phiên WebSocket. Lượt nào gửi `previous_response_id` sẽ nhận lại các lượt trước, nên Codex không còn mất nhiệm vụ sau lần gọi tool đầu tiên. Id không tồn tại làm lượt đó lỗi với `previous_response_not_found`.
+- **Warmup của Codex.** Frame `response.create` có `generate: false` được trả lời ngay tại máy. Frame này không còn tốn một lần gọi model.
+- **Tên model cho Codex.** Profile không có `publicModels` không còn gửi `OpenAI-Model: main` trong handshake, và `switch codex` cùng `switch doctor` cảnh báo trường hợp này. Codex đọc `main` là bị chuyển model và hiện cảnh báo sai "high-risk cyber activity". Xem mục "Cấu hình ưu tiên Codex".
+- **Contract lab.** Gateway gửi mỗi mẫu bằng đúng key đã mở trace của mẫu đó. intact từ chối các lần gửi của bản 1.1.5 với `HTTP 404 trace not found`.
+- **Dấu phiên bản.** Dấu phiên bản chỉ dùng commit cuối khi bản checkout không có thay đổi. Nếu có thay đổi, dấu dùng thời gian file mới nhất.
+
+### Thay đổi trong bản 1.1.5
 
 - **Bảo mật contract lab.** Việc che giờ dùng allowlist. Mọi giá trị string đều bị che, trừ các giá trị enum mà intact đọc. Bản 1.1.4 che theo danh sách key nội dung và bỏ sót 16 field (trích dẫn, tiêu đề tài liệu và trang web, câu truy vấn web search, token logprobs, tên và URI file, stop sequence, tên người tham gia, thông báo lỗi, mô tả tool).
 
@@ -343,6 +351,8 @@ Shim không sửa `~/.codex/config.toml`. Khi gateway hoạt động, shim truy�
 | `main` | `model` | `publicModels[0]` |
 | `review` | `review_model` | `publicModels[1]` |
 | `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
+
+**Profile phục vụ Codex bắt buộc có `publicModels`.** Nếu thiếu khóa này, gateway không có tên chính thức nào để đưa cho Codex. Khi đó gateway không ghi model catalog và không gửi header `OpenAI-Model`, và Codex hiện hai cảnh báo sai: "Model metadata for `<model>` not found" và "Your account was flagged for potentially high-risk cyber activity". `switch codex` và `switch doctor` cảnh báo khi profile Codex không có `publicModels`.
 
 **Codex không bao giờ nhận tên nội bộ.** Alias `main`, `review`, `subagent` chỉ tồn tại bên trong gateway. CLI nhận tên model chính thức từ `publicModels`, và `mapModel` phân giải ngược từng tên về đúng slot. Đặt `codexRoles` trong profile nếu muốn ghép khác thứ tự danh sách đó.
 
@@ -544,7 +554,12 @@ trong `PATH`.
         "sonnet": true,
         "haiku": false,
         "fable": true
-      }
+      },
+      // Khóa cho Codex. Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
+      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // tên chính thức cho main, review, subagent
+      "codexRoles": { "review": "gpt-5.6-sol" }, // không bắt buộc: ghép một vai trò với tên public khác
+      "blindfold": false,            // true: Codex giữ endpoint chính thức (xem chế độ blindfold)
+      "blindfoldPort": 3457          // cổng interceptor khi blindfold là true
     }
   },
   "debug": false,

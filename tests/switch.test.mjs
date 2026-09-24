@@ -154,3 +154,20 @@ test('switch port stops the new gateway it started when it rolls back', { skip: 
   });
   assert.equal(probe, 'free', 'nothing listens on the abandoned port');
 });
+
+// Without publicModels the gateway has no official name to give Codex: no model catalog, no OpenAI-Model
+// header, and Codex prints false "metadata not found" and "high-risk cyber activity" warnings.
+test('switch codex and switch doctor warn when the Codex profile has no publicModels', { skip: !POSIX && 'posix' }, async (t) => {
+  const base = { mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } };
+  const ws = workspace(t, await freePort(), { bare: { name: 'Bare', ...base }, named: { name: 'Named', ...base, publicModels: ['gpt-5.6-sol'] } });
+  const on = await run(ws, ['codex', 'bare']);
+  assert.equal(on.status, 0, on.stderr);
+  assert.match(on.stdout + on.stderr, /\[WARN\].*"bare".*publicModels/);
+  const doctor = await run(ws, ['doctor']);
+  assert.match(doctor.stdout, /\[WARN\].*"bare".*publicModels/);
+
+  const named = await run(ws, ['codex', 'named']);
+  assert.equal(named.status, 0, named.stderr);
+  assert.doesNotMatch(named.stdout + named.stderr, /publicModels/);
+  assert.doesNotMatch((await run(ws, ['doctor'])).stdout, /publicModels/);
+});

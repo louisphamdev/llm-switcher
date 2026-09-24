@@ -394,7 +394,8 @@ test('the half of a sampled request reaches intact with the exchange and the ver
   }, 'a sampled request to reach intact');
   const last = halves.at(-1);
   assert.match(last.traceId, TRACE_ID_RE);
-  assert.equal(last.headers.authorization, 'Bearer sk-lab');
+  // intact accepts a half only from the key that opened the trace: the key of the profile that made the call.
+  assert.equal(last.headers.authorization, 'Bearer sk-secret-ant');
   assert.deepEqual(last.body.converter, { inFormat: 'anthropic', outFormat: 'anthropic' });
   assert.equal(last.body.toolVersion, '1.2.3');
   assert.match(last.body.switcherVersion, SWITCHER_VERSION_RE);
@@ -557,7 +558,9 @@ test('a sampled Codex WS turn is tagged and its half reaches intact', async () =
   assert.match(body.switcherVersion, SWITCHER_VERSION_RE);
   const asked = JSON.parse(body.toolRequest);
   assert.equal(asked.type, 'response.create');
-  assert.equal(asked.input, 'x'.repeat('hello over ws'.length), 'the WS request is masked');
+  // The half holds the request as the upstream saw it: the turn's input as items (with any earlier
+  // turns restored from previous_response_id), its text masked.
+  assert.equal(asked.input[0].content[0].text, 'x'.repeat('hello over ws'.length), 'the WS request is masked');
   assert.ok(body.toolResponse.includes('event: response.completed'), 'the half holds the events the turn wrote');
   assert.ok(!body.toolResponse.includes('ws ok'), 'the answer text is masked in the half');
 });

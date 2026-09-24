@@ -42,6 +42,26 @@ let cachedVersion = '';
 
 // package version + the commit time, the shape the half route demands. Without git (an unpacked
 // copy) the mtime of package.json stands in, so the value always parses as a past UTC time.
+// The time of the code that runs. The last commit counts only when the tree matches it: files copied
+// over an old checkout (a ZIP) keep the old commit, so a dirty tree uses its newest code file instead.
+export function versionStamp(rootDir) {
+  const git = (...a) => execFileSync('git', ['-C', rootDir, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
+  try {
+    if (git('status', '--porcelain', '--untracked-files=no') === '') {
+      const out = git('log', '-1', '--format=%ct');
+      if (/^\d{1,12}$/.test(out)) return Number(out) * 1000;
+    }
+  } catch {}
+  let newest = 0;
+  try {
+    for (const name of fs.readdirSync(rootDir)) {
+      if (!/\.(mjs|json|html)$/.test(name)) continue;
+      newest = Math.max(newest, fs.statSync(path.join(rootDir, name)).mtimeMs);
+    }
+  } catch {}
+  return newest || Date.now();
+}
+
 export function switcherVersion() {
   if (cachedVersion) return cachedVersion;
   let version = '0.0.0';
@@ -50,17 +70,12 @@ export function switcherVersion() {
     const pkgPath = path.join(ROOT_DIR, 'package.json');
     const parsed = /^(\d{1,5}\.\d{1,5}\.\d{1,5})/.exec(JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || '');
     if (parsed) version = parsed[1];
-    stampMs = fs.statSync(pkgPath).mtimeMs;
   } catch {}
-  try {
-    const out = execFileSync('git', ['-C', ROOT_DIR, 'log', '-1', '--format=%ct'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (/^\d{1,12}$/.test(out)) stampMs = Number(out) * 1000;
-  } catch {}
+  stampMs = versionStamp(ROOT_DIR);
   cachedVersion = `${version}+${utcStamp(stampMs)}`;
   return cachedVersion;
 }
 
-/** Copies what the gateway writes to the client. Past the cap the side is dropped, not cut. */
 // ---------------- masking of client content ----------------
 // A half leaves this machine, so every string value is masked with "x" of the same byte length,
 // except the enum values that intact's reducer reads: the same key list, value shape and exclusions as
@@ -119,6 +134,7 @@ export function maskHalf(text) {
   }).join('\n');
 }
 
+/** Copies what the gateway writes to the client. Past the cap the side is dropped, not cut. */
 export function createHalfTap(limit = MAX_HALF_BYTES) {
   const chunks = [];
   let size = 0;
@@ -273,7 +289,9 @@ export function createContractLab(options = {}) {
     try {
       const res = await call(`${s.url}/api/contracts/traces/${encodeURIComponent(traceId)}/half`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${s.apiKey}` },
+        // intact takes a half only from the key that opened the trace, the one this request used;
+        // contractLab.apiKey stays for the policy, findings and fixtures.
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${half.openerKey || s.apiKey}` },
         body
       });
       // 409 means intact already holds this half: the work is done, a retry would only repeat it.

@@ -861,7 +861,8 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
         toolResponse: halfTap?.text() || '',
         toolVersion: toolVersionFromUA(req.headers['user-agent']),
         inFormat: clientFormat,
-        outFormat
+        outFormat,
+        openerKey: profile.apiKey || ''
       });
     }
   }
@@ -1461,14 +1462,44 @@ function tapWsEvent(tap, event, data) {
 // Terminal failure for the WS (responses-ws) transport: Codex ends a turn only on
 // response.completed / response.failed, so a bare {type:'error'} frame leaves the turn
 // hanging. Emit the full created -> in_progress -> failed sequence instead.
-function sendWsFailed(socket, model, message, status = 500, tap = null) {
+function sendWsFailed(socket, model, message, status = 500, tap = null, code = null) {
   if (!socket.writable) return;
   const renderer = createResponsesStream((e, d) => {
     tapWsEvent(tap, e, d);
     if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
   }, model || 'main');
   renderer.start();
-  renderer.error(message, responsesErrorCode(status));
+  renderer.error(message, code || responsesErrorCode(status));
+}
+
+// Codex on WebSocket sends only the new items of a turn and names the turn before in
+// previous_response_id; the server keeps the rest. The gateway keeps it per socket, bounded.
+const WS_HISTORY_MAX = 8;
+// Only these output items are valid input for the next turn; reasoning items are not replayed.
+const WS_REPLAY_TYPES = new Set(['message', 'function_call', 'custom_tool_call', 'local_shell_call']);
+
+function wsInputItems(input) {
+  if (typeof input === 'string') return input ? [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input }] }] : [];
+  return Array.isArray(input) ? input : [];
+}
+
+function rememberWsTurn(history, response, input) {
+  if (!history || !response?.id) return;
+  const output = (Array.isArray(response.output) ? response.output : []).filter(i => i && WS_REPLAY_TYPES.has(i.type));
+  history.set(response.id, [...input, ...output]);
+  while (history.size > WS_HISTORY_MAX) history.delete(history.keys().next().value);
+}
+
+// A generate:false frame warms the session up (Codex sends its whole tool list in it); it needs no model call.
+function answerWsWarmup(socket, payload, history, input) {
+  let completed = null;
+  const renderer = createResponsesStream((e, d) => {
+    if (e === 'response.completed') completed = d.response;
+    if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
+  }, typeof payload?.model === 'string' ? payload.model : 'main');
+  renderer.start();
+  renderer.finish('stop', { completion: 0, prompt: 0, cached: 0, reasoning: 0, hasTools: false });
+  rememberWsTurn(history, completed, input);
 }
 
 // 9Router forwards OpenAI-format tools to Gemini/Vertex for ag/* models, which accept only
@@ -1483,7 +1514,7 @@ function geminiSafeTools(tools) {
 }
 
 // One turn of the Codex WS transport. The socket loop runs turns one at a time and owns `ac`.
-async function handleWsResponseCreate(socket, payload, req, ac) {
+async function handleWsResponseCreate(socket, payload, req, ac, history = null) {
   const clientFormat = 'responses';
   const { profileKey, profile, error: profileError } = getActiveProfile(clientFormat, req);
   if (!loadConfig()) {
@@ -1494,6 +1525,22 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     sendWsFailed(socket, payload?.model || 'main', profileError || 'Proxy is currently OFF for responses.', 503);
     return;
   }
+
+  let input = wsInputItems(payload.input);
+  if (payload.previous_response_id) {
+    const earlier = history?.get(payload.previous_response_id);
+    if (!earlier) {
+      sendWsFailed(socket, payload?.model || 'main', `Previous response ${String(payload.previous_response_id).slice(0, 80)} is not known on this connection.`, 400, null, 'previous_response_not_found');
+      return;
+    }
+    input = [...earlier, ...input];
+  }
+  if (payload.generate === false) {
+    answerWsWarmup(socket, payload, history, input);
+    return;
+  }
+  const { previous_response_id: _prev, ...rest } = payload;
+  payload = { ...rest, input };
 
   let ir;
   try {
@@ -1546,8 +1593,10 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     const normalize = createUpstreamNormalizer(outFormat);
     const col = createCollector();
 
+    let completedResponse = null;
     const renderer = createResponsesStream((e, d) => {
       tapWsEvent(halfTap, e, d);
+      if (e === 'response.completed') completedResponse = d.response;
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
@@ -1567,6 +1616,7 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
     } else {
       renderer.finish(col.finish, { completion, prompt: col.prompt, cached: col.cached, reasoning: col.reasoning, hasTools: col.tools.size > 0 });
       answered = true;
+      rememberWsTurn(history, completedResponse, input);
     }
     log({
       status: streamError ? 502 : 200, stream: true,
@@ -1588,7 +1638,8 @@ async function handleWsResponseCreate(socket, payload, req, ac) {
       toolResponse: halfTap?.text() || '',
       toolVersion: toolVersionFromUA(req.headers['user-agent']),
       inFormat: clientFormat,
-      outFormat
+      outFormat,
+      openerKey: profile.apiKey || ''
     });
   }
 }
@@ -1633,14 +1684,15 @@ server.on('upgrade', (req, socket) => {
   // The official name or the slot, never the upstream ID. The value goes into a raw header line.
   const { profile } = getActiveProfile('responses', req);
   const publicMain = profile ? codexPublicModel(profile, 'main') : '';
-  const activeModel = isSafeModelName(publicMain) ? publicMain : 'main';
+  // With no public name, no header: Codex compares it with the model it asked for, and "main" reads as a reroute.
+  const modelHeader = isSafeModelName(publicMain) ? `OpenAI-Model: ${publicMain}\r\n` : '';
 
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\n' +
     'Upgrade: websocket\r\n' +
     'Connection: Upgrade\r\n' +
     `Sec-WebSocket-Accept: ${accept}\r\n` +
-    `OpenAI-Model: ${activeModel}\r\n` +
+    modelHeader +
     'x-reasoning-included: true\r\n' +
     'x-codex-turn-state: ready\r\n\r\n'
   );
@@ -1649,6 +1701,7 @@ server.on('upgrade', (req, socket) => {
   // Turns run one at a time: two at once interleave their events on one socket. Every turn,
   // queued or running, holds a controller here, so a cancel or a close stops all of them.
   const turns = new Set();
+  const history = new Map(); // response id -> the input items of that turn plus its output
   let turnChain = Promise.resolve();
   const abortTurns = () => { for (const ac of turns) ac.abort(); };
 
@@ -1657,7 +1710,7 @@ server.on('upgrade', (req, socket) => {
       const ac = new AbortController();
       turns.add(ac);
       turnChain = turnChain
-        .then(() => (ac.signal.aborted ? null : handleWsResponseCreate(socket, msg, req, ac)))
+        .then(() => (ac.signal.aborted ? null : handleWsResponseCreate(socket, msg, req, ac, history)))
         .catch(err => {
           // A throw before the handler's own try: Codex ends a turn only on response.failed.
           console.error('[llm-switcher:ws] Unhandled turn error:', err);

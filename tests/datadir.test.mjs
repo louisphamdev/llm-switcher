@@ -49,3 +49,17 @@ test('make-certs.sh runs with an openssl that lacks LibreSSL-missing options', {
   execFileSync('bash', [script, 'chatgpt.com', out], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, stdio: 'pipe' });
   for (const f of ['ca.pem', 'leaf.pem', 'leaf.key']) assert.ok(fs.existsSync(path.join(out, f)), f);
 });
+
+// LS-4: files copied over an old checkout (a ZIP) must not borrow the time of the old commit.
+test('the version stamp uses the commit time only when the working tree is clean', async () => {
+  const { versionStamp } = await import('../contract.mjs');
+  const dir = tmp();
+  const git = (...a) => execFileSync('git', ['-C', dir, ...a], { stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z' } });
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"version":"1.2.3"}');
+  fs.writeFileSync(path.join(dir, 'a.mjs'), 'export {};\n');
+  git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '.'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'old');
+  const commitMs = Date.parse('2026-01-01T00:00:00Z');
+  assert.equal(versionStamp(dir), commitMs, 'clean tree: commit time');
+  fs.writeFileSync(path.join(dir, 'a.mjs'), 'export const changed = 1;\n');
+  assert.ok(versionStamp(dir) > commitMs + 60_000, 'dirty tree: the time of the newest file, not of the old commit');
+});

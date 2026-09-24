@@ -191,7 +191,15 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.5
+## Changes in 1.1.6
+
+- **Codex over WebSocket.** The gateway keeps the turns of each WebSocket session. A turn that sends `previous_response_id` gets the earlier turns back, so Codex no longer loses the task after the first tool call. An unknown id fails the turn with `previous_response_not_found`.
+- **Codex warmup.** A `response.create` frame with `generate: false` gets a local answer. It no longer spends a model call.
+- **Codex model name.** A profile without `publicModels` no longer sends `OpenAI-Model: main` in the handshake, and `switch codex` and `switch doctor` warn about it. Codex read `main` as a reroute and showed a false "high-risk cyber activity" warning. See "Codex-first setup".
+- **Contract lab.** The gateway uploads each sample with the key that opened its trace. intact refused the 1.1.5 uploads with `HTTP 404 trace not found`.
+- **Version stamp.** The stamp uses the last commit only when the checkout has no changes. Otherwise it uses the newest file time.
+
+### Changes in 1.1.5
 
 - **Contract lab privacy.** Masking now uses an allowlist. Every string value is masked except the enum values that intact reads. 1.1.4 masked a list of content keys and missed 16 fields (citations, document and web titles, web search queries, logprobs tokens, file names and URIs, stop sequences, participant names, error messages, tool descriptions).
 
@@ -341,6 +349,8 @@ The shim does not edit `~/.codex/config.toml`. When the gateway is active, it pa
 | `main` | `model` | `publicModels[0]` |
 | `review` | `review_model` | `publicModels[1]` |
 | `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
+
+**A profile that serves Codex must have `publicModels`.** Without it, the gateway has no official name for Codex. It then writes no model catalog and sends no `OpenAI-Model` header, and Codex shows two false warnings: "Model metadata for `<model>` not found" and "Your account was flagged for potentially high-risk cyber activity". `switch codex` and `switch doctor` warn when the Codex profile has no `publicModels`.
 
 **Codex never receives an internal name.** The slot aliases `main`, `review` and `subagent` stay inside the gateway. The CLI receives the official model names from `publicModels`, and `mapModel` resolves each one back to its slot. Set `codexRoles` in the profile when you want a different pairing than the order of that list.
 
@@ -544,7 +554,12 @@ re-opened from a shell where the shim is on `PATH`.
         "sonnet": true,
         "haiku": false,
         "fable": true
-      }
+      },
+      // Codex keys. A profile that serves Codex MUST have publicModels (see Codex-first setup).
+      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // official names for main, review, subagent
+      "codexRoles": { "review": "gpt-5.6-sol" }, // optional: pair one role with another public name
+      "blindfold": false,            // true: Codex keeps its official endpoint (see Codex blindfold mode)
+      "blindfoldPort": 3457          // interceptor port when blindfold is true
     }
   },
   "debug": false,

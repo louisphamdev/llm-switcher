@@ -9,7 +9,7 @@ import {
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
   probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher,
-  contractLabSettings
+  contractLabSettings, codexPublicModelsWarning
 } from './state.mjs';
 import { runProbe, runCheck } from './contract.mjs';
 import {
@@ -436,6 +436,9 @@ async function turnOn(profileName, cliTarget) {
   printTargets(getActiveMap(planned));
   console.log(`\nClaude 1M:    ${describeClaude1M(st)}`);
   console.log(`Codex 1M:     ${st.codex1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
+  const codexKey = getActiveMap(planned).responses;
+  const codexWarning = codexPublicModelsWarning(show(codexKey), planned.profiles[codexKey]);
+  if (codexWarning) console.warn(`\n[WARN] ${codexWarning}`);
 }
 
 async function turnOff(targetArg) {
@@ -770,6 +773,10 @@ async function runDoctor() {
     const p = config.profiles[key];
     if (!p) warn(`[WARN] Target ${t} points to missing profile "${show(key)}".`);
     else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${show(key)}" (${t}) still has placeholder baseURL/apiKey.`);
+    if (p && t === 'responses') {
+      const codexWarning = codexPublicModelsWarning(show(key), p);
+      if (codexWarning) warn(`[WARN] ${codexWarning}`);
+    }
   }
 
   // 3. Launcher flags match proxy state

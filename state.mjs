@@ -285,6 +285,14 @@ export function isSafeModelName(name) {
   return typeof name === 'string' && SAFE_MODEL_NAME.test(name) && !TOML_NON_STRING.test(name);
 }
 
+// Codex compares the handshake model with the one it asked for, and reads its /model catalog from publicModels.
+export function codexPublicModelsWarning(key, profile) {
+  if (!profile || isSafeModelName(codexPublicModel(profile, 'main'))) return '';
+  return `Profile "${key}" serves Codex but has no publicModels. Codex gets no model catalog and shows false `
+    + `"model metadata not found" and "high-risk cyber activity" warnings. Add for example `
+    + `"publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], then run \`switch codex ${key}\` again.`;
+}
+
 /**
  * Does this leaf certificate cover the host the interceptor will present it for?
  * Changing blindfoldHost without rebuilding the leaf produces a TLS error that reads
