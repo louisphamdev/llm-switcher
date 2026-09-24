@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Thay đổi trong bản 1.1.6
+## Thay đổi trong bản 1.1.7
+
+- **Tool của Codex.** Khi có `publicModels`, Codex mất hết tool và dừng sau một câu trả lời. Model catalog chép metadata của một model OpenAI thật, và metadata này đưa Codex sang dạng "Responses Lite". Giờ catalog giữ Codex ở chế độ tool trực tiếp, và gateway cũng đọc tool gửi đến dưới dạng input item `additional_tools`.
+
+### Thay đổi trong bản 1.1.6
 
 - **Codex qua WebSocket.** Gateway giữ các lượt của mỗi phiên WebSocket. Lượt nào gửi `previous_response_id` sẽ nhận lại các lượt trước, nên Codex không còn mất nhiệm vụ sau lần gọi tool đầu tiên. Id không tồn tại làm lượt đó lỗi với `previous_response_not_found`.
 - **Warmup của Codex.** Frame `response.create` có `generate: false` được trả lời ngay tại máy. Frame này không còn tốn một lần gọi model.

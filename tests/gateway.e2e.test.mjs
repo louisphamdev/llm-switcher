@@ -845,6 +845,26 @@ test('Codex WS: a generate:false warmup is answered locally, never sent upstream
   ws.socket.destroy();
 });
 
+// LS-5: in the Responses Lite form Codex sends its tools as an additional_tools input item of the
+// warmup, not as a tools field. The next turn must reach upstream with those tools.
+test('Codex WS: tools sent as an additional_tools item reach upstream', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', generate: false, input: [
+    { type: 'additional_tools', id: 'at_1', role: 'developer', tools: [
+      { type: 'function', name: 'exec_command', description: 'Run a command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } },
+      { type: 'custom', name: 'apply_patch', description: 'Patch files' }] },
+    { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are a coding agent.' }] }] })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.completed')), 'the warmup completes');
+  const warmId = ws.messages.find(m => m.type === 'response.completed').response.id;
+  const before = received.length;
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', previous_response_id: warmId,
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'fix calc.py' }] }] })));
+  assert.ok(await until(() => received.length > before && ws.messages.filter(m => m.type === 'response.completed' || m.type === 'response.failed').length === 2), 'turn 2 ends');
+  const sent = JSON.stringify(received.slice(before).at(-1).body);
+  assert.ok(sent.includes('exec_command') && sent.includes('apply_patch'), `the tools are lost: ${sent.slice(0, 400)}`);
+  ws.socket.destroy();
+});
+
 test('Codex WS: a mid-stream error is logged with its text', async () => {
   const ws = await rawWs();
   ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MID_STREAM_ERROR over ws' })));

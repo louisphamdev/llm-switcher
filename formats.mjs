@@ -612,6 +612,8 @@ function responsesToIR(payload) {
     else ir.messages.push({ role: 'assistant', toolCalls: [call] });
   };
 
+  // Responses Lite sends the tools as an input item, not in payload.tools.
+  const toolList = Array.isArray(payload.tools) ? [...payload.tools] : [];
   const input = payload.input;
   if (typeof input === 'string' && input) {
     ir.messages.push({ role: 'user', content: input });
@@ -655,14 +657,19 @@ function responsesToIR(payload) {
         pushCall({ id: item.call_id || item.id || null, name: 'local_shell', args: { command: a.command || [], workdir: a.working_directory ?? undefined, timeout_ms: a.timeout_ms ?? undefined } });
       } else if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output' || item.type === 'local_shell_call_output') {
         ir.messages.push({ role: 'tool', toolCallId: item.call_id || item.id, content: responsesOutputToText(item.output) });
+      } else if (item.type === 'additional_tools' && Array.isArray(item.tools)) {
+        toolList.push(...item.tools);
       }
     }
   }
 
-  if (Array.isArray(payload.tools) && payload.tools.length) {
+  if (toolList.length) {
     ir.toolMeta = {};
     const addTool = (t, namespace) => {
       if (!t || typeof t !== 'object') return;
+      // A tool in both payload.tools and an additional_tools item is sent once: upstreams refuse duplicate names.
+      if (t.name && t.type !== 'namespace' && ir.toolMeta[responsesToolName(namespace, t.name)]) return;
+      if (t.type === 'local_shell' && ir.toolMeta.local_shell) return;
       if (t.type === 'namespace' && Array.isArray(t.tools)) {
         for (const inner of t.tools) addTool(inner, t.name);
         return;
@@ -681,7 +688,7 @@ function responsesToIR(payload) {
       }
       // web_search / file_search / tool_search / image_generation...: hosted tools, skipped.
     };
-    for (const t of payload.tools) addTool(t, null);
+    for (const t of toolList) addTool(t, null);
   }
 
   const tc = payload.tool_choice;

@@ -346,8 +346,12 @@ export function buildCodexCatalog(profile) {
 
 // One catalog entry. The catalog file and the gateway's /v1/models both use it, so they cannot drift.
 export function codexModelEntry(name, is1M) {
+  // The template copies a real OpenAI model. Its Responses Lite and code modes send the tools in a
+  // form made for OpenAI's own tools, and an upstream then gets none (LS-5).
+  const { tool_mode, ...template } = structuredClone(codexCatalogTemplate() || {});
   return {
-    ...structuredClone(codexCatalogTemplate() || {}),
+    ...template,
+    use_responses_lite: false,
     slug: name,
     display_name: name,
     ...(is1M ? { context_window: 1000000, max_context_window: 1000000 } : {})

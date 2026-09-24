@@ -191,7 +191,11 @@ flowchart LR
 
 ---
 
-## Changes in 1.1.6
+## Changes in 1.1.7
+
+- **Codex tools.** With `publicModels` set, Codex lost its tools and ended after one answer. The model catalog copied the metadata of a real OpenAI model, which puts Codex in the "Responses Lite" form. The catalog now keeps Codex in its direct tool mode, and the gateway also reads tools that arrive as an `additional_tools` input item.
+
+### Changes in 1.1.6
 
 - **Codex over WebSocket.** The gateway keeps the turns of each WebSocket session. A turn that sends `previous_response_id` gets the earlier turns back, so Codex no longer loses the task after the first tool call. An unknown id fails the turn with `previous_response_not_found`.
 - **Codex warmup.** A `response.create` frame with `generate: false` gets a local answer. It no longer spends a model call.

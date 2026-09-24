@@ -792,3 +792,10 @@ test('allowed_tools that matches no declared tool gives a request without tools,
     }
   }
 });
+
+test('responsesToIR reads additional_tools items and sends a tool once', () => {
+  const tool = { type: 'function', name: 'exec_command', parameters: { type: 'object' } };
+  const ir = responsesToIR({ model: 'm', tools: [tool], input: [{ type: 'additional_tools', role: 'developer', tools: [tool, { type: 'custom', name: 'apply_patch' }] }] });
+  assert.deepEqual(ir.tools.map(t => t.name), ['exec_command', 'apply_patch']);
+  assert.equal(ir.messages.length, 0, 'the item is not a message');
+});

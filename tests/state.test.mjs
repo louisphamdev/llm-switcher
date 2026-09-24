@@ -699,3 +699,13 @@ test('an empty launch lock is held, not taken over', async (t) => {
   assert.ok(waited >= 100 && waited < 4000, `the writer waited ${waited} ms`);
   assert.equal(fs.existsSync(lock), false);
 });
+
+// LS-5: the template copies a real OpenAI model that runs Codex in Responses Lite and code mode.
+// Those modes send the tools in a form made for OpenAI's own tools, so every entry turns them off.
+test('buildCodexCatalog entries keep Codex in its direct tool mode', () => {
+  const catalog = buildCodexCatalog({ inFormat: 'responses', publicModels: ['gpt-5.6-sol'] });
+  for (const entry of catalog.models) {
+    assert.equal(entry.use_responses_lite, false);
+    assert.equal(Object.hasOwn(entry, 'tool_mode'), false);
+  }
+});
