@@ -1,0 +1,16 @@
+sequenceDiagram
+    autonumber
+    actor CLI as Client Agent (Claude Code / Codex)
+    participant GW as LLM Switcher (:3456)
+    participant IR as Healer & IR Engine
+    participant UP as Upstream (intact / 9Router / Vertex)
+
+    CLI->>GW: POST /v1/messages or /v1/responses
+    GW->>IR: parseToIR(clientFormat, payload)
+    Note over IR: Repair orphan results, thinking budget & 1M context
+    IR-->>GW: emitUpstreamBody(outFormat, healedIR)
+    GW->>UP: POST upstream API (with AbortSignal)
+    UP-->>GW: Raw stream chunks (OpenAI / Vertex / Anthropic)
+    GW->>IR: normalizeUpstream(chunk) & parse reasoning
+    IR-->>GW: Native client event stream chunks
+    GW->>CLI: Synthesized genuine SSE (thinking_delta + text)

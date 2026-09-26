@@ -28,18 +28,25 @@ Blindfold mode does that. Codex keeps its official endpoint. The switcher interc
 
 Codex reads the `HTTPS_PROXY` variable. In blindfold mode the switcher points that variable at `blindfold/blindfold.mjs`. Codex then sends `CONNECT chatgpt.com:443` to that process.
 
-The process answers the CONNECT itself. It ends the TLS session with a leaf certificate for the target host, and it forwards the Codex API calls to the gateway. Three rules decide where each request goes:
+The process answers the CONNECT itself. It ends the TLS session with a leaf certificate for the target host. One interceptor serves both tools: what each request reaches is decided by the host of the CONNECT request and by its path, and by nothing else.
 
-| Request | Destination |
+| CONNECT host | Destination |
 | --- | --- |
-| Target host, path under `/backend-api/codex/` | The local gateway |
-| Target host, any other path | The real host, over a new TLS session |
+| `api.anthropic.com`, path `/v1/messages` or under it | The local gateway, path unchanged |
+| `api.anthropic.com`, any other path | `api.anthropic.com`, over a new TLS session |
+| `api.openai.com`, path `/v1/responses` or `/v1/models` (or under them) | The local gateway, path unchanged |
+| `api.openai.com`, any other path | `api.openai.com`, over a new TLS session |
+| `chatgpt.com`, path `/backend-api/codex/` or under it | The local gateway, `/backend-api/codex` rewritten to `/v1` |
+| `chatgpt.com`, any other path | `chatgpt.com`, over a new TLS session |
 | Another public host | A raw tunnel. The process never reads the bytes. |
 | A local or private address | Refused. |
 
+There is no `--host` and no `--prefix` any more: this table is the routing, and it cannot be
+changed from a profile or from the command line.
+
 The routing decision reads the **normalized** path, not the text the client sent. Node hands over the request target exactly as written, but the gateway resolves it with `new URL(...)`. A raw-text test would therefore accept a string that the gateway later reads as a different path: `/backend-api/codex/%2e%2e/api/logs` becomes `/api/logs`, which is the gateway's admin API. The decision also requires a segment boundary, so `/backend-api/codex-usage` stays with the host it belongs to.
 
-Sign-in, token refresh and the usage page keep working, because they do not use the Codex API path.
+Sign-in, token refresh and the usage page keep working, because they do not use a path in the table. A request whose `Host` header names a different host than its CONNECT target gets `421 Misdirected Request` and opens no upstream connection.
 
 ## Why no system change is necessary
 
@@ -81,14 +88,17 @@ CAUTION: Do not build these certificates with `New-SelfSignedCertificate` in Pow
 
 ### 2. Turn on blindfold mode in the profile
 
-Add two keys to the Codex profile in `config.json`:
+Add the interceptor port at the top level of `config.json`, next to `port`:
 
 ```json
-"blindfold": true,
-"blindfoldPort": 3457
+"blindfold": { "port": 3457 }
 ```
 
-`blindfoldPort` is optional. The default is 3457.
+`blindfold.port` is optional. The default is 3457, and it must differ from the gateway port
+in `port`. There is no per-profile `blindfold`, `blindfoldPort`, `blindfoldHost` or
+`blindfoldPrefix` any more: the interceptor runs whenever at least one tool is active, and
+what it routes is the fixed host table in [`cross-platform.md`](cross-platform.md), not a
+profile setting.
 
 ### 3. Activate the profile
 
@@ -98,7 +108,7 @@ switch codex <your-profile>
 
 This one command starts the gateway and writes the environment files. The gateway then starts the interceptor on the configured port. `switch off` stops both and removes the generated files.
 
-The gateway owns the interceptor. It brings the interceptor in line with `config.json` when it starts, after every change in the dashboard, and after every `switch` command. A service start, a `switch port`, and a change of host, prefix or port in the dashboard therefore never leave `HTTPS_PROXY` pointing at a port where nothing listens. When blindfold mode is turned off for the Codex target, the gateway stops the interceptor, and a running Codex session must be restarted.
+The gateway owns the interceptor. It brings the interceptor in line with `config.json` when it starts, after every change in the dashboard, and after every `switch` command. A service start, a `switch port`, and a change of port in the dashboard therefore never leave `HTTPS_PROXY` pointing at a port where nothing listens. When blindfold mode is turned off for the Codex target, the gateway stops the interceptor, and a running Codex session must be restarted.
 
 `switch` refuses the activation and writes no file in these cases:
 
@@ -155,13 +165,14 @@ re-originated to the real host. A compressed body is decoded first, because a
 client asks for `gzip` and the bytes on the wire are not readable text. The
 forwarded response keeps its original bytes; only the copy in the file is decoded.
 
-To record a different tool, point the proxy at that tool's host and give it a
-prefix that no path can match, so every request is re-originated and recorded:
+Both tools are recorded by the same process, because one interceptor holds the whole
+table. To capture into a directory of your own, pass `--capture` to a second interceptor
+on a port of its own:
 
 ```bash
-bash blindfold/make-certs.sh api.anthropic.com ~/.llm-switcher/anthropic/certs
-node blindfold/blindfold.mjs --host api.anthropic.com --prefix /no-gateway \
-  --port 3458 --certs ~/.llm-switcher/anthropic/certs --capture ~/.llm-switcher/anthropic/captures
+bash blindfold/make-certs.sh
+node blindfold/blindfold.mjs --port 3458 --gateway-port 3456 \
+  --certs blindfold/certs --capture ~/.llm-switcher/captures
 ```
 
 Use directories that you own. `make-certs.sh` and `--capture` refuse a directory that another
@@ -201,13 +212,13 @@ The switcher writes `LLM_SWITCHER_CODEX_BASE_URL` again, the gateway stops the i
 
 Read this section before you turn blindfold mode on.
 
-**The CA is trusted for every host that Codex contacts.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. A CA that `make-certs.sh` builds now carries a name constraint: it can sign only for the target host and its subdomains. A client that obeys name constraints refuses any other certificate from this CA. OpenSSL, rustls and the macOS and Windows verifiers obey them. A CA that an older version built has no constraint. Anybody who can read its `ca.key` can forge a certificate for any host. Run `make-certs.sh` again to replace it, and keep `blindfold/certs/` private in both cases.
+**The CA is trusted for every host that Codex contacts.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. A CA that `make-certs.sh` builds now carries name constraints: it can sign only for `api.anthropic.com`, `api.openai.com` and `chatgpt.com`. A client that obeys name constraints refuses any other certificate from this CA. OpenSSL, rustls and the macOS and Windows verifiers obey them. A CA that an older version built has no constraint. Anybody who can read its `ca.key` can forge a certificate for any host. Run `make-certs.sh` again to replace it, and keep `blindfold/certs/` private in both cases.
 
 **All traffic to the intercepted host is decrypted by this process.** That includes sign-in and token refresh, because the CONNECT for the whole host is terminated locally. Requests outside the Codex API path are re-originated to the real host over a new TLS session; they are forwarded, not tunneled. The `--verbose` flag prints the method and path of every such request.
 
 **Directory permissions are weaker on Windows.** `make-certs.sh` calls `chmod` on the certificate directory, and that call does nothing under Git Bash for Windows. On that platform the keys are protected only by the account that owns the directory.
 
-**Only one host is intercepted.** If your Codex uses API key authentication instead of ChatGPT authentication, the host is `api.openai.com`. Build the leaf for that host, and start the process with `--host api.openai.com --prefix /v1`.
+**Exactly three hosts are intercepted.** The leaf names `api.anthropic.com`, `api.openai.com` and `chatgpt.com`, so a Codex that signs in with an API key instead of a ChatGPT account reaches the gateway on `api.openai.com` with no reconfiguration. Any other host is tunneled without being read.
 
 **The interceptor is a proxy.** It binds to loopback, so a remote machine cannot use it, but every process on this machine can. It refuses a CONNECT to a local or private address, so it cannot be used to reach a service that listens only on this machine. The interceptor resolves the name first and checks every address in the answer, so a spelling such as `2130706433` or a name that resolves to `127.0.0.1` is also refused. It then connects to the address that it checked. It prints each refused target once, without `--verbose`. A VPN or split DNS can resolve a public name to a private address, and that message shows the cause.
 

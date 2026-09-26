@@ -110,18 +110,27 @@ no `hosts` file change and no certificate in a system trust store. See
 Build the certificates once. On Windows, run this line in Git Bash, not in PowerShell:
 
 ```bash
-bash blindfold/make-certs.sh chatgpt.com
+bash blindfold/make-certs.sh
 ```
 
-The subject of the certificate must match the host your Codex account calls:
+The leaf names exactly three hosts, and the interceptor routes exactly those three:
 
-| Codex sign-in | Host | Profile keys |
+| CONNECT host | Paths to this switcher's gateway | Everything else |
 | --- | --- | --- |
-| ChatGPT account | `chatgpt.com` | The defaults. Add nothing. |
-| API key | `api.openai.com` | `"blindfoldHost": "api.openai.com"`, `"blindfoldPrefix": "/v1"` |
+| `api.anthropic.com` | `/v1/messages`, `/v1/messages/...` | to `api.anthropic.com`, unchanged |
+| `api.openai.com` | `/v1/responses`, `/v1/responses/...`, `/v1/models`, `/v1/models/...` | to `api.openai.com`, unchanged |
+| `chatgpt.com` | `/backend-api/codex/...`, forwarded as `/v1` | to `chatgpt.com`, unchanged |
 
-`switch` compares the host in the profile against the subject alternative names of the
-leaf certificate. If they differ it refuses the activation, names the host, and prints
+A CONNECT host outside the table is tunneled untouched, with no TLS termination. A request
+whose `Host` header names a different host than its CONNECT target gets
+`421 Misdirected Request` and opens no upstream connection; the comparison ignores case and
+a default `:443`.
+
+There is no `blindfoldHost` and no `blindfoldPrefix` any more: this table is the routing, and
+it is not a profile setting.
+
+`switch` compares those three hosts against the subject alternative names of the leaf
+certificate. If one is missing it refuses the activation, names the host, and prints
 the command that rebuilds the certificate. No file is written on that path.
 
 ## Check that the platform work succeeded

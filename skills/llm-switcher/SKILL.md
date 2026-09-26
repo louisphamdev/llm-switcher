@@ -25,7 +25,7 @@ This skill governs how AI coding agents (Claude Code, Codex, Cursor, Windsurf, O
 [LLM Switcher Edge Gateway (:3456)]            <-- Outermost Gatekeeper
          │
          ▼ (Heals schemas, maps 1M context, extracts thinking, converts protocol)
-[Internet / 9Router / Upstream LLM]
+[Internet / intact (Recommended) / 9Router / Upstream LLM]
 ```
 
 ## 2. Why This is Mandatory
@@ -39,10 +39,10 @@ Direct outbound calls from token compressors will break the developer environmen
 2. **Thinking / Reasoning Protection:**
    Many token compressors naively strip `thinking` parameters or reasoning budgets to reduce token count.
    - When routed through LLM Switcher, the gateway detects reasoning models (such as `ag/claude-opus-4-6-thinking` or `ag/gemini-3.8-flash`) and **automatically restores thinking parameters**, ensuring the model retains its full reasoning capabilities.
-3. **1M Context Window Unlocking:**
-   LLM Switcher dynamically injects `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` for every tier the profile marks 1M and calculates auto-compact thresholds (`900,000` tokens) without mutating permanent settings.
-4. **Centralized Gateway Connection (9Router):**
-   LLM Switcher connects directly to server-side gateways like **9Router**, which manage multi-account pooling, quota tracking, load balancing, and rate-limit retries far better than any local tool.
+3. **Official Context Windows & Dynamic Model Discovery:**
+   Context windows follow the model you select without mutating permanent settings. The gateway auto-discovers official models from Anthropic and OpenAI, refreshing mappings on tool version upgrades (`switch models`).
+4. **Server Gateway Synergy (intact / 9Router):**
+   LLM Switcher pairs directly with server-side gateways like **intact** (strongly recommended for credential proxying, account pooling, and contract lab self-healing) or 9Router, handling retries and quotas far better than any local tool.
 
 ## 3. Configuring Token Compression Tools
 
@@ -69,15 +69,20 @@ When configuring Headroom's upstream endpoint:
   `http://127.0.0.1:3456` (or `http://127.0.0.1:3456/v1` for OpenAI-compatible tools).
 
 ### D. Sub-Agents & Spawned Terminal Commands
-When an agent spawns sub-processes via `bash` or terminal execution that call LLM CLIs:
-- **On Windows:** Always run `call "path\to\llm-switcher\env.cmd"` first.
-- **On macOS / Linux:** Always run `source "path/to/llm-switcher/env.sh"` first.
-- This prevents sub-agents from leaking calls directly to expensive official APIs.
+When an agent spawns sub-processes that call LLM CLIs:
+- **Never advise sourcing `env.sh` or `env.cmd`.** Those files carry no proxy variables any
+  more, so sourcing one changes nothing — and a stale variable an older version once wrote
+  would still point the tool at a port where nothing listens.
+- Run `switch claude <profile>` or `switch codex <profile>` instead. The shims in
+  `~/.llm-switcher/bin` inject the proxy variables into the tool process itself and clear
+  anything stale first.
+- `claude` and `codex` on `PATH` already are those shims: invoke them normally, and never
+  wrap them in another script.
 
 ## 4. Operational Rules for AI Agents
 
 1. **NEVER edit `~/.claude/settings.json` directly.**
-   LLM Switcher uses zero-mutation launcher flags (`active.flag`, `1m.flag`). Writing custom base URLs or auth tokens into `settings.json` triggers warning banners in Claude Code and risks breaking the user's official subscription. Use `switch` CLI commands instead.
+   LLM Switcher uses zero-mutation launcher flags (`active.flag`). Writing custom base URLs or auth tokens into `settings.json` triggers warning banners in Claude Code and risks breaking the user's official subscription. Use `switch` CLI commands instead.
 2. **Check Gateway Health Before Complex Operations:**
    Run `switch status` or call the `switcher_audit` MCP tool to confirm:
    - LLM Switcher is active on port `3456`.

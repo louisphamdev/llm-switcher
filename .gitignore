@@ -20,6 +20,9 @@ blindfold.pid
 blindfold.log
 env-codex.cmd
 env-codex.sh
+env-claude.cmd
+env-claude.sh
+gateway.port
 # blindfold --capture writes request and response bodies verbatim
 captures/
 

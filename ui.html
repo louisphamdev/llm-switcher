@@ -836,7 +836,7 @@
     </div>
     <div class="cli-slots-grid">
       <!-- Slot: Claude Code -->
-      <div id="card-slot-anthropic" class="cli-slot-card">
+      <div id="card-slot-claude" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
             <span class="cli-slot-icon" aria-hidden="true">CC</span>
@@ -845,16 +845,16 @@
               <div class="cli-slot-route">/v1/messages</div>
             </div>
           </div>
-          <span id="badge-slot-anthropic" class="badge">OFF</span>
+          <span id="badge-slot-claude" class="badge">OFF</span>
         </div>
-        <label class="sr-only" for="select-slot-anthropic">Profile for Claude Code</label>
-        <select id="select-slot-anthropic" class="cli-slot-select" onchange="switchCliTarget('anthropic', this.value)">
+        <label class="sr-only" for="select-slot-claude">Profile for Claude Code</label>
+        <select id="select-slot-claude" class="cli-slot-select" onchange="switchCliTarget('claude', this.value)">
           <option value="">Official endpoint</option>
         </select>
       </div>
 
       <!-- Slot: Codex -->
-      <div id="card-slot-responses" class="cli-slot-card">
+      <div id="card-slot-codex" class="cli-slot-card">
         <div class="cli-slot-header">
           <div class="cli-slot-title-group">
             <span class="cli-slot-icon" aria-hidden="true">CX</span>
@@ -863,49 +863,14 @@
               <div class="cli-slot-route">/v1/responses</div>
             </div>
           </div>
-          <span id="badge-slot-responses" class="badge">OFF</span>
+          <span id="badge-slot-codex" class="badge">OFF</span>
         </div>
-        <label class="sr-only" for="select-slot-responses">Profile for Codex</label>
-        <select id="select-slot-responses" class="cli-slot-select" onchange="switchCliTarget('responses', this.value)">
+        <label class="sr-only" for="select-slot-codex">Profile for Codex</label>
+        <select id="select-slot-codex" class="cli-slot-select" onchange="switchCliTarget('codex', this.value)">
           <option value="">Official endpoint</option>
         </select>
       </div>
 
-      <!-- Slot: OpenAI Chat -->
-      <div id="card-slot-openai-chat" class="cli-slot-card">
-        <div class="cli-slot-header">
-          <div class="cli-slot-title-group">
-            <span class="cli-slot-icon" aria-hidden="true">OA</span>
-            <div>
-              <div class="cli-slot-name">OpenAI Chat</div>
-              <div class="cli-slot-route">/v1/chat/completions</div>
-            </div>
-          </div>
-          <span id="badge-slot-openai-chat" class="badge">OFF</span>
-        </div>
-        <label class="sr-only" for="select-slot-openai-chat">Profile for OpenAI Chat</label>
-        <select id="select-slot-openai-chat" class="cli-slot-select" onchange="switchCliTarget('openai-chat', this.value)">
-          <option value="">Official endpoint</option>
-        </select>
-      </div>
-
-      <!-- Slot: Vertex -->
-      <div id="card-slot-vertex" class="cli-slot-card">
-        <div class="cli-slot-header">
-          <div class="cli-slot-title-group">
-            <span class="cli-slot-icon" aria-hidden="true">VX</span>
-            <div>
-              <div class="cli-slot-name">Vertex / Gemini</div>
-              <div class="cli-slot-route">/v1beta/models/*</div>
-            </div>
-          </div>
-          <span id="badge-slot-vertex" class="badge">OFF</span>
-        </div>
-        <label class="sr-only" for="select-slot-vertex">Profile for Vertex or Gemini</label>
-        <select id="select-slot-vertex" class="cli-slot-select" onchange="switchCliTarget('vertex', this.value)">
-          <option value="">Official endpoint</option>
-        </select>
-      </div>
     </div>
 
     <!-- Providers & Profiles List -->
@@ -971,14 +936,13 @@
         <div id="tab-routing" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-routing" hidden>
           <div class="form-grid">
             <div class="form-group">
-              <label for="p-informat">Client protocol</label>
-              <select id="p-informat" onchange="onInFormatChange(this.value)">
-                <option value="auto">AUTO (Accepts Claude / OpenAI / Codex / Vertex)</option>
-                <option value="anthropic">Anthropic Messages (/v1/messages)</option>
-                <option value="openai-chat">OpenAI Chat (/v1/chat/completions)</option>
-                <option value="responses">OpenAI Responses — Codex (/v1/responses)</option>
-                <option value="vertex">Vertex generateContent (/v1beta/models/*)</option>
+              <label for="p-tool">Serves which tool</label>
+              <select id="p-tool" onchange="onToolChange(this.value)">
+                <option value="auto">Both — Claude Code and Codex</option>
+                <option value="anthropic">Claude Code only (/v1/messages)</option>
+                <option value="responses">Codex only (/v1/responses)</option>
               </select>
+              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Saved as <code>tool</code> in config.json. OpenAI Chat and Vertex are no longer client inputs: the gateway stands between Claude Code, Codex and the provider.</span>
             </div>
             <div class="form-group">
               <label for="p-outformat">Upstream protocol</label>
@@ -1022,7 +986,7 @@
           <div class="warning-callout" id="warn-1m-callout">
             <span class="badge badge-convert" id="warn-1m-icon">NOTE</span>
             <div id="warn-1m-text">
-              <strong>1M Context Warning:</strong> Enabling <code>[1M Context]</code> for a tier sets <code>ANTHROPIC_DEFAULT_&lt;TIER&gt;_MODEL=&lt;tier&gt;[1m]</code> for that tier. If the upstream model lacks native 1M token support, long conversations will fail with <code>HTTP 400 (Context Exceeded)</code>.
+              <strong>1M context notice:</strong> The <code>1M context</code> checkbox only records that a tier may use a 1M window. The gateway unlocks the context on the request itself; it never rewrites <code>settings.json</code> or the launcher environment. A model without native 1M support still answers <code>HTTP 400 (Context Exceeded)</code>.
             </div>
           </div>
 
@@ -1083,32 +1047,12 @@
         <div id="tab-codex" class="tab-pane" role="tabpanel" aria-labelledby="tab-button-codex" hidden>
           <div class="form-grid" style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
             <div class="form-group full">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; text-transform: none;">
-                <input type="checkbox" id="p-blindfold" style="width: 13px; height: 13px;" onchange="onBlindfoldToggle(this.checked)">
-                Blindfold mode — hide the gateway address from the CLI
-              </label>
+              <span class="field-heading">Interceptor</span>
+              <span id="blindfold-port-display" style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">not configured</span>
               <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-                Off: the CLI is given a base URL override, and it prints a warning on its own <code>/model</code> screen.
-                On: the CLI keeps its official endpoint and reaches the gateway through a local interceptor.
-                Build the certificates first with <code>bash blindfold/make-certs.sh &lt;host&gt;</code>.
+                The interceptor is one switcher-wide setting (<code>blindfold</code> in config.json), not a per-profile one.
+                Build the certificates with <code>bash blindfold/make-certs.sh</code> — one certificate names all three hosts this switcher routes.
               </span>
-            </div>
-          </div>
-
-          <div class="form-grid" id="blindfold-fields" hidden>
-            <div class="form-group">
-              <label for="p-blindfold-host">Intercepted host</label>
-              <input type="text" id="p-blindfold-host" placeholder="chatgpt.com">
-              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">ChatGPT sign-in: <code>chatgpt.com</code>. API key: <code>api.openai.com</code>.</span>
-            </div>
-            <div class="form-group">
-              <label for="p-blindfold-port">Interceptor port</label>
-              <input type="number" id="p-blindfold-port" min="1" max="65535" placeholder="3457">
-            </div>
-            <div class="form-group full">
-              <label for="p-blindfold-prefix">API path prefix</label>
-              <input type="text" id="p-blindfold-prefix" placeholder="/backend-api/codex">
-              <span style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Requests under this path reach the gateway. Every other path goes to the real host. API key accounts use <code>/v1</code>.</span>
             </div>
           </div>
         </div>
@@ -1201,8 +1145,6 @@
     let currentProfileBuffer = null;
     let renderedSlotFormat = 'auto';
     const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
-    // Same list as TARGETS in state.mjs. The page is served as a static file and cannot import it.
-    const TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
     // Order matters: publicModels is read by position when codexRoles has no entry.
     const CODEX_ROLE_SLOTS = ['main', 'review', 'subagent'];
 
@@ -1222,7 +1164,7 @@
           { id: 'haiku', label: 'Haiku Model', placeholder: 'e.g. ag/gemini-3.7-flash-high', allow1M: true },
           { id: 'fable', label: 'Fable Model', placeholder: 'e.g. ag/gemini-3.8-flash-high', allow1M: true }
         ],
-        warning: '<strong>1M Context Warning:</strong> Enabling <code>[1M Context]</code> for a tier sets <code>ANTHROPIC_DEFAULT_&lt;TIER&gt;_MODEL=&lt;tier&gt;[1m]</code> for that tier. If the upstream model lacks native 1M token support, long conversations will fail with <code>HTTP 400 (Context Exceeded)</code>.',
+        warning: '<strong>1M context notice:</strong> The <code>1M context</code> checkbox only records that a tier may use a 1M window. The gateway unlocks the context on the request itself; it never rewrites <code>settings.json</code> or the launcher environment. A model without native 1M support still answers <code>HTTP 400 (Context Exceeded)</code>.',
         icon: 'NOTE'
       },
       responses: {
@@ -1235,22 +1177,6 @@
         warning: '<strong>Context notice:</strong> The launcher applies <code>model</code>, <code>review_model</code>, and <code>agents.default_subagent_model</code> through Codex config overrides. The 1M option also sets <code>model_context_window</code> and the auto-compact limit.',
         icon: 'NOTE'
       },
-      'openai-chat': {
-        heading: 'Default Model (OpenAI Chat)',
-        slots: [
-          { id: 'default', label: 'Default Chat Model', placeholder: 'e.g. gpt-4o or ag/gemini-3.8-flash', allow1M: true }
-        ],
-        warning: '<strong>1M Context Notice:</strong> When enabled, sets <code>OPENAI_MAX_CONTEXT_TOKENS=1000000</code>. Verify that upstream model supports 1M context before enabling.',
-        icon: 'NOTE'
-      },
-      vertex: {
-        heading: 'Default Model (Vertex / Gemini)',
-        slots: [
-          { id: 'default', label: 'Default Model (Vertex/Gemini)', placeholder: 'e.g. gemini-2.5-pro or gemini-2.5-flash', allow1M: false }
-        ],
-        warning: '<strong>Context Window Notice:</strong> Vertex/Gemini SDK context window is managed directly by upstream Google models. No client-side 1M flag is needed.',
-        icon: 'INFO'
-      }
     };
     SLOT_CONFIG.auto = SLOT_CONFIG.anthropic;
 
@@ -1367,7 +1293,7 @@
       update1mWarnings();
     }
 
-    function onInFormatChange(newFmt) {
+    function onToolChange(newFmt) {
       collectCurrentSlotValues(renderedSlotFormat);
       renderModelSlots(newFmt);
       renderCodexTab(newFmt);
@@ -1398,29 +1324,13 @@
         if (input) input.value = Object.hasOwn(roles, slot) ? (roles[slot] || '') : (published[i] || '');
       });
 
-      const chk = document.getElementById('p-blindfold');
-      if (chk) chk.checked = Boolean(p.blindfold);
-      const host = document.getElementById('p-blindfold-host');
-      if (host) host.value = p.blindfoldHost || '';
-      const port = document.getElementById('p-blindfold-port');
-      if (port) port.value = p.blindfoldPort || '';
-      const prefix = document.getElementById('p-blindfold-prefix');
-      if (prefix) prefix.value = p.blindfoldPrefix || '';
-      onBlindfoldToggle(Boolean(p.blindfold));
-    }
-
-    // The form already marks itself dirty through one input/change listener, so this
-    // only reveals the fields that the toggle governs.
-    function onBlindfoldToggle(enabled) {
-      const fields = document.getElementById('blindfold-fields');
-      if (fields) fields.hidden = !enabled;
     }
 
     // One set of inputs feeds both keys: codexRoles is the role mapping the gateway
     // resolves, publicModels is the flat list /v1/models serves. Writing only one of
     // them lets the two drift apart.
     function collectCodexValues(profile) {
-      if (!servesCodex(profile.inFormat)) return;
+      if (!servesCodex(document.getElementById('p-tool')?.value || 'auto')) return;
 
       const roles = {};
       const published = [];
@@ -1432,13 +1342,6 @@
       profile.codexRoles = roles;
       profile.publicModels = published;
 
-      profile.blindfold = Boolean(document.getElementById('p-blindfold')?.checked);
-      const host = document.getElementById('p-blindfold-host')?.value.trim() || '';
-      const prefix = document.getElementById('p-blindfold-prefix')?.value.trim() || '';
-      const port = parseInt(document.getElementById('p-blindfold-port')?.value, 10);
-      profile.blindfoldHost = host;
-      profile.blindfoldPrefix = prefix;
-      profile.blindfoldPort = Number.isInteger(port) && port > 0 && port <= 65535 ? port : '';
     }
 
     function collectCurrentSlotValues(format = renderedSlotFormat) {
@@ -1456,7 +1359,7 @@
     }
 
     function update1mWarnings() {
-      const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+      const currentFmt = document.getElementById('p-tool')?.value || 'auto';
       const cfg = getActiveSlotConfig(currentFmt);
       cfg.slots.forEach(s => {
         const chk = document.getElementById(`p-${s.id}-1m`);
@@ -1516,10 +1419,8 @@
         dot.className = 'status-dot active';
         title.innerText = `Gateway active for ${activeTargets.length} client${activeTargets.length > 1 ? 's' : ''}`;
         const parts = [];
-        if (activeMap.anthropic) parts.push(`Claude: ${activeMap.anthropic}`);
-        if (activeMap.responses) parts.push(`Codex: ${activeMap.responses}`);
-        if (activeMap['openai-chat']) parts.push(`OpenAI: ${activeMap['openai-chat']}`);
-        if (activeMap.vertex) parts.push(`Vertex: ${activeMap.vertex}`);
+        if (activeMap.claude) parts.push(`Claude: ${activeMap.claude}`);
+        if (activeMap.codex) parts.push(`Codex: ${activeMap.codex}`);
         sub.innerText = `Port ${state.port} | ${parts.join(' | ')}`;
         toggleBtn.className = 'btn btn-danger';
         toggleBtn.innerText = 'Use official endpoints';
@@ -1531,12 +1432,18 @@
         toggleBtn.innerText = 'Activate compatible routes';
       }
 
-      // Update 4 CLI Slots
+      const bfEl = document.getElementById('blindfold-port-display');
+      if (bfEl) {
+        const bf = state.config?.blindfold;
+        bfEl.textContent = (bf && bf.port)
+          ? `port ${bf.port} — host ${bf.host || 'api.anthropic.com, api.openai.com, chatgpt.com'}, prefix ${bf.prefix || 'default'}`
+          : 'not configured (the tools reach the provider directly)';
+      }
+
+      // Update the two tool slots
       const slots = [
-        { id: 'anthropic', name: 'Claude Code', key: 'anthropic' },
-        { id: 'responses', name: 'Codex', key: 'responses' },
-        { id: 'openai-chat', name: 'OpenAI Chat', key: 'openai-chat' },
-        { id: 'vertex', name: 'Vertex / Gemini', key: 'vertex' }
+        { id: 'claude', name: 'Claude Code', key: 'claude' },
+        { id: 'codex', name: 'Codex', key: 'codex' }
       ];
 
       for (const slot of slots) {
@@ -1548,8 +1455,8 @@
         if (select) {
           select.innerHTML = '<option value="">Official endpoint</option>';
           for (const [key, p] of Object.entries(state.config.profiles)) {
-            const inFmt = p.inFormat || 'auto';
-            if (inFmt === 'auto' || inFmt === slot.key) {
+            const tool = p.tool || 'auto';
+            if (tool === 'auto' || tool === slot.key) {
               const opt = document.createElement('option');
               opt.value = key;
               opt.textContent = `${p.name} (${key})`;
@@ -1580,14 +1487,12 @@
 
       for (const [key, p] of Object.entries(state.config.profiles)) {
         const activeCLIs = [];
-        if (activeMap.anthropic === key) activeCLIs.push('Claude');
-        if (activeMap.responses === key) activeCLIs.push('Codex');
-        if (activeMap['openai-chat'] === key) activeCLIs.push('OpenAI');
-        if (activeMap.vertex === key) activeCLIs.push('Vertex');
+        if (activeMap.claude === key) activeCLIs.push('Claude');
+        if (activeMap.codex === key) activeCLIs.push('Codex');
         const isActiveAny = activeCLIs.length > 0;
         const isEditing = (key === currentlyEditingKey);
-        const shortFmt = (f) => ({ auto: 'auto', anthropic: 'anth', 'openai-chat': 'chat', responses: 'resp', vertex: 'vtx' }[f] || f || 'auto');
-        const routeBadge = `${shortFmt(p.inFormat)}→${shortFmt(p.outFormat || p.mode)}`;
+        const shortFmt = (f) => ({ auto: 'auto', claude: 'claude', codex: 'codex' }[f] || f || 'auto');
+        const routeBadge = `${shortFmt(p.tool || 'auto')}→${shortFmt(p.outFormat || p.mode)}`;
 
         const card = document.createElement('div');
         card.className = `profile-card ${isEditing ? 'editing' : ''} ${isActiveAny ? 'active' : ''}`;
@@ -1599,7 +1504,8 @@
           selectProfileForEdit(key);
         });
 
-        const pCfg = getActiveSlotConfig(p.inFormat || 'auto');
+        const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
+        const pCfg = getActiveSlotConfig(slotFmt);
         const modelsSummaryHtml = pCfg.slots.map(s => {
           const val = valueForSlot(p.defaultModels, s.id) || '-';
           const has1m = flagForSlot(p.model1M, s.id);
@@ -1725,14 +1631,15 @@
       document.getElementById('p-key').disabled = true;
       document.getElementById('p-name').value = p.name;
       document.getElementById('p-mode').value = p.mode || 'hybrid';
-      document.getElementById('p-informat').value = p.inFormat || 'auto';
+      const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
+      document.getElementById('p-tool').value = slotFmt;
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
       document.getElementById('p-outformat').value = p.outFormat || '';
       document.getElementById('p-url').value = p.baseURL;
       document.getElementById('p-key-val').value = p.apiKey || '';
 
-      renderModelSlots(p.inFormat || 'auto');
-      renderCodexTab(p.inFormat || 'auto');
+      renderModelSlots(slotFmt);
+      renderCodexTab(slotFmt);
 
       document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
       const usedBy = Object.entries(state.activeProfiles || {}).filter(([, v]) => v === key).map(([t]) => t);
@@ -1754,7 +1661,7 @@
       currentProfileBuffer = {
         name: '',
         mode: 'hybrid',
-        inFormat: 'auto',
+        tool: null,
         outFormat: '',
         thinkingMode: 'auto',
         baseURL: 'https://',
@@ -1769,7 +1676,7 @@
       document.getElementById('p-key').disabled = false;
       document.getElementById('p-name').value = '';
       document.getElementById('p-mode').value = 'hybrid';
-      document.getElementById('p-informat').value = 'auto';
+      document.getElementById('p-tool').value = 'auto';
       document.getElementById('p-outformat').value = '';
       document.getElementById('p-thinking-mode').value = 'auto';
       document.getElementById('p-url').value = 'https://';
@@ -1796,7 +1703,7 @@
         setKeyIfNew('9router');
         document.getElementById('p-name').value = '9Router Cloud';
         document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-tool').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'https://api.9router.com/v1';
         document.getElementById('p-thinking-mode').value = 'auto';
@@ -1814,7 +1721,7 @@
         setKeyIfNew('openrouter');
         document.getElementById('p-name').value = 'OpenRouter';
         document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-tool').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'https://openrouter.ai/api/v1';
         currentProfileBuffer = {
@@ -1831,7 +1738,7 @@
         setKeyIfNew('codex-vertex');
         document.getElementById('p-name').value = 'Codex to Vertex';
         document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-informat').value = 'responses';
+        document.getElementById('p-tool').value = 'responses';
         document.getElementById('p-outformat').value = 'vertex';
         document.getElementById('p-url').value = 'https://api.9router.com/v1';
         document.getElementById('p-thinking-mode').value = 'auto';
@@ -1848,7 +1755,7 @@
         setKeyIfNew('selfhost');
         document.getElementById('p-name').value = 'Selfhost Hybrid';
         document.getElementById('p-mode').value = 'hybrid';
-        document.getElementById('p-informat').value = 'auto';
+        document.getElementById('p-tool').value = 'auto';
         document.getElementById('p-outformat').value = '';
         document.getElementById('p-url').value = 'https://llm.example.com/v1';
         currentProfileBuffer = {
@@ -1865,15 +1772,15 @@
         setKeyIfNew('local-openai');
         document.getElementById('p-name').value = 'Local OpenAI Server';
         document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-informat').value = 'openai-chat';
+        document.getElementById('p-tool').value = 'auto';
         document.getElementById('p-outformat').value = 'openai-chat';
         document.getElementById('p-url').value = 'http://127.0.0.1:8000/v1';
         document.getElementById('p-thinking-mode').value = 'native';
         currentProfileBuffer = {
-          defaultModels: { default: 'gpt-4o' },
-          model1M: { default: false }
+          defaultModels: { opus: 'gpt-4o' },
+          model1M: { opus: false }
         };
-        renderModelSlots('openai-chat');
+        renderModelSlots('auto');
       }
       formDirty = true;
       showToast(`Applied ${type} template!`);
@@ -1939,7 +1846,7 @@
         return;
       }
 
-      const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+      const currentFmt = document.getElementById('p-tool')?.value || 'auto';
       const cfg = getActiveSlotConfig(currentFmt);
 
       for (const m of models) {
@@ -2022,7 +1929,7 @@
       const profile = {
         name: document.getElementById('p-name').value.trim(),
         mode: document.getElementById('p-mode').value,
-        inFormat: document.getElementById('p-informat').value || 'auto',
+        tool: ({ anthropic: 'claude', responses: 'codex' }[document.getElementById('p-tool').value]) || null,
         thinkingMode: document.getElementById('p-thinking-mode').value || 'auto',
         baseURL: document.getElementById('p-url').value.trim(),
         apiKey: document.getElementById('p-key-val').value.trim(),
@@ -2092,7 +1999,7 @@
       box.style.display = 'none';
 
       try {
-        const currentFmt = document.getElementById('p-informat')?.value || 'auto';
+        const currentFmt = document.getElementById('p-tool')?.value || 'auto';
         const cfg = getActiveSlotConfig(currentFmt);
         const primarySlotId = cfg.slots[0]?.id || 'default';
         const modelInput = document.getElementById(`p-${primarySlotId}`) || document.getElementById('p-sonnet') || document.getElementById('p-opus');

@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 import { createFrameReader } from '../blindfold/wsframe.mjs';
 
@@ -18,7 +18,7 @@ const MASKED = '__LLM_SWITCHER_KEEP_KEY__';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-let upstream, upstreamPort, proxy, proxyPort, tmpDir;
+let upstream, upstreamPort, proxy, proxyPort, tmpDir, fakeInterceptor, blindfoldPort, certsDir;
 const received = []; // { url, headers, body }
 const hangState = { closed: false, slowAborted: false };
 const bigState = { finishedAt: 0 };
@@ -32,6 +32,27 @@ function freePort() {
     });
     s.on('error', reject);
   });
+}
+
+// The blindfold check only passes with a certificate in hand, and minting one needs bash and
+// openssl. Where they are missing this fixture says so for the two tests that need it instead of
+// failing them with a confusing 502.
+function findBash() {
+  for (const candidate of ['bash', 'C:\\Program Files\\Git\\bin\\bash.exe', '/usr/bin/bash', '/bin/bash']) {
+    try {
+      const r = spawnSync(candidate, ['--version'], { stdio: 'ignore', timeout: 5000 });
+      if (!r.error && r.status === 0) return candidate;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+const BASH = findBash();
+const noCerts = BASH ? false : 'needs bash + openssl to mint the interceptor certificate';
+
+function buildCerts(dir) {
+  const script = path.join(ROOT, 'blindfold', 'make-certs.sh');
+  const r = spawnSync(BASH, [script, 'chatgpt.com', dir.replace(/\\/g, '/')], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`make-certs.sh failed: ${r.stderr || r.stdout}`);
 }
 
 const sse = (res, objs, { raw = [] } = {}) => {
@@ -159,14 +180,23 @@ before(async () => {
   await startUpstream();
   proxyPort = await freePort();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-switcher-test-'));
+
+  // R3b: both tools are active in this fixture, so every admin write runs through
+  // checkBlindfoldTarget. Give the interceptor a port of its own and a certificate minted for
+  // this run — otherwise the check probes whatever interceptor this machine happens to run, finds
+  // a proof it cannot match, and turns a successful save into a 502.
+  blindfoldPort = await freePort();
+  certsDir = path.join(tmpDir, 'certs');
+  if (!noCerts) buildCerts(certsDir);
+
   const base = `http://127.0.0.1:${upstreamPort}`;
   const models = { opus: 'up-opus', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' };
   const cfg = {
     port: proxyPort,
-    activeProfile: 'chat',
-    activeProfiles: { anthropic: 'chat', responses: 'chat', 'openai-chat': 'chat', vertex: 'chat' },
+    blindfold: { port: blindfoldPort },
+    activeProfiles: { claude: 'chat', codex: 'chat' },
     profiles: {
-      chat: { name: 'Mock Chat', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-chat', defaultModels: models },
+      chat: { name: 'Mock Chat', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-chat', defaultModels: models },
       vtx: { name: 'Mock Vertex', mode: 'convert', inFormat: 'auto', outFormat: 'vertex', baseURL: `${base}/vtx`, apiKey: 'sk-secret-vtx', defaultModels: models },
       agmock: { name: 'Mock AG via chat', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-ag', defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' }, model1M: { main: true } },
@@ -177,23 +207,62 @@ before(async () => {
   };
   fs.writeFileSync(path.join(tmpDir, 'config.json'), JSON.stringify(cfg, null, 2));
   proxy = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(proxyPort)], {
-    env: { ...process.env, LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'), LLM_SWITCHER_STATE_DIR: tmpDir, CLAUDE_CONFIG_DIR: path.join(tmpDir, 'claude'), LLM_SWITCHER_PORT: '' },
+    env: {
+      ...process.env,
+      LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'),
+      LLM_SWITCHER_STATE_DIR: tmpDir,
+      CLAUDE_CONFIG_DIR: path.join(tmpDir, 'claude'),
+      LLM_SWITCHER_PORT: '',
+      ...(noCerts ? {} : { LLM_SWITCHER_BLINDFOLD_CERTS: certsDir })
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let log = '';
   proxy.stdout.on('data', d => { log += d; });
   proxy.stderr.on('data', d => { log += d; });
-  for (let i = 0; i < 50; i++) {
+  let started = false;
+  for (let i = 0; i < 50 && !started; i++) {
     try {
       const r = await fetch(`http://127.0.0.1:${proxyPort}/health`);
-      if (r.ok) return;
+      if (r.ok) started = true;
     } catch {}
+    if (!started) await new Promise(r => setTimeout(r, 100));
+  }
+  if (!started) throw new Error(`proxy did not start:\n${log}`);
+
+  // A stand-in interceptor on the fixture's own port. It only has to answer the identity proof
+  // with THIS gateway's port and tool set, so a commit() sees its own interceptor and leaves the
+  // port alone — nothing is spawned, and nothing is left running after the suite.
+  fakeInterceptor = spawn(process.execPath, ['--input-type=module', '-e', `
+    const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'state.mjs')).href)});
+    const http = await import('node:http');
+    const fs = await import('node:fs');
+    s.ensureAdminToken();
+    const port = ${blindfoldPort};
+    const gatewayPort = ${proxyPort};
+    http.createServer((req, res) => {
+      const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
+      const activeTools = s.deriveActiveTools(s.loadConfig() || {}).join(',');
+      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort, activeTools };
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort, activeTools, proof: s.identityProof(nonce, f) }));
+      void fs;
+    }).listen(port, '127.0.0.1');
+  `], {
+    env: { ...process.env, LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'), LLM_SWITCHER_STATE_DIR: tmpDir },
+    stdio: 'ignore'
+  });
+  const deadline = Date.now() + 8000;
+  for (;;) {
+    const probe = await fetch(`http://127.0.0.1:${blindfoldPort}/?challenge=probe`).catch(() => null);
+    if (probe?.ok) break;
+    if (Date.now() > deadline) throw new Error('the stand-in interceptor never came up');
     await new Promise(r => setTimeout(r, 100));
   }
-  throw new Error(`proxy did not start:\n${log}`);
 });
 
 after(() => {
+  fakeInterceptor?.kill();
   proxy?.kill();
   upstream?.close();
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -384,13 +453,12 @@ test('save-profile rejects a model name that could act as a command', async () =
   assert.equal(badHost.status, 400);
   assert.match((await badHost.json()).error, /blindfoldHost/);
 
-  // The shapes the dashboard actually sends stay valid, empty strings included.
+  // A new-format body stays valid: exactly one `tool` and no legacy field (R7c).
   const ok = await post('/api/save-profile', {
     key: 'probe', profile: {
-      name: 'p', baseURL: 'http://127.0.0.1:1/v1', inFormat: 'responses',
+      name: 'p', baseURL: 'http://127.0.0.1:1/v1', tool: 'codex',
       publicModels: ['gpt-5.6-sol', 'ag/mock-flash'],
-      codexRoles: { main: 'gpt-5.6-sol', review: '', subagent: '' },
-      blindfold: true, blindfoldHost: 'chatgpt.com', blindfoldPort: 3457, blindfoldPrefix: '/backend-api/codex'
+      codexRoles: { main: 'gpt-5.6-sol', review: '', subagent: '' }
     }
   });
   assert.equal(ok.status, 200);
@@ -462,12 +530,17 @@ test('Vertex upstream: multiple functionCall chunks become separate tool_use blo
   assert.match(received.at(-1).url, /:streamGenerateContent\?alt=sse$/);
 });
 
-test('Gemini SDK route: model comes from the URL path', async () => {
-  const res = await post('/v1beta/models/claude-opus-like:generateContent', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
-  assert.equal(res.status, 200);
-  const json = await res.json();
-  assert.equal(received.at(-1).body.model, 'up-opus');
-  assert.ok(json.candidates[0].content.parts.some(p => p.text === 'Final answer'));
+// A8 / R5: the openai-chat INPUT route is gone. Two paths used to reach the same converter as a
+// second protocol; a client that still speaks one is refused, not silently converted into a
+// request under a profile its tool never chose.
+test('A8: /v1/chat/completions and /chat/completions answer 404 on the gateway', { skip: noCerts }, async () => {
+  const before = received.length;
+  for (const p of ['/v1/chat/completions', '/chat/completions']) {
+    const res = await post(p, { model: 'default', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(res.status, 404, p);
+    assert.match((await res.json()).error.message, /Not found/, p);
+  }
+  assert.equal(received.length, before, 'a removed route never reaches an upstream');
 });
 
 test('Upstream 429 is returned in Anthropic error shape with retry-after', async () => {
@@ -580,7 +653,7 @@ test('Security: the admin API refuses a caller without the token and changes not
     assert.ok(!JSON.stringify(hits[0]).includes('sk-secret-chat'), 'the stored key is not sent to a foreign baseURL');
 
     assert.equal((await fetch(url('/health'))).status, 200, '/health needs no token');
-    assert.equal((fs.statSync(path.join(tmpDir, 'admin.token')).mode & 0o777).toString(8), '600');
+    if (process.platform !== 'win32') assert.equal((fs.statSync(path.join(tmpDir, 'admin.token')).mode & 0o777).toString(8), '600');
   } finally {
     sink.close();
   }
@@ -713,7 +786,26 @@ test('an auto profile maps Codex names by client protocol and leaves Claude mapp
   assert.equal(await upstreamModel('/v1/responses', { model: 'gpt-5.5', stream: false, input: 'hi' }), 'up-opus');
   assert.equal(await upstreamModel('/v1/responses', { model: 'main', stream: false, input: 'hi' }), 'up-opus');
   assert.equal(await upstreamModel('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-opus');
-  assert.equal(await upstreamModel('/v1/chat/completions', { model: 'default', messages: [{ role: 'user', content: 'hi' }] }), 'up-sonnet');
+  assert.equal(await upstreamModel('/v1/messages', { model: 'fable', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-fable');
+});
+
+// R4: an alias is a name for a human. What leaves for the provider is always a real model ID —
+// the tier suffix and the role words stay on this side of the wire.
+test('R4: official model names map correctly and no alias is emitted to tool', async () => {
+  const upstreamModel = async (p, body) => {
+    const before = received.length;
+    const r = await post(p, body, { 'x-llm-profile': 'chat' });
+    await r.text();
+    return received.slice(before).at(-1)?.body?.model;
+  };
+  // Claude Code asks by tier, and the [1m] marker never travels.
+  assert.equal(await upstreamModel('/v1/messages', { model: 'opus[1m]', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-opus');
+  assert.equal(await upstreamModel('/v1/messages', { model: 'sonnet', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-sonnet');
+  assert.equal(await upstreamModel('/v1/messages', { model: 'haiku', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }), 'up-haiku');
+  // Codex asks by role alias, which resolves to that role's slot.
+  assert.equal(await upstreamModel('/v1/responses', { model: 'main', stream: false, input: 'hi' }), 'up-opus');
+  // A bare OpenAI id has no slot of its own here; it fails closed instead of reaching upstream.
+  assert.equal(await upstreamModel('/v1/responses', { model: 'gpt-5.5', stream: false, input: 'hi' }), 'up-opus');
 });
 
 // ---- Request input limits and the Codex WS transport (audit F04, F05, F20, F37, F38, F51) ----
@@ -899,7 +991,9 @@ test('Codex WS: a turn that throws before its own error handling still ends in r
 });
 
 test('An in-band upstream error closes the upstream connection instead of leaving it open', async () => {
-  const r = await post('/v1/chat/completions', { model: 'main', stream: true, messages: [{ role: 'user', content: 'ERROR_THEN_HANG' }] });
+  // R5: this travels on /v1/messages now. The upstream still speaks openai-chat, so the stream is
+  // still a converted one and the in-band error still has to tear the upstream down.
+  const r = await post('/v1/messages', { model: 'claude-sonnet-4-6', max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'ERROR_THEN_HANG' }] }, { 'x-llm-profile': 'chat' });
   await r.text();
   assert.ok(await until(() => hangState.closed, 3000), 'the upstream response is still open');
 });
@@ -979,7 +1073,7 @@ test('/v1/models windows follow model1M and the entry comes from codex-catalog-t
 test('a dashboard change based on a stale revision is refused with 409 and changes nothing', async () => {
   const { revision } = await (await fetch(url('/api/status'), { headers: withToken('/api/status', {}) })).json();
   assert.match(revision, /^[0-9a-f]{16}$/);
-  const first = await post('/api/save-profile', { key: 'rev1', revision, profile: { name: 'Rev', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k' } });
+  const first = await post('/api/save-profile', { key: 'rev1', revision, profile: { name: 'Rev', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k' } });
   assert.equal(first.status, 200);
   const next = (await first.json()).revision;
   assert.notEqual(next, revision);
@@ -997,7 +1091,7 @@ test('save-profile refuses control characters in the name', async () => {
 });
 
 test('a kept API key is never pointed at a new baseURL or new endpoints', async () => {
-  const create = await post('/api/save-profile', { key: 'keydest', profile: { name: 'K', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'sk-keydest' } });
+  const create = await post('/api/save-profile', { key: 'keydest', profile: { name: 'K', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'sk-keydest' } });
   assert.equal(create.status, 200);
   try {
     for (const change of [{ endpoints: { 'openai-chat': 'http://evil.test/v1/chat/completions' } }, { baseURL: 'http://evil.test/v1' }, { baseURL: 'http://evil.test/v1', apiKey: MASKED }]) {
@@ -1036,17 +1130,23 @@ test('/ui serves the dashboard with anti-framing headers', async () => {
   assert.match(await r.text(), /LLM Switcher/);
 });
 
-test('Vertex routes: streaming action, full resource path, and an unknown action', async () => {
-  const stream = await post('/v1beta/models/claude-opus-like:streamGenerateContent?alt=sse', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
-  assert.equal(stream.status, 200);
-  assert.match(stream.headers.get('content-type'), /text\/event-stream/);
-  const frames = parseSSE(await stream.text()).filter(f => f.data);
-  assert.ok(frames.some(f => f.data.candidates?.[0]?.content?.parts?.some(p => p.text)), 'a text part is streamed');
-  const full = await post('/v1/projects/p1/locations/us-central1/publishers/google/models/claude-opus-like:generateContent', { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
-  assert.equal(full.status, 200);
-  assert.equal(received.at(-1).body.model, 'up-opus');
-  const bad = await post('/v1beta/models/x:explode', { contents: [] });
-  assert.equal(bad.status, 404);
+// A8 / R5: every vertex INPUT route, in each of the three shapes it used to accept. The vertex
+// OUTPUT format is untouched — the fixtures that convert Anthropic requests to a vertex upstream
+// still run above — but a Gemini-shaped request is no longer an input this gateway takes.
+test('A8: vertex routes answer 404 on the gateway', { skip: noCerts }, async () => {
+  const routes = [
+    '/v1beta/models/claude-opus-like:streamGenerateContent?alt=sse',
+    '/v1beta/models/claude-opus-like:generateContent',
+    '/v1/projects/p1/locations/us-central1/publishers/google/models/claude-opus-like:generateContent',
+    '/v1beta/models/x:explode'
+  ];
+  const before = received.length;
+  for (const p of routes) {
+    const res = await post(p, { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] });
+    assert.equal(res.status, 404, p);
+    assert.match((await res.json()).error.message, /Not found/, p);
+  }
+  assert.equal(received.length, before, 'a removed route never reaches an upstream');
 });
 
 test('Codex WS: conversation.item.create is echoed and response.cancel stops the running turn', async () => {

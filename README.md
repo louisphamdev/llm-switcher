@@ -3,7 +3,7 @@
 <p align="center">
   <b>Zero-dependency, multi-protocol edge gateway & provider switcher</b><br>
   Seamlessly bridge <b>Claude Code</b>, <b>Codex</b>, OpenAI, and Gemini SDKs to any upstream LLM API.<br>
-  Full bi-directional protocol conversion, 1M context unlock, thinking protocol extraction, and edge message healing.
+  Full bi-directional protocol conversion, official-model context windows, thinking protocol extraction, and edge message healing.
 </p>
 
 <p align="center">
@@ -13,162 +13,118 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-22c55e?logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Dependencies-Zero-38bdf8" alt="Zero Dependencies">
-  <img src="https://img.shields.io/badge/Context-1%2C000%2C000_tokens-6366f1" alt="1M Context">
+  <img src="https://img.shields.io/badge/Context-window_follows_the_model-6366f1" alt="Context window follows the model">
   <img src="https://img.shields.io/badge/Multi--Active-Concurrent_CLIs-f59e0b" alt="Multi-Active">
   <img src="https://img.shields.io/badge/License-MIT-gray" alt="License MIT">
 </p>
 
 ---
 
-> ### 🎯 The Core Problem: Why Generic Proxies Cripple Your AI Coding Tools
+> ### 🛡️ Zero-Loss Native Emulation for Coding Agents
 >
-> Every LLM provider uses a **subtly or drastically different API response standard**:
-> - **Anthropic** requires dedicated `thinking` blocks (`thinking_delta` + `signature_delta`), strict alternating turn rules, and typed `tool_use` input schemas.
-> - **OpenAI** streams reasoning as `reasoning_content` delta chunks or `reasoning_details[]`, and formats tools as `tool_calls` with JSON string arguments.
-> - **Google Vertex AI** places reasoning in `candidates[0].content.parts[{thought: true, text, thoughtSignature}]` and tool arguments as raw objects.
-> - **Open-source models (DeepSeek, Qwen, GLM)** often dump chain-of-thought directly into `content` or duplicate fields under conflicting keys.
+> Generic proxies mangle response protocols: Anthropic loses `thinking_delta` reasoning blocks, tool arguments split, and prompt caches desynchronize.
 >
-> **When coding tools like Claude Code or Codex receive non-native or partially converted responses, they don't just look wrong — the agent's performance degrades catastrophically:**
-> 1. **Lost Chain-of-Thought:** If Claude Code does not receive native `thinking_delta` blocks, it **completely misses the model's internal reasoning**. The agent acts prematurely, skips architectural planning, and produces buggy code.
-> 2. **Broken Tool Execution:** Mismatched stop reasons (`tool_calls` vs `tool_use`) and split argument chunks cause tool execution failures and infinite retries.
-> 3. **Token & Cache Miscounting:** Non-standard usage accounting breaks prompt cache alignment and premature context compaction.
->
-> Developers often blame the model for "getting dumber" when in reality **their proxy mangled the response protocol.**
->
-> ### 🛡️ The Solution: Zero-Loss Native Emulation (Subscription-Grade Quality)
->
-> **LLM Switcher solves this by acting as a high-precision, zero-loss protocol emulator.**
->
-> It normalizes whatever your upstream provider emits (9Router, OpenRouter, Vertex, DeepSeek) and re-synthesizes it into the **exact native event stream the client agent was built to consume**:
-> - **Claude Code** receives 100% genuine Anthropic SSE events (`message_start` ➔ `thinking_delta` ➔ `signature_delta` ➔ `content_block_start: tool_use` ➔ `message_delta`), performing **identically to an official Anthropic subscription**.
-> - **Codex** receives 100% genuine Responses API events (`response.created` ➔ `output_text.delta` ➔ `function_call` ➔ `response.completed`).
->
-> **You get the freedom and cost savings of 3rd-party APIs while maintaining 100% official subscription-grade agent intelligence.**
+> **LLM Switcher solves this at the local network edge:**
+> - **100% Native Emulation:** Normalizes upstream APIs (intact, 9Router, Vertex, DeepSeek) into genuine Anthropic SSE (`thinking_delta` + `tool_use`) for Claude Code, and genuine Responses API events for Codex.
+> - **Client-Side Edge Companion:** Intentionally offloads heavy account pooling and key rotation to **[intact](https://github.com/louisphamdev/intact)** (recommended) or 9Router (basic alternative), keeping LLM Switcher zero-dependency and bloat-free.
+> - **Targeted Tool Scope:** Built specifically for **Claude Code** and **OpenAI Codex** (OpenCode natively supports custom models without shims; refer to intact for account pooling; and Antigravity isn't worth building for 😏).
 
 ---
 
-> ### 💡 Design Philosophy: The Client-Side Edge Companion to 9Router
->
-> **LLM Switcher intentionally does NOT implement multi-account pooling, key rotation, quota tracking, or provider load balancing.**
->
-> That heavy lifting belongs to server-side AI routing gateways like **[9Router](https://github.com/decolua/9router)**, which handle centralized account rotation, rate-limit retries, and quota management far more reliably and securely at the server layer.
->
-> **LLM Switcher is specifically engineered as the optimal client-side edge extension to pair with 9Router (or similar gateways):**
-> - **At the Local Workstation (LLM Switcher):** Translates coding tool protocols (Claude Code `/v1/messages`, Codex `/v1/responses`, Vertex `/v1beta/...`, OpenAI Chat), injects 1M context windows, manages local multi-CLI profiles, and runs the Healer Engine to fix mangled payloads from local prompt compressors (RTK, Headroom, Ponytail).
-> - **At the Server Gateway (9Router):** Manages account pools, API key rotation, load balancing, billing quotas, and global provider failover.
->
-> This clean division of responsibility keeps LLM Switcher **ultra-lightweight, zero-dependency, and bloat-free** while giving you an unbeatable developer setup.
+## Architecture & Interactive Diagrams
+
+LLM Switcher runs locally on your workstation (`127.0.0.1:3456`) as a transparent edge interceptor and protocol bridge.
+
+<p align="center">
+  <a href="docs/diagrams/system-architecture.html">
+    <img src="docs/diagrams/system-topology.svg" alt="LLM Switcher System Topology & Architecture" width="100%">
+  </a>
+  <br>
+  <sub><i>🎨 Themed with Pretty-Mermaid (Tokyo Night). Click diagram to open interactive Archify viewer (zoom, pan, tracing).</i></sub>
+</p>
+
+### 1. Interactive Archify Visual Library
+
+All architecture maps and execution sequences are authored with **[Archify](https://github.com/tt-a1i/archify)** and rendered with **[Pretty-Mermaid](https://github.com/imxv/Pretty-mermaid-skills)**:
+
+| Diagram | Description | Interactive Visual | Scalable Vector |
+|---|---|---|---|
+| **System Topology** | Complete edge architecture: Clients ➔ Optimizers ➔ Gateway & Healer Core ➔ Upstream Providers | [📊 Open Interactive View](docs/diagrams/system-architecture.html) | [SVG](docs/diagrams/system-topology.svg) • [PNG](docs/diagrams/system-topology.png) |
+| **IR Healer Pipeline** | Inbound request normalization, schema healing, streaming synthesis, and abort propagation | [🔄 Open Interactive View](docs/diagrams/ir-translation-pipeline.html) | [SVG](docs/diagrams/ir-healer-pipeline.svg) • [PNG](docs/diagrams/ir-healer-pipeline.png) |
+| **Codex Blindfold Routing** | TLS CONNECT proxy sequence, credential scrubbing, and upstream routing | [🛡️ Open Interactive View](docs/diagrams/blindfold-request-routing.html) | [HTML](docs/diagrams/blindfold-request-routing.html) |
+| **Switch Lifecycle** | Zero-downtime tool toggle, CAS configuration writes, and interceptor sync | [⚡ Open Interactive View](docs/diagrams/blindfold-switch-lifecycle.html) | [HTML](docs/diagrams/blindfold-switch-lifecycle.html) |
 
 ---
 
-## Architecture & Workflow
+### 2. Request Lifecycle & Healer Pipeline
 
-LLM Switcher sits locally on your workstation (`127.0.0.1:3456`). It acts as the **outermost edge gatekeeper** before requests leave for the internet.
+<p align="center">
+  <a href="docs/diagrams/ir-translation-pipeline.html">
+    <img src="docs/diagrams/ir-healer-pipeline.svg" alt="Bi-Directional IR Healer Pipeline" width="100%">
+  </a>
+  <br>
+  <sub><i>💡 Click above to inspect the interactive IR Healer lifecycle sequence.</i></sub>
+</p>
 
-### 1. End-to-End System Topology
-
-```mermaid
-flowchart TD
-    subgraph Clients["Dev Clients & Coding CLIs"]
-        CC["Claude Code CLI\n(/v1/messages)"]
-        CDX["OpenAI Codex CLI\n(/v1/responses)"]
-        OAI["OpenAI SDKs / Cursor\n(/v1/chat/completions)"]
-        VTX["Gemini / Vertex SDKs\n(/v1beta/models/*)"]
-    end
-
-    subgraph Optimizers["Optional Middle-Layer (Installed in CLI)"]
-        OPT["Prompt Optimizers & Trimmers\n(Headroom / RTK / Ponytail)\n[Configured upstream: :3456]"]
-    end
-
-    subgraph Switcher["LLM Switcher (:3456) — Outermost Edge Gatekeeper"]
-        direction TB
-        ROUTER["Protocol Auto-Detection & Multi-Active Routing"]
-        HEALER["Healer Engine\n• Heal orphaned tool_results\n• Restore stripped thinking\n• Merge consecutive turns"]
-        IR["Bi-Directional IR Translation\n(4 Client Formats ⟷ 3 Upstream Formats)"]
-        M1M["1M Context Unlocker\n& Auto-Compact Thresholds"]
-        LOGS["Live Inspector\n(In-Memory Ring Buffer)"]
-        ROUTER --> HEALER --> IR --> M1M --> LOGS
-    end
-
-    subgraph Upstream["Internet / Upstream Providers"]
-        R9["9Router / Selfhost Gateway"]
-        OR["OpenRouter / Together / Groq"]
-        ANT["Anthropic Native API"]
-        GCP["Google Vertex AI / Gemini"]
-    end
-
-    CC -->|Direct| ROUTER
-    CC -.->|Optional| OPT
-    CDX -->|Direct| ROUTER
-    CDX -.->|Optional| OPT
-    OAI --> ROUTER
-    VTX --> ROUTER
-    OPT -->|Forward to Switcher| ROUTER
-
-    LOGS -->|Clean Outbound| R9
-    LOGS -->|Clean Outbound| OR
-    LOGS -->|Clean Outbound| ANT
-    LOGS -->|Clean Outbound| GCP
-```
-
----
-
-### 2. Bi-Directional IR (Intermediate Representation) Pipeline
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor CLI as Client (Claude Code / Codex / SDK)
-    participant GW as LLM Switcher (:3456)
-    participant IR as IR & Healer Engine
-    participant UP as Upstream (9Router / Anthropic / Vertex)
-
-    CLI->>GW: Inbound Request (Anthropic, Responses, Chat, or Vertex)
-    Note over GW,IR: Normalize to Canonical IR
-    GW->>IR: parseToIR(clientFormat, payload)
-    Note over IR: Healer checks:<br/>1. Repair orphaned tool_results<br/>2. Restore stripped thinking params<br/>3. Reconcile role alternations<br/>4. Apply 1M context limits
-    IR->>GW: emitUpstreamBody(outFormat, healedIR)
-    GW->>UP: Outbound API Call (fetch with AbortSignal)
-    UP-->>GW: Upstream Streaming SSE / JSON Chunks
-    Note over GW: normalizeUpstream(chunk)<br/>Extract reasoning_content, <think> tags, usage
-    GW->>CLI: Render client-native SSE (e.g. Anthropic thinking_delta + text_delta)
-    Note over CLI,GW: Client connection closes (Ctrl+C) -> GW aborts UP instantly!
-```
-
----
-
-### 3. Multi-Active CLI Independent Routing
-
-You can run **multiple active profiles concurrently** — one profile dedicated to each CLI, without collision:
+### 3. High-Level Flow
 
 ```mermaid
 flowchart LR
-    subgraph Inbound["Incoming Client Calls"]
-        C1["Claude Code\n(/v1/messages)"]
-        C2["Codex CLI\n(/v1/responses)"]
-        C3["OpenAI SDK\n(/v1/chat/completions)"]
-        C4["Vertex SDK\n(/v1beta/models/*)"]
+    classDef client fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef edge fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#f8fafc;
+    classDef healer fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef upstream fill:#2e1065,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef opt fill:#1e1b4b,stroke:#818cf8,stroke-dasharray: 4 4,color:#e0e7ff;
+
+    subgraph Clients[" 💻 Dev Clients & Coding CLIs "]
+        CC["Claude Code CLI\n(/v1/messages)"]:::client
+        CDX["OpenAI Codex CLI\n(/v1/responses)"]:::client
     end
 
-    subgraph Core["LLM Switcher Core (:3456)"]
-        SLOT1["Slot: Anthropic\nActive: [9Router]"]
-        SLOT2["Slot: Responses\nActive: [OpenRouter]"]
-        SLOT3["Slot: OpenAI\nActive: [Local LLM]"]
-        SLOT4["Slot: Vertex\nActive: [Off / Official]"]
+    subgraph Middle[" ⚡ Optional Middle-Layer "]
+        OPT["Token Optimizers\n(Headroom / RTK)"]:::opt
     end
 
-    subgraph Egress["Upstream Targets"]
-        U1["9Router (Opus 1M context)"]
-        U2["OpenRouter (Sonnet thinking)"]
-        U3["Local OpenAI Server (:8000)"]
-        U4["Official Google Endpoint"]
+    subgraph Gateway[" 🛡️ LLM Switcher Edge Gateway (:3456) "]
+        ROUTER["Edge Router\n(Zero-Mutation)"]:::edge
+        HEALER["Healer Engine\n(Auto-Fix Schemas)"]:::healer
+        IR["Bi-Directional IR\n(Event Synth)"]:::healer
+        ROUTER --> HEALER --> IR
     end
 
-    C1 --> SLOT1 --> U1
-    C2 --> SLOT2 --> U2
-    C3 --> SLOT3 --> U3
-    C4 --> SLOT4 --> U4
+    subgraph Upstreams[" ☁️ Upstream Providers "]
+        INTACT["intact Gateway\n(Recommended Pooler)"]:::upstream
+        OTHER["9Router / Vertex / Other"]:::upstream
+    end
+
+    CC -->|direct| ROUTER
+    CDX -->|direct| ROUTER
+    CC -.->|prune| OPT
+    CDX -.->|prune| OPT
+    OPT -->|forward| ROUTER
+
+    IR -->|contract & pool| INTACT
+    IR -->|standard call| OTHER
 ```
+
+---
+
+### 4. How It Actually Works: Transparent Request Interception
+
+LLM Switcher acts as a transparent man-in-the-middle without ever touching client configuration files:
+
+1. **Ephemeral Shim Activation:** When you invoke `claude` or `codex`, a lightweight shim at the front of your `PATH` executes first. It injects `HTTPS_PROXY=http://127.0.0.1:3457` and custom CA certs *only into that process's in-memory environment*, leaving `~/.claude/settings.json` and `~/.codex/config.toml` completely untouched.
+2. **Network Interception (`:3457`):** The tool sends standard TLS requests to official hosts (`api.anthropic.com` or `api.openai.com`). The local Blindfold interceptor terminates TLS, strips client credentials, and transparently re-routes API calls (`/v1/messages`, `/v1/responses`, `/v1/models`) locally to the Gateway (`:3456`). All other traffic (OAuth logins, GitHub, web searches) tunnels untouched to the real internet.
+3. **Protocol Conversion & Upstream Call (`:3456`):** The gateway loads your active profile from `config.json`, runs the Healer Engine (repairing empty `{}` schemas and restoring reasoning budgets), and converts the request into the upstream provider's native dialect (e.g. Gemini, OpenAI Chat, or Anthropic) with your configured credentials and base URL.
+4. **Native Event Stream Synthesis:** When the upstream provider streams its response, the gateway captures reasoning tokens and tool calls, re-synthesizing them into genuine Anthropic SSE (`thinking_delta` + `tool_use`) or Codex Responses events. The tool receives genuine native events and believes it is communicating directly with the official provider!
+
+> #### 🔒 CA Security & Origin: Where does the CA come from and how safe is it?
+>
+> - **100% Locally Minted:** The CA certificate (`ca.pem`) and private key (`ca.key`) are generated entirely on your own machine using your local OpenSSL (`blindfold/make-certs.sh`). No keys are downloaded from the internet, and the private key is stored locally with strict `0600` permissions.
+> - **Zero OS Trust Store Tampering:** Unlike tools like Charles or Fiddler, LLM Switcher **NEVER installs anything into your system or OS root certificate store** (no Windows Certificate Store, no macOS Keychain, no Linux `/etc/ssl/certs`). It requires **zero Administrator or sudo privileges**.
+> - **Process-Scoped Trust Only:** The certificate is loaded ephemerally into the memory of `claude` (via `NODE_EXTRA_CA_CERTS`) and `codex` (via `CODEX_CA_CERTIFICATE`). Your browsers, banking apps, git, and other terminal sessions never trust this CA.
+> - **Cryptographic Name Constraints:** The CA is minted with explicit X.509 `nameConstraints` strictly permitting only three domains: `api.anthropic.com`, `api.openai.com`, and `chatgpt.com`. Even if the local private key were compromised, standard TLS verifiers will reject it for any other domain (Google, GitHub, your bank).
+> - **VPN & Corporate CA Preservation:** If your workstation already has a company CA in `NODE_EXTRA_CA_CERTS`, `ensure-ca-bundle.mjs` merges both into a combined bundle so internal corporate proxies never break.
 
 ---
 
@@ -184,68 +140,21 @@ flowchart LR
   - Fixes orphaned `tool_result` blocks caused by aggressive prompt pruners (RTK, Headroom, Ponytail) before sending to Anthropic/OpenAI upstream.
   - Automatically restores thinking parameters if an intermediary tool stripped them.
   - Merges consecutive same-role turns to enforce strict alternating turn requirements.
-- **1M Context Window Unlocker:** Follows the profile's `model1M` map per tier: every tier marked 1M gets `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (so `/model sonnet`, tier switches and subagents keep 1M, while unmarked tiers stay at 200K), plus auto-compact at `900000`, with built-in visual risk warnings for unsupported models.
-- **Zero Config Mutation:** Never writes endpoints or keys into `~/.claude/settings.json` (it removes only values it wrote itself: `ANTHROPIC_BASE_URL` for its own port and `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]`). Uses launcher flags and environment injection to prevent annoying provider warning banners.
+- **Context windows come from the model:** the switcher no longer forces a 1M window or an auto-compact limit, and it writes no model name into your environment. Claude Code sizes its own session from the window of the official model you pick, and a backend with a smaller window than that model can overflow in a long session. `model1M` now only decides what `/v1/models` reports.
+- **Zero Config Mutation:** Never reads or writes `~/.claude/settings.json` or `~/.codex/config.toml`, and writes no environment variable and no `--config` argument that a coding tool reads as configuration. The tool reaches the gateway only through the interceptor, so no provider warning banner appears.
 - **Live Request / Response Inspector:** Built-in dashboard tab displaying real-time requests, latency, token consumption, prompt previews, and thinking blocks.
 - **Native Background Service:** Install and run as an OS background daemon on Windows (Task Scheduler), macOS (launchd), or Linux (systemd).
 
 ---
 
-## Changes in 1.1.10
+## Recent Highlights (v1.2.0)
 
-- **README.** A new section, "Self-improvement with intact", explains how this gateway and intact correct their own faults. intact is now public and on npm as `intact-gateway`.
-
-### Changes in 1.1.9
-
-- **Dashboard.** Open `http://127.0.0.1:3456/ui` directly. The page no longer needs the link from `switch ui`: the gateway puts the admin token in the page. Pages of other sites still cannot read it.
-
-### Changes in 1.1.8
-
-- **Claude Code tools.** A tool schema value of `0`, `false`, `""` or `null` (for example `minimum: 0`) became an empty object schema. Gemini refused every Claude Code request with HTTP 400 "Starting an object on a scalar field". These values now stay as they are.
-- **Shim PATH order.** If the shim folder is on `PATH` but after the real `claude` or `codex`, `switch shim status` and `switch doctor` now tell you to put the export line last in your shell files.
-
-### Changes in 1.1.7
-
-- **Codex tools.** With `publicModels` set, Codex lost its tools and ended after one answer. The model catalog copied the metadata of a real OpenAI model, which puts Codex in the "Responses Lite" form. The catalog now keeps Codex in its direct tool mode, and the gateway also reads tools that arrive as an `additional_tools` input item.
-
-### Changes in 1.1.6
-
-- **Codex over WebSocket.** The gateway keeps the turns of each WebSocket session. A turn that sends `previous_response_id` gets the earlier turns back, so Codex no longer loses the task after the first tool call. An unknown id fails the turn with `previous_response_not_found`.
-- **Codex warmup.** A `response.create` frame with `generate: false` gets a local answer. It no longer spends a model call.
-- **Codex model name.** A profile without `publicModels` no longer sends `OpenAI-Model: main` in the handshake, and `switch codex` and `switch doctor` warn about it. Codex read `main` as a reroute and showed a false "high-risk cyber activity" warning. See "Codex-first setup".
-- **Contract lab.** The gateway uploads each sample with the key that opened its trace. intact refused the 1.1.5 uploads with `HTTP 404 trace not found`.
-- **Version stamp.** The stamp uses the last commit only when the checkout has no changes. Otherwise it uses the newest file time.
-
-### Changes in 1.1.5
-
-- **Contract lab privacy.** Masking now uses an allowlist. Every string value is masked except the enum values that intact reads. 1.1.4 masked a list of content keys and missed 16 fields (citations, document and web titles, web search queries, logprobs tokens, file names and URIs, stop sequences, participant names, error messages, tool descriptions).
-
-### Changes in 1.1.4
-
-- **Contract lab privacy.** A sample that the gateway sends to intact carries no client content. Prompts, answers, tool arguments and results, files and user ids are masked on this machine before the upload. The fields that intact needs for analysis stay.
-
-### Changes in 1.1.3
-
-- **Dashboard.** Opened without its access token, the page no longer waits on "Checking status...". It says that it is locked and names `switch ui`, which opens it with the token.
-- **Dashboard.** The Codex model names (session, review, subagent) are on the **Models** tab, next to the other model settings. The **Blindfold** tab holds only the interceptor settings.
-
-### Changes in 1.1.2
-
-- **npm package.** Install with `npm install -g llm-switcher` and run `switch`. An npm install keeps its data in `~/.llm-switcher`, so an upgrade does not erase your configuration. A git checkout keeps its data next to the code, as before.
-- **Contract lab.** The gateway can send a small sample of complete exchanges to an [intact](https://github.com/louisphamdev/intact) server, which finds fields that the converter loses. It is off by default. See "Contract lab" below.
-- **macOS.** `blindfold/make-certs.sh` now runs with LibreSSL, the default `openssl` on macOS.
-- **Upgrade from 1.1.0 or older.** A running gateway older than 1.1.1 cannot prove its identity. `switch` now names it and does not stop it. Stop it by hand once, then run `switch on`.
-- **Tests.** `npm test` runs only `tests/**/*.test.mjs`, also on Node.js 18 and 20.
-
-### Earlier changes
-
-- The desktop dashboard now uses a compact developer-tool layout. It has clearer route controls, keyboard-accessible tabs, labeled model fields, and no decorative emoji.
-- Codex profiles now use three documented roles: `main`, `review`, and `subagent`.
-- The Codex shim passes official configuration overrides for `model`, `review_model`, `agents.default_subagent_model`, `model_context_window`, and `model_auto_compact_token_limit`.
-- Legacy profile keys remain readable. An explicit empty role now clears its legacy fallback.
-- Claude Opus model IDs use version-independent reasoning detection.
-
-The Codex shim no longer relies on `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS`, or `CODEX_AUTO_COMPACT_WINDOW`. Codex does not document these environment variables. See the official [configuration reference](https://developers.openai.com/codex/config-reference/) and [advanced configuration guide](https://developers.openai.com/codex/config-advanced/).
+- **Zero-Mutation Interceptor:** All traffic routes via `HTTPS_PROXY` without editing client configs (`~/.claude/settings.json`, `~/.codex/config.toml`).
+- **Concurrent Multi-Tool Support:** Simultaneously configures `{ claude, codex }` profiles with dynamic, zero-downtime switching (`POST /_control/active-tools`).
+- **Auto-Discovery & Dynamic Model Catalog:** Discovers official models for Claude Code & Codex; detects tool version updates and refreshes mappings on the fly (`switch models`).
+- **Self-Healing Schemas:** Auto-repairs `{}` empty schemas for Gemini/Vertex and restores stripped `thinking` tokens.
+- **Windows Reliability:** Strict CRLF `.cmd` shims, CA path resolution, and zero-drift subroutine routing.
+- *For older releases (v1.1.2 – v1.1.10), see [CHANGELOG.md](CHANGELOG.md).*
 
 ---
 
@@ -302,20 +211,28 @@ Open the Web Dashboard at: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui
 
 ## CLI Integration
 
-### Universal Environment Loader (`env.cmd` / `env.sh`)
+### The environment comes from the shims, not from your shell
 
-Every time you switch profiles, LLM Switcher writes ready-to-use environment loaders into the data folder:
+Do **not** add a `source env.sh` or `call env.cmd` line to `~/.bashrc`, `~/.zshrc` or a wrapper
+script. Those two files are neutral stubs now: a comment line and nothing else, so an old rc line
+keeps running and can never re-introduce a base URL.
 
-- **Windows (Command Prompt / PowerShell wrapper):**
-  ```cmd
-  call "%USERPROFILE%\.llm-switcher\env.cmd"
-  ```
-- **macOS / Linux (Bash / Zsh):**
-  ```bash
-  source ~/.llm-switcher/env.sh
-  ```
+Each tool gets its own file instead, and only the matching shim loads it:
 
-For a checkout, use the same files in the checkout folder.
+| File | Loaded by |
+| --- | --- |
+| `env-claude.sh` / `env-claude.cmd` | the `claude` shim |
+| `env-codex.sh` / `env-codex.cmd` | the `codex` shim |
+| `env.sh` / `env.cmd` | nobody. Neutral stub, kept only so an old rc line stays silent |
+
+An empty per-tool file means that tool is off: the shim then leaves the environment alone and the
+tool reaches its official endpoint. Before it loads anything, the shim also scrubs a stale
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `ANTHROPIC_DEFAULT_<TIER>_MODEL` inherited from an older
+release or from your own shell, so `switch off` really is off.
+
+In practice you never call these files. `switch shim install` puts `~/.llm-switcher/bin` on `PATH`,
+and every `claude` and `codex` invocation — including `claude --resume` in a brand-new terminal —
+runs the shim, which injects the variables into that one process.
 
 ---
 
@@ -327,21 +244,11 @@ For a checkout, use the same files in the checkout folder.
    node "path\to\llm-switcher\switch.mjs" %*
    ```
 
-2. Patch your global Claude Code launcher (`claude.cmd` in your npm global directory):
+2. Install the shim and put its directory **before** the real Claude Code directory in your User `PATH` (System Properties → Environment Variables), then open a new terminal:
    ```cmd
-   SETLOCAL EnableDelayedExpansion
-   IF EXIST "%USERPROFILE%\.llm-switcher\active.flag" (
-     SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
-     SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
-   )
-   IF EXIST "%USERPROFILE%\.llm-switcher\1m.flag" (
-     SET /P M1M=<"%USERPROFILE%\.llm-switcher\1m.flag"
-     IF "!M1M!"=="" SET "M1M=opus[1m]"
-     SET "ANTHROPIC_MODEL=!M1M!"
-     SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
-   )
+   switch shim install
    ```
-   > `SETLOCAL EnableDelayedExpansion` is required for `!M1M!`. npm rewrites `claude.cmd` on every update, so prefer a separate wrapper that runs `call "%USERPROFILE%\.llm-switcher\env.cmd"` and then `claude %*`. For a checkout, replace `%USERPROFILE%\.llm-switcher` with the checkout folder. Only `env.cmd` / `env.sh` carry the per-tier `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` variables.
+   > Do **not** patch `claude.cmd` in your npm global directory: npm rewrites it on every update, and the shim is what injects the gateway URL. `settings.json` is never touched, so no "custom API" banner appears.
 
 ---
 
@@ -359,21 +266,7 @@ codex
 
 On Windows, add `%USERPROFILE%\.llm-switcher\bin` before the real Codex directory in `PATH`. Open a new terminal after the change.
 
-The shim does not edit `~/.codex/config.toml`. When the gateway is active, it passes these official command-line overrides to the real Codex binary:
-
-| Profile role | Codex configuration key | Name the CLI receives |
-|---|---|---|
-| `main` | `model` | `publicModels[0]` |
-| `review` | `review_model` | `publicModels[1]` |
-| `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
-
-**A profile that serves Codex must have `publicModels`.** Without it, the gateway has no official name for Codex. It then writes no model catalog and sends no `OpenAI-Model` header, and Codex shows two false warnings: "Model metadata for `<model>` not found" and "Your account was flagged for potentially high-risk cyber activity". `switch codex` and `switch doctor` warn when the Codex profile has no `publicModels`.
-
-**Codex never receives an internal name.** The slot aliases `main`, `review` and `subagent` stay inside the gateway. The CLI receives the official model names from `publicModels`, and `mapModel` resolves each one back to its slot. Set `codexRoles` in the profile when you want a different pairing than the order of that list.
-
-The shim also passes `model_catalog_json`. That file is generated from `publicModels` on every profile change, and the `/model` picker reads it. The picker never calls `/v1/models`. `/v1/models` serves the same entries, and each window follows `model1M` for its slot.
-
-It also passes `openai_base_url` for local routing. If 1M context is enabled for `main`, it passes `model_context_window=1000000` and `model_auto_compact_token_limit=900000`. Command-line overrides have higher precedence than user and project configuration. Re-run `switch shim install` after upgrading an older checkout.
+The shim never edits `~/.codex/config.toml`. Codex reaches the gateway cleanly through `HTTPS_PROXY` and the interceptor, retaining its own model names and context windows. Model catalog entries are served dynamically at `/v1/models`.
 
 ### Blindfold mode (optional)
 
@@ -386,10 +279,24 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold mode removes that line. Codex keeps its official endpoint, and the switcher intercepts the network hop instead. It needs no administrator rights, no certificate in a system trust store, and no change to `~/.codex/config.toml`.
 
 ```bash
-bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh" chatgpt.com   # once; a checkout runs blindfold/make-certs.sh
-# then set "blindfold": true in the Codex profile
+bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh"   # once; a checkout runs blindfold/make-certs.sh
+# the port is already top-level in config.json: "blindfold": { "port": 3457 }
 switch codex <profile>                     # the gateway starts the interceptor
 ```
+
+One interceptor serves both tools. It routes by the host of the CONNECT request and by the path,
+and by nothing else:
+
+| CONNECT host | Paths to this switcher's gateway | Everything else |
+| --- | --- | --- |
+| `api.anthropic.com` | `/v1/messages`, `/v1/messages/...` | to `api.anthropic.com`, unchanged |
+| `api.openai.com` | `/v1/responses`, `/v1/responses/...`, `/v1/models`, `/v1/models/...` | to `api.openai.com`, unchanged |
+| `chatgpt.com` | `/backend-api/codex/...`, forwarded as `/v1` | to `chatgpt.com`, unchanged |
+
+There is no `blindfoldHost` and no `blindfoldPrefix` any more: that table is the routing, and it is
+not a profile setting. A CONNECT host outside the table is tunneled untouched; a request whose
+`Host` header names a different host than its CONNECT target gets `421` and opens no upstream
+connection. See the [full table and the certificate rules](docs/cross-platform.md).
 
 The gateway owns the interceptor: it starts it at boot and after every change, and `switch off` stops it. If the certificates are missing, or another process holds the gateway or interceptor port, `switch` refuses the activation and writes no file.
 
@@ -398,6 +305,19 @@ Read [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) before you turn i
 - [Request routing](docs/diagrams/blindfold-request-routing.html) — one request, from CONNECT to the provider
 - [Model name resolution](docs/diagrams/codex-model-name-resolution.html) — which name the CLI sees, and where it resolves
 - [Lifecycle under switch](docs/diagrams/blindfold-switch-lifecycle.html) — activation, refusal, and shutdown
+
+### What you give up
+
+- **1M context follows the official model's window.** The switcher no longer forces a 1M window
+  or an auto-compact limit, and it writes no model name into your environment. Claude Code sizes
+  its own session from the window of the model you pick. A backend whose window is smaller than
+  that model can overflow in a long session. `model1M` now only decides what `/v1/models` reports.
+- **Codex needs certificates once.** Blindfold mode is what keeps Codex on its official endpoint,
+  and it needs a private CA plus a leaf naming the three hosts above. Skip it and Codex shows the
+  `base URL is overridden` line on its `/model` screen instead.
+- **The interceptor decrypts the three hosts it serves.** It refuses a CONNECT to a local or
+  private address, but every process on the machine can reach it. `docs/codex-blindfold.md` opens
+  with the scope, the risk of holding a private CA, and how to go back.
 
 ---
 
@@ -409,8 +329,8 @@ If you use prompt-trimming tools like **Headroom**, **Ponytail**, or **RTK (Rust
 3. **LLM Switcher** serves as the protective final gateway before the internet:
    - **Repairs Broken Schemas:** Fixes orphaned `tool_result` turns and consecutive same-role turns caused by aggressive history pruning.
    - **Restores Stripped Thinking:** Detects reasoning models and restores thinking parameters if an optimizer stripped them to save tokens.
-   - **Enforces 1M Context Windows:** Injects local 1M context flags and auto-compact thresholds.
-   - **Converts Protocols:** Bridges 2-way traffic to your target upstream (9Router, OpenRouter, Vertex, etc.).
+   - **Context windows follow the model:** reports the official window of each model; nothing is injected.
+   - **Converts Protocols:** Bridges 2-way traffic to your target upstream (intact, 9Router, OpenRouter, Vertex, etc.).
 
 ### Interoperability Test Report & Benchmark
 
@@ -442,8 +362,8 @@ To guarantee that AI coding agents (Claude Code, Cursor, Windsurf, Opencode) and
 ### 1. The Agent Skill (`skills/llm-switcher/SKILL.md`)
 A standardized Agent Skill teaching the LLM:
 - **Mandatory routing:** All LLM traffic and token compression tools (Headroom, RTK, Ponytail) MUST target `http://127.0.0.1:3456`.
-- **Zero-mutation policy:** Prohibits the agent from editing `~/.claude/settings.json` directly.
-- **Sub-process safety:** Automatically sources `env.cmd` or `env.sh` when launching sub-agents.
+- **Zero-mutation policy:** Prohibits the agent from editing `~/.claude/settings.json` — the switcher never reads or writes that file either.
+- **Sub-process safety:** Never tells a sub-agent to `source env.sh`; the shims in `~/.llm-switcher/bin` inject the proxy variables into the tool process itself and scrub anything stale first.
 
 Install globally for Opencode / Claude:
 ```bash
@@ -456,7 +376,7 @@ cp -r skills/llm-switcher ~/.claude/skills/
 
 ### 2. The MCP Server (`mcp.mjs`)
 A zero-dependency Model Context Protocol (MCP) server communicating over `stdio`:
-- `switcher_status`: Read live active profiles and 1M flags.
+- `switcher_status`: Read live active profiles and gateway state.
 - `switcher_audit`: Audit the environment to detect rogue direct outbound calls or unrouted token compressors.
 - `switcher_switch_profile`: Programmatically switch a CLI's active profile.
 - `switcher_recent_logs`: Inspect recent request logs, token usage, and thinking extraction.
@@ -482,36 +402,42 @@ Add the server to your MCP configuration (for example `opencode.jsonc`, `claude_
 switch ui                      # Open the Web UI dashboard in your browser
 switch status                  # Display status for all active CLI targets
 switch doctor                  # Audit environment, settings & routing
-switch on [profile]            # Start the gateway and activate a profile for all compatible targets
-switch <profile>               # Activate profile for all compatible targets
-switch claude <profile>        # Set active profile specifically for Claude Code
-switch codex <profile>         # Set active profile specifically for Codex
-switch openai <profile>        # Set active profile specifically for OpenAI Chat
-switch vertex <profile>        # Set active profile specifically for Vertex / Gemini
+switch on [profile]            # Start the gateway and activate a profile
+switch <profile>               # Activate a profile for both tools
+switch claude <profile>        # Set the active profile for Claude Code only
+switch codex <profile>         # Set the active profile for Codex only
 switch port <number>           # Change the gateway port (restarts it if running)
 switch service install         # Install OS background autostart service (Windows / macOS / Linux)
 switch service uninstall       # Remove background autostart service
 switch shim install            # Route new Claude and Codex sessions through the gateway
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
 switch shim uninstall          # Remove the launcher shims
-switch off [target]            # Deactivate gateway (or specific target) and restore official
+switch off                     # Stop everything and restore the official endpoints
+switch off claude              # Turn Claude Code off; Codex keeps running
+switch off codex               # Turn Codex off; Claude Code keeps running
 switch contract-probe [--model m] # Drive the contract-lab variants through the gateway
 switch contract-check          # Turn the open contract findings into failing tests
 ```
+
+Targets are `claude` and `codex`, and they are the only two. A profile is one tool: `tool` is
+either `"claude"` or `"codex"` (or `null` for a profile that is switched off), so `switch claude` and
+`switch codex` can never point at the same profile by accident. There is no `openai` or `vertex`
+target any more — the input routes those names stood for are gone.
 
 The service runs without your shell. `switch service install` therefore copies `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
 
 ### Resumed sessions & the shim (important)
 
-`switch on` writes `env.sh` / `env.cmd` and deliberately **removes** proxy variables from
-`~/.claude/settings.json` — that keeps Claude Code from showing its "custom API" banner.
-The side effect: a CLI started from a shell that never sourced `env.sh` has **no**
+`switch on` writes `env-claude.*` and `env-codex.*` and writes nothing into
+`~/.claude/settings.json` — the switcher never reads or writes that file, which is what keeps
+Claude Code from showing its "custom API" banner.
+The side effect: a CLI started without the shim has **no**
 `ANTHROPIC_BASE_URL`, so it talks to the provider directly and skips the gateway
-(no Healer, no 1M unlock, no pooled quota). `claude --resume` in a fresh terminal is the
+(no Healer, no pooled quota). `claude --resume` in a fresh terminal is the
 classic case.
 
-The shim closes that hole. It installs tiny wrappers in `~/.llm-switcher/bin` that source
-`env.sh` and then `exec` the real binary:
+The shim closes that hole. It installs tiny wrappers in `~/.llm-switcher/bin` that inject the
+tool's own environment and then `exec` the real binary:
 
 ```bash
 switch shim install
@@ -521,12 +447,15 @@ switch shim status                            # verify
 
 Behaviour:
 
-- **Gateway ON** → the wrapper injects the env, so every invocation (including `--resume`)
-  is routed through the gateway.
-- For Codex, the wrapper also passes the documented model-role and context settings with
-  `--config`. It does not depend on unsupported `CODEX_*` variables.
-- **Gateway OFF** (no `active.flag`) → the wrapper is fully transparent and runs the real
+- **Tool active** → the shim loads that tool's own env file, so every invocation (including
+  `--resume`) is routed through the gateway.
+- **Tool off** (its env file is empty) → the shim is fully transparent and runs the real
   binary untouched; it never forces routing.
+- Before it loads anything, the shim scrubs a stale `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or
+  `ANTHROPIC_DEFAULT_<TIER>_MODEL` inherited from an older release or from your shell, so a
+  variable cannot survive a `switch off`.
+- No `--config` arguments are passed to Codex. The shim changes nothing on Codex's side but the
+  environment.
 - The real binary is located with the shim directory stripped from `PATH`, so it can never
   call itself recursively. If no real binary is found it exits `127` with a clear message
   instead of failing silently.
@@ -544,21 +473,19 @@ re-opened from a shell where the shim is on `PATH`.
 ```jsonc
 {
   "port": 3456,
-  "activeProfile": "9router",
   "activeProfiles": {
-    "anthropic": "9router",          // Active profile for Claude Code (/v1/messages)
-    "responses": "codex-profile",    // Active profile for Codex (/v1/responses)
-    "openai-chat": "9router",        // Active profile for OpenAI Chat
-    "vertex": "gemini-profile"       // Active profile for Vertex / Gemini
+    "claude": "claude-default",      // Active profile for Claude Code (/v1/messages)
+    "codex": "codex-default"         // Active profile for Codex (/v1/responses)
   },
+  "blindfold": { "port": 3457 },     // Interceptor port. Top-level, optional, default 3457
   "profiles": {
-    "9router": {
-      "name": "9Router Cloud",
+    "claude-default": {
+      "name": "Intact Gateway",
       "mode": "convert",             // hybrid | convert | direct
-      "inFormat": "auto",            // auto | anthropic | openai-chat | responses | vertex
+      "tool": "claude",              // claude | codex | null (profile is off)
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
       "thinkingMode": "auto",        // auto | native | off (see Advanced Options)
-      "baseURL": "https://api.9router.com/v1",
+      "baseURL": "https://intact.example.com/v1", // or https://api.9router.com/v1
       "apiKey": "sk-...",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
@@ -571,12 +498,20 @@ re-opened from a shell where the shim is on `PATH`.
         "sonnet": true,
         "haiku": false,
         "fable": true
-      },
-      // Codex keys. A profile that serves Codex MUST have publicModels (see Codex-first setup).
+      }
+    },
+    "codex-default": {
+      "name": "Codex via router",
+      "mode": "convert",
+      "tool": "codex",
+      "outFormat": "vertex",
+      "baseURL": "https://YOUR-GATEWAY/v1",
+      "apiKey": "sk-...",
+      // A profile that serves Codex MUST have publicModels (see Codex-first setup).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // official names for main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // optional: pair one role with another public name
-      "blindfold": false,            // true: Codex keeps its official endpoint (see Codex blindfold mode)
-      "blindfoldPort": 3457          // interceptor port when blindfold is true
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
+      "model1M": { "main": false, "review": false, "subagent": false }
     }
   },
   "debug": false,
@@ -587,6 +522,16 @@ re-opened from a shell where the shim is on `PATH`.
   }
 }
 ```
+
+`tool` replaces `inFormat`: it says which tool a profile serves, not what its upstream speaks.
+There is no top-level `activeProfile`, no `blindfold`, `blindfoldPort`, `blindfoldHost` or
+`blindfoldPrefix` inside a profile, and no `openai-chat` or `vertex` key in `activeProfiles`.
+
+An older `config.json` is rewritten once, on load, through a compare-and-swap that refuses to
+touch a file somebody else changed first. When two profiles would collapse onto the same key the
+migration stops, names the clashing keys on the CLI and in the dashboard, and leaves the file
+exactly as it was: every mutating `switch` command then exits non-zero, `switch off` and
+`switch doctor` still work, and fixing the file makes everything work again.
 
 ### Contract lab
 
@@ -617,7 +562,7 @@ Because of this split, a provider fingerprint is never a rule in this gateway. I
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the data folder (the proxy, `switch` and `mcp.mjs` all honour it). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port (priority: flag > env > `config.port`). |
 | `x-llm-profile: <key>` header (alias `x-profile`) or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
-| `profile.thinkingMode` | `auto` (default, for gateways like 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
+| `profile.thinkingMode` | `auto` (default, for gateways like intact or 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
 | `profile.endpoints` | Override upstream URLs per format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
 | `CLAUDE_CONFIG_DIR` | Respected when locating Claude Code's `settings.json`. |

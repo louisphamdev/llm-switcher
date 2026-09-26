@@ -19,9 +19,10 @@
 //   this process restores normal behaviour with nothing left behind.
 //
 // SCOPE OF THE INTERCEPT
-//   Only requests to the target host whose path starts with the Codex API prefix go to
-//   the gateway. Every other path on that host, and every other host, is passed through
-//   untouched — sign-in, token refresh and usage pages keep working.
+//   The host table names every host this process terminates TLS for, which path prefixes of
+//   each belong to the gateway, and which tool must be active for them to be taken. Everything
+//   else — every other path on those hosts, and every other host — is passed through untouched,
+//   so sign-in, token refresh and usage pages keep working exactly as they do without it.
 // ============================================================
 
 import fs from 'node:fs';
@@ -33,7 +34,10 @@ import tls from 'node:tls';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url'
+// Pure: reads no file, migrates nothing. The interceptor imports it to re-derive the active tool
+// set from config.json on every control request instead of trusting what it was spawned with.
+import { deriveActiveTools } from '../state.mjs';
 import { createFrameReader, negotiatesDeflate } from './wsframe.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -55,16 +59,27 @@ function port(value, fallback) {
 const LISTEN_PORT = port(arg('port', process.env.LLM_SWITCHER_BLINDFOLD_PORT), 3457);
 const GATEWAY_HOST = arg('gateway-host', '127.0.0.1');
 const GATEWAY_PORT = port(arg('gateway-port', process.env.LLM_SWITCHER_PORT), 3456);
-const TARGET_HOST = arg('host', 'chatgpt.com');
-// Codex with ChatGPT auth calls https://chatgpt.com/backend-api/codex/<endpoint>;
-// the gateway serves the same endpoints under /v1.
-export const API_PREFIX = arg('prefix', '/backend-api/codex');
+// R3: `--host` and `--prefix` are gone. Which hosts are intercepted, under which prefix, and for
+// which tool is decided by the host table below — a value handed in on the command line can be
+// stale while this process runs, and the config is the one copy that cannot (F6).
 export const GATEWAY_PREFIX = arg('gateway-prefix', '/v1');
 const CERT_DIR = arg('certs', path.join(HERE, 'certs'));
+// Where the control endpoint re-reads the tool set from. Passed explicitly by the spawner so the
+// process never guesses at a path (Finding 2 / F6).
+const CONFIG_FILE = arg('config', path.join(HERE, '..', 'config.json'));
 const VERBOSE = process.argv.includes('--verbose');
 const CAPTURE_DIR = arg('capture', null);
-// The switcher's admin.token. The identity probe answers HMAC(token, nonce) with it.
+// The switcher's admin.token: it signs the identity probe, and the control endpoint compares it
+// in the x-llm-switcher-token header.
 const TOKEN_FILE = arg('token-file', path.join(HERE, '..', 'admin.token'));
+
+// Finding 6: one fixed, sorted list. Sorting means the spawner's argument and this process's own
+// derivation produce the same string, so `matches` and the identity proof are stable.
+const parseToolList = (value) => String(value || '').split(',').map(s => s.trim()).filter(Boolean).sort();
+// Spawned with the tool set of the config at that moment; the control endpoint replaces it from
+// the file itself, in memory, without touching the port or any open stream.
+let ACTIVE_TOOLS = parseToolList(arg('active-tools', ''));
+const activeToolSet = () => new Set(ACTIVE_TOOLS);
 
 const log = (...args) => { if (VERBOSE) console.log('[blindfold]', ...args); };
 
@@ -150,10 +165,12 @@ export function writeCaptureFile(dir, fileName, record, { uid = process.getuid?.
 }
 
 // A capture is a diagnostic. Failing to write one must never fail the request.
-function writeCapture(record, fileName) {
-  if (!CAPTURE_DIR) return;
+// `dir` defaults to the --capture of this process; recordExchange passes its own so the
+// pass-through rule (R3c) can be exercised against a directory of its own.
+function writeCapture(record, { fileName, dir = CAPTURE_DIR } = {}) {
+  if (!dir) return;
   try {
-    writeCaptureFile(CAPTURE_DIR, fileName || captureName(record.method, record.url), record);
+    writeCaptureFile(dir, fileName || captureName(record.method, record.url), record);
   } catch (err) {
     log('capture failed:', err.message);
   }
@@ -178,7 +195,87 @@ function normalizedTarget(url) {
   }
 }
 
+// The chatgpt.com rule, named on its own because it is the only one that rewrites a prefix:
+// Codex with ChatGPT auth calls /backend-api/codex/<endpoint>, the gateway serves it under /v1.
+export const API_PREFIX = '/backend-api/codex';
+
+// ---------------- the host table of R3 ----------------
+// One host, the whole-path prefixes of that host that belong to the gateway, the path the gateway
+// serves them under, and the tool that has to be active for them to be taken at all. A prefix only
+// ever matches on a segment boundary, so `/v1/responses_compact` is not `/v1/responses`; and the
+// decision is made on the NORMALIZED pathname (normalizedTarget), so a `%2e%2e` segment cannot
+// carry a request into another gateway path. A host outside this table is tunneled, never
+// terminated — this process then copies bytes it cannot read.
+const HOST_ROUTES = {
+  'api.anthropic.com': { tool: 'claude', prefixes: ['/v1/messages'], rewrite: null },
+  'api.openai.com': { tool: 'codex', prefixes: ['/v1/responses', '/v1/models'], rewrite: null },
+  'chatgpt.com': { tool: 'codex', prefixes: [API_PREFIX], rewrite: { from: API_PREFIX, to: '/v1' } }
+};
+
+// Only reachable if a socket reaches the TLS endpoint without a CONNECT to name its host — a test
+// emitting a connection directly. A real request always carries the tunnel's host.
+const API_HOST_FALLBACK = 'chatgpt.com';
+
+// A Host header carries an optional port; the CONNECT target does not, because its port was split
+// off when the tunnel was opened. Case never matters to DNS and a client may write either.
+export function normalizeHost(value) {
+  return String(value || '').trim().toLowerCase().replace(/:443$/, '');
+}
+
+export function isInterceptedHost(host) {
+  return Boolean(HOST_ROUTES[normalizeHost(host)]);
+}
+
+// One CONNECT tunnel carries one host. TLS already bound the certificate this endpoint presents
+// to the host the tunnel was opened for; a Host header naming a different host would ask for a
+// second origin over that same binding. Refuse instead of guessing which one was meant (A4b).
+/**
+ * Which host this TLS session belongs to.
+ *
+ * The interceptor learns a host when it accepts the CONNECT; the request handler runs on the TLS
+ * socket wrapped around that raw socket, so the property may not be visible from here. Try the
+ * raw socket first (the CONNECT host, which is what R3b binds the check to), then the socket that
+ * wrapped it, then SNI — but SNI only counts when it names a host of the table: a client must
+ * never be able to point this process at an address of its own choosing.
+ */
+export function tunnelHostOf(req) {
+  const socket = req?.socket;
+  const fromTunnel = normalizeHost(socket?._connectHost ?? socket?._parent?._connectHost);
+  if (fromTunnel) return fromTunnel;
+  const sni = normalizeHost(socket?.servername);
+  return Object.hasOwn(HOST_ROUTES, sni) ? sni : '';
+}
+
+export function misdirected(req) {
+  const want = tunnelHostOf(req);
+  if (!want) return false; // not a host we terminated: there is nothing to compare against
+  return normalizeHost(req.headers?.host) !== want;
+}
+
+/**
+ * The one routing decision this process makes. null means pass-through. The gateway path is
+ * unchanged for the two API hosts and has the ChatGPT prefix swapped for /v1, as it always was.
+ * `activeTools` gates the whole host: when the tool behind a host is off, that host keeps its own
+ * endpoint and this switcher is no longer in its path at all (F2).
+ */
+export function hostRoute(connectHost, url, activeTools) {
+  const route = HOST_ROUTES[normalizeHost(connectHost)];
+  if (!route) return null;
+  if (activeTools && !activeTools.has(route.tool)) return null;
+  const parsed = normalizedTarget(url);
+  if (!parsed) return null;
+  const p = parsed.pathname;
+  const prefix = route.prefixes.find(x => p === x || p.startsWith(`${x}/`));
+  if (!prefix) return null;
+  const gatewayPath = route.rewrite && prefix === route.rewrite.from
+    ? route.rewrite.to + p.slice(route.rewrite.from.length)
+    : p;
+  return { host: normalizeHost(connectHost), tool: route.tool, gatewayPath: gatewayPath + parsed.search };
+}
+
 export function isGatewayPath(url) {
+  // The rule for chatgpt.com, kept as its own predicate because it is the one rule with a
+  // rewrite. hostRoute() above is the decision the interceptor actually makes, per CONNECT host.
   const parsed = normalizedTarget(url);
   if (!parsed) return false;
   const p = parsed.pathname;
@@ -193,8 +290,11 @@ export function toGatewayPath(url) {
 }
 
 // Codex's ChatGPT credentials. The gateway never reads them, and the gateway port is plain
-// HTTP that another local account can hold once it is free, so they stay on this side.
-const GATEWAY_STRIPPED = ['authorization', 'proxy-authorization', 'cookie', 'chatgpt-account-id', 'openai-organization'];
+// HTTP that another local account can hold once it is free, so they stay on this side — and
+// `authorization` and `x-api-key` join them: the gateway has its own provider keys and must
+// never see the ones the client brought (R3, spec F-host-table).
+const GATEWAY_STRIPPED = ['authorization', 'proxy-authorization', 'cookie', 'chatgpt-account-id',
+  'openai-organization', 'x-api-key'];
 
 // The gateway answers only to a loopback Host, so rewrite it. Origin carries the
 // intercepted hostname and would fail the same check.
@@ -230,34 +330,36 @@ function armTimeout(socket, onTimeout) {
   socket.setTimeout(IDLE_TIMEOUT_MS, onTimeout);
 }
 
-// ---------- the TLS endpoint that pretends to be TARGET_HOST ----------
+// ---------- the TLS endpoint that terminates for a host of the table ----------
 
 const mitm = https.createServer();
 
 // Collect a copy for the capture file while the bytes keep flowing. Buffering to
-// write the file first would hold back a streamed response. Both routes record,
-// because on a host with no gateway prefix every exchange is a passthrough and a
-// capture that skipped them would always be empty.
-function recordExchange(req) {
-  if (!CAPTURE_DIR) return null;
+// write the file first would hold back a streamed response.
+//
+// `includeBody: false` is the pass-through route (R3c): those bytes belong to the provider and
+// to an OAuth exchange, and a capture exists to be read and shared. Only the shape of the
+// exchange is kept — method, path, status and the redacted headers.
+export function recordExchange(req, { includeBody = true, captureDir = CAPTURE_DIR } = {}) {
+  if (!captureDir) return null;
   const reqChunks = [];
-  req.on('data', (c) => reqChunks.push(c));
+  if (includeBody) req.on('data', (c) => reqChunks.push(c));
   return (upRes) => {
     const resChunks = [];
-    upRes.on('data', (c) => resChunks.push(c));
+    if (includeBody) upRes.on('data', (c) => resChunks.push(c));
     upRes.on('end', () => writeCapture({
       method: req.method,
       url: req.url,
       requestHeaders: redactHeaders(req.headers),
-      requestBody: clip(decodeBody(Buffer.concat(reqChunks), req.headers['content-encoding'])),
+      ...(includeBody ? { requestBody: clip(decodeBody(Buffer.concat(reqChunks), req.headers['content-encoding'])) } : {}),
       status: upRes.statusCode,
       responseHeaders: redactHeaders(upRes.headers),
-      responseBody: clip(decodeBody(Buffer.concat(resChunks), upRes.headers['content-encoding']))
-    }));
+      ...(includeBody ? { responseBody: clip(decodeBody(Buffer.concat(resChunks), upRes.headers['content-encoding'])) } : {})
+    }, { dir: captureDir }));
   };
 }
 
-export function relayToGateway(req, res, { host = GATEWAY_HOST, port = GATEWAY_PORT } = {}) {
+export function relayToGateway(req, res, { host = GATEWAY_HOST, port = GATEWAY_PORT, gatewayPath = null } = {}) {
   log('gateway', req.method, req.url);
   const record = recordExchange(req);
 
@@ -265,7 +367,7 @@ export function relayToGateway(req, res, { host = GATEWAY_HOST, port = GATEWAY_P
     host,
     port,
     method: req.method,
-    path: toGatewayPath(req.url),
+    path: gatewayPath || toGatewayPath(req.url),
     headers: gatewayHeaders(req.headers, { host, port })
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
@@ -280,22 +382,28 @@ export function relayToGateway(req, res, { host = GATEWAY_HOST, port = GATEWAY_P
 }
 
 mitm.on('request', (req, res) => {
-  if (!isGatewayPath(req.url)) return passThroughRequest(req, res);
-  relayToGateway(req, res);
+  // The Host header must name the host this tunnel was opened for; a mismatch is refused before
+  // any upstream connection exists (A4b).
+  if (misdirected(req)) return failExchange(res, 421, 'text/plain', 'Misdirected Request');
+  const route = hostRoute(tunnelHostOf(req), req.url, activeToolSet());
+  if (!route) return passThroughRequest(req, res);
+  relayToGateway(req, res, { gatewayPath: route.gatewayPath });
 });
 
-// Everything that is not a Codex API call goes to the real host, so sign-in and
-// usage pages behave exactly as they do without this process.
+// Everything that is not an intercepted API call goes to the host the tunnel was opened for, so
+// sign-in and usage pages behave exactly as they do without this process — including on a host
+// that is in the table but whose tool is switched off (F2).
 function passThroughRequest(req, res) {
-  log('passthrough', req.method, req.url);
-  const record = recordExchange(req);
+  const connectHost = tunnelHostOf(req) || API_HOST_FALLBACK;
+  log('passthrough', req.method, req.url, '->', connectHost);
+  const record = recordExchange(req, { includeBody: false });
   const upstream = https.request({
-    host: TARGET_HOST,
-    servername: TARGET_HOST,
+    host: connectHost,
+    servername: connectHost,
     port: 443,
     method: req.method,
     path: req.url,
-    headers: { ...req.headers, host: TARGET_HOST }
+    headers: { ...req.headers, host: connectHost }
   }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
     if (record) record(upRes);
@@ -423,15 +531,24 @@ function relayUpgrade(req, clientSocket, head, target, readyEvent, headers, requ
   clientSocket.on('error', () => target.destroy());
 }
 
-export function relayUpgradeToGateway(req, clientSocket, head, { host = GATEWAY_HOST, port = GATEWAY_PORT } = {}) {
+export function relayUpgradeToGateway(req, clientSocket, head, { host = GATEWAY_HOST, port = GATEWAY_PORT, gatewayPath = null } = {}) {
   relayUpgrade(req, clientSocket, head, net.connect(port, host), 'connect',
-    gatewayHeaders(req.headers, { host, port }), toGatewayPath(req.url), 'gateway');
+    gatewayHeaders(req.headers, { host, port }), gatewayPath || toGatewayPath(req.url), 'gateway');
 }
 
 mitm.on('upgrade', (req, clientSocket, head) => {
-  if (isGatewayPath(req.url)) return relayUpgradeToGateway(req, clientSocket, head);
-  relayUpgrade(req, clientSocket, head, tls.connect({ host: TARGET_HOST, port: 443, servername: TARGET_HOST }),
-    'secureConnect', { ...req.headers, host: TARGET_HOST }, req.url, 'passthrough');
+  // An upgrade answers on the raw socket: there is no response object to write 421 to.
+  if (misdirected(req)) {
+    if (clientSocket.writable) clientSocket.end('HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n');
+    return clientSocket.destroy();
+  }
+  const route = hostRoute(tunnelHostOf(req), req.url, activeToolSet());
+  if (route) return relayUpgradeToGateway(req, clientSocket, head, { gatewayPath: route.gatewayPath });
+  // Pass-through follows the host the tunnel was opened for, with that same name as the SNI —
+  // not a name this process happened to be configured with (A9).
+  const connectHost = tunnelHostOf(req) || API_HOST_FALLBACK;
+  relayUpgrade(req, clientSocket, head, tls.connect({ host: connectHost, port: 443, servername: connectHost }),
+    'secureConnect', { ...req.headers, host: connectHost }, req.url, 'passthrough');
 });
 
 mitm.on('tlsClientError', (err) => log('tls client error:', err.message));
@@ -447,18 +564,51 @@ mitm.on('clientError', (err, socket) => {
 export function identityAnswer(url) {
   const challenge = new URL(url || '/', 'http://blindfold.invalid').searchParams.get('challenge');
   if (!challenge) return null;
-  const fields = { role: 'blindfold', port: LISTEN_PORT, pid: process.pid, gatewayPort: GATEWAY_PORT, host: TARGET_HOST, prefix: API_PREFIX };
+  const fields = { role: 'blindfold', port: LISTEN_PORT, pid: process.pid, gatewayPort: GATEWAY_PORT, activeTools: ACTIVE_TOOLS.join(',') };
   let proof = '';
   try {
     const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
-    // Same fields and order as identityProof in state.mjs.
-    const msg = [fields.role, fields.port, fields.pid, fields.gatewayPort, fields.host, fields.prefix, challenge].join('|');
+    // Same fields and order as identityProof in state.mjs. `host` and `prefix` left with R3.
+    const msg = [fields.role, fields.port, fields.pid, fields.gatewayPort, fields.activeTools, challenge].join('|');
     if (token) proof = crypto.createHmac('sha256', token).update(msg).digest('hex');
   } catch {}
   return { proxy: 'llm-switcher-blindfold', proof, ...fields };
 }
 
+// ---------------- the one control channel ----------------
+// Finding 2 / Item 7: the tool set is the only thing that changes while this process runs. One
+// authenticated loopback POST replaces it in memory — no signal, no restart, no socket closed and
+// no in-flight stream severed. The request body is read and then ignored, on purpose: the config
+// file is the one copy both ends already agree on, and a delta is one more thing to get wrong
+// (Finding 4, option (a)).
+const readToken = () => { try { return fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch { return ''; } };
+
+function handleControl(req, res) {
+  req.resume();
+  const answer = (status, body) => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  const token = readToken();
+  const given = String(req.headers['x-llm-switcher-token'] || '');
+  // Loopback is not an identity: every process on this machine can reach this port.
+  if (!token || !given || given !== token) return answer(403, { ok: false, error: 'forbidden' });
+  let next;
+  try {
+    next = deriveActiveTools(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))).sort();
+  } catch (err) {
+    // A config we cannot read must not empty the table: keep serving the set we already have.
+    return answer(500, { ok: false, error: err.message });
+  }
+  ACTIVE_TOOLS = next;
+  log('active tools ->', next.join(',') || '(none)');
+  return answer(200, { ok: true, activeTools: next });
+}
+
 const proxy = http.createServer((req, res) => {
+  let pathname = '';
+  try { pathname = new URL(req.url || '/', 'http://blindfold.invalid').pathname; } catch {}
+  if (req.method === 'POST' && pathname === '/_control/active-tools') return handleControl(req, res);
   const identity = identityAnswer(req.url);
   if (identity) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -484,12 +634,6 @@ for (const [prefix, bits] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::
   LOCAL_RANGES.addSubnet(prefix, bits, 'ipv6');
 }
 
-export function isInterceptedHost(host) {
-  return host === TARGET_HOST;
-}
-
-// Decides on an address, never on a spelling: `0`, `2130706433`, `127.1` and names such as
-// localtest.me all resolve to loopback. Something that is not an address counts as local.
 export function isLocalAddress(address) {
   const family = net.isIP(address);
   if (family === 0) return true;
@@ -552,6 +696,9 @@ proxy.on('connect', (req, clientSocket, head) => {
 
   if (isInterceptedHost(host)) {
     log('intercept CONNECT', target);
+    // The host this tunnel was opened for. Every later decision — the 421 check, the host table,
+    // and which origin pass-through re-originates to — reads this instead of a configured name.
+    clientSocket._connectHost = normalizeHost(host);
     clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     if (head?.length) clientSocket.unshift(head);
     // Hand the raw socket to the TLS endpoint: it completes the handshake with our leaf.
@@ -623,9 +770,9 @@ export function start() {
   proxy.listen(LISTEN_PORT, '127.0.0.1', () => {
     listening = true;
     console.log(`[blindfold] proxy on http://127.0.0.1:${LISTEN_PORT}`);
-    console.log(`[blindfold] ${TARGET_HOST}${API_PREFIX}/* -> http://${GATEWAY_HOST}:${GATEWAY_PORT}${GATEWAY_PREFIX}/*`);
-    console.log(`[blindfold] every other path on ${TARGET_HOST} is re-originated to the real host`);
-    console.log('[blindfold] every other public host is tunneled; local destinations are refused');
+    console.log(`[blindfold] intercepts ${Object.keys(HOST_ROUTES).join(', ')}`);
+    console.log(`[blindfold] api paths -> http://${GATEWAY_HOST}:${GATEWAY_PORT}${GATEWAY_PREFIX} for ${ACTIVE_TOOLS.join(',') || 'no tool'}`);
+    console.log('[blindfold] every other path is re-originated to its own host; local destinations are refused');
   });
 }
 

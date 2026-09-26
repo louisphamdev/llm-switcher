@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LLM Switcher System Topology & Edge Architecture",
+    "output": "docs/diagrams/system-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1200, 560]
+  },
+  "components": [
+    { "id": "claude-cli", "type": "frontend", "label": "Claude Code CLI", "sublabel": "/v1/messages", "pos": [50, 140], "size": [160, 60] },
+    { "id": "codex-cli", "type": "frontend", "label": "OpenAI Codex CLI", "sublabel": "/v1/responses (WS)", "pos": [50, 320], "size": [160, 60] },
+    { "id": "opt", "type": "backend", "label": "Token Optimizer", "sublabel": "Headroom / RTK", "pos": [280, 230], "size": [160, 60], "tag": "Optional" },
+    { "id": "router", "type": "security", "label": "Edge Router", "sublabel": "localhost:3456", "pos": [510, 230], "size": [160, 60], "tag": "Zero-Dependency" },
+    { "id": "healer", "type": "backend", "label": "Healer Engine", "sublabel": "Auto-Repair Schemas", "pos": [740, 140], "size": [160, 60] },
+    { "id": "ir", "type": "backend", "label": "Bi-Directional IR", "sublabel": "Event Stream Synth", "pos": [740, 320], "size": [160, 60] },
+    { "id": "intact", "type": "cloud", "label": "intact Gateway", "sublabel": "Credential Proxy & Lab", "pos": [980, 140], "size": [170, 60], "tag": "Recommended" },
+    { "id": "upstream-providers", "type": "cloud", "label": "Other Upstreams", "sublabel": "9Router / OpenRouter / Vertex", "pos": [980, 320], "size": [170, 60] }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Local Developer Workstation (localhost)",
+      "wraps": ["claude-cli", "codex-cli", "opt", "router", "healer", "ir"]
+    },
+    {
+      "kind": "security-group",
+      "label": "LLM Switcher Edge Gateway (:3456)",
+      "wraps": ["router", "healer", "ir"]
+    },
+    {
+      "kind": "region",
+      "label": "Server & Provider Infrastructure",
+      "wraps": ["intact", "upstream-providers"]
+    }
+  ],
+  "connections": [
+    { "id": "claude-to-router", "from": "claude-cli", "to": "router", "label": "direct /v1/messages", "variant": "emphasis" },
+    { "id": "codex-to-router", "from": "codex-cli", "to": "router", "label": "direct /v1/responses", "variant": "emphasis" },
+    { "id": "opt-to-router", "from": "opt", "to": "router" },
+    { "id": "router-to-healer", "from": "router", "to": "healer" },
+    { "id": "healer-to-ir", "from": "healer", "to": "ir" },
+    { "id": "router-to-ir", "from": "router", "to": "ir", "variant": "dashed" },
+    { "id": "ir-to-intact", "from": "ir", "to": "intact", "label": "contract & pool", "variant": "emphasis" },
+    { "id": "ir-to-providers", "from": "ir", "to": "upstream-providers" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Zero-Mutation Interceptor",
+      "items": [
+        "Never modifies ~/.claude/settings.json or ~/.codex/config.toml",
+        "Injects local environment dynamically via shims into HTTPS_PROXY",
+        "No provider warning banner, 100% genuine official experience"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Self-Healing Protocol Bridge",
+      "items": [
+        "Heals broken tool_result orphans and empty schemas ({})",
+        "Restores reasoning thinking_delta blocks and budget tokens",
+        "Seamless WebSocket continuation for Codex via previous_response_id"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Server Upstream Synergy",
+      "items": [
+        "Pairs with intact for multi-account pooling and contract lab",
+        "Supports 9Router, OpenRouter, Vertex, and custom backends",
+        "Instant failover with zero client interruption"
+      ]
+    }
+  ]
+}

@@ -23,7 +23,6 @@
 // }
 // ============================================================
 
-export const IN_FORMATS = ['anthropic', 'openai-chat', 'responses', 'vertex'];
 export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
 
 // ---------------- stop reasons ----------------
@@ -272,7 +271,10 @@ function sanitizeSchemaNode(schema) {
     }
     clean[k] = sanitizeSchemaNode(v);
   }
-  if (!clean.type && clean.properties) {
+  // An empty schema carries no shape, and Vertex reads that as a missing `type`.
+  // Heal it the way a missing schema is healed — but only when nothing else is here,
+  // so an `anyOf`/`$ref` shape is never handed a type it did not ask for.
+  if (!clean.type && (clean.properties || Object.keys(clean).length === 0)) {
     clean.type = 'object';
   }
   if (clean.type === 'object' && !clean.properties) {
@@ -453,73 +455,6 @@ function applyAllowedTools(ir, mode, list, nameOf) {
   const names = new Set((Array.isArray(list) ? list : []).map(nameOf).filter(Boolean));
   ir.tools = (ir.tools || []).filter(t => names.has(t.name));
   ir.toolChoice = ir.tools.length ? (mode === 'required' ? 'required' : 'auto') : null;
-}
-
-function chatToIR(payload) {
-  const ir = baseIR();
-  ir.model = payload.model || '';
-  ir.stream = payload.stream === true;
-
-  if (Array.isArray(payload.messages)) {
-    for (const m of payload.messages) {
-      const role = m.role;
-      if (role === 'system' || role === 'developer') {
-        const t = typeof m.content === 'string' ? m.content : asText(m.content);
-        if (t) ir.system = ir.system ? `${ir.system}\n\n${t}` : t;
-        continue;
-      }
-      if (role === 'tool' || role === 'function') {
-        ir.messages.push({
-          role: 'tool', toolCallId: m.tool_call_id || m.id,
-          name: m.name, content: typeof m.content === 'string' ? m.content : asText(m.content)
-        });
-        continue;
-      }
-      const out = { role: role === 'assistant' ? 'assistant' : 'user' };
-      if (typeof m.content === 'string' || Array.isArray(m.content)) out.content = m.content;
-      else if (m.content != null) out.content = asText(m.content);
-      if (Array.isArray(m.tool_calls)) {
-        out.toolCalls = m.tool_calls.map((tc, i) => ({
-          id: tc.id || null,
-          name: tc.function?.name || tc.name || '',
-          args: parseArgs(tc.function?.arguments ?? tc.function?.args ?? tc.args)
-        })).filter(t => t.name);
-      }
-      if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
-    }
-  }
-
-  const toolDefs = payload.tools;
-  if (Array.isArray(toolDefs) && toolDefs.length) {
-    ir.tools = toolDefs.map(t => {
-      const fn = t.function || t;
-      return { name: fn.name, description: fn.description || '', parameters: sanitizeJsonSchema(fn.parameters || fn.input_schema || {}) };
-    }).filter(t => t.name);
-  }
-
-  const tc = payload.tool_choice;
-  if (typeof tc === 'string') ir.toolChoice = tc;
-  else if (tc?.type === 'function' && tc.function?.name) ir.toolChoice = { name: tc.function.name };
-  else if (tc?.type === 'allowed_tools') applyAllowedTools(ir, tc.allowed_tools?.mode, tc.allowed_tools?.tools, t => t?.function?.name);
-
-  ir.params.maxTokens = payload.max_tokens ?? payload.max_completion_tokens ?? null;
-  if (typeof payload.temperature === 'number') ir.params.temperature = payload.temperature;
-  if (typeof payload.top_p === 'number') ir.params.topP = payload.top_p;
-  if (typeof payload.presence_penalty === 'number') ir.params.presencePenalty = payload.presence_penalty;
-  if (typeof payload.frequency_penalty === 'number') ir.params.frequencyPenalty = payload.frequency_penalty;
-  if (payload.stop !== undefined && payload.stop !== null) ir.params.stop = stopList(payload.stop);
-  if (payload.parallel_tool_calls === false) ir.params.parallelToolCalls = false;
-
-  if (payload.thinking && typeof payload.thinking === 'object') {
-    ir.thinking = thinkingFromAnthropicParam(payload.thinking, payload.reasoning_effort);
-  } else if (typeof payload.reasoning_effort === 'string') {
-    ir.thinking = isNoReasoningEffort(payload.reasoning_effort)
-      ? { type: 'disabled' }
-      : { type: 'enabled', budget: effortToBudget(payload.reasoning_effort), effort: payload.reasoning_effort };
-  } else if (payload.reasoning && typeof payload.reasoning === 'object') {
-    ir.thinking = thinkingFromReasoningParam(payload.reasoning);
-  }
-  return ir;
 }
 
 // OpenAI/OpenRouter `reasoning` object -> IR thinking.
@@ -712,95 +647,16 @@ function responsesToIR(payload) {
   return ir;
 }
 
-// Vertex generateContent -> IR.
-function vertexToIR(payload) {
-  const ir = baseIR();
-  ir.model = payload.model || '';
-  ir.stream = false; // proxy overrides per the :streamGenerateContent endpoint
-
-  const sys = payload.systemInstruction?.parts;
-  if (Array.isArray(sys)) {
-    ir.system = sys.map(p => p.text || '').filter(Boolean).join('\n\n');
-  } else if (typeof payload.system_instruction === 'string') {
-    ir.system = payload.system_instruction;
-  }
-
-  // Vertex has no tool call ids: auto-generate ids for functionCalls then match functionResponses by name (FIFO),
-  // so upstream OpenAI/Anthropic gets the correct tool_call <-> tool result pairs instead of "healing" them into text.
-  const pendingByName = new Map();
-  let callSeq = 0;
-
-  if (Array.isArray(payload.contents)) {
-    for (const c of payload.contents) {
-      const parts = Array.isArray(c?.parts) ? c.parts : [];
-      const texts = [];
-      const toolCalls = [];
-      for (const p of parts) {
-        if (!p || typeof p !== 'object') continue;
-        if (typeof p.text === 'string' && p.text && p.thought !== true) texts.push(p.text);
-        if (p.functionCall) {
-          const name = p.functionCall.name || '';
-          const id = p.functionCall.id || `call_vtx_${callSeq++}_${name}`;
-          if (!pendingByName.has(name)) pendingByName.set(name, []);
-          pendingByName.get(name).push(id);
-          const sig = p.thoughtSignature || p.thought_signature || null;
-          rememberToolSignature(id, sig);
-          toolCalls.push({ id, name, args: p.functionCall.args ?? {}, sig });
-        }
-        if (p.functionResponse) {
-          const fr = p.functionResponse;
-          const name = fr.name || '';
-          const queue = pendingByName.get(name);
-          const id = fr.id || (queue && queue.length ? queue.shift() : `call_vtx_orphan_${name}`);
-          ir.messages.push({
-            role: 'tool', toolCallId: id, name: name || null,
-            content: typeof fr.response === 'string' ? fr.response : JSON.stringify(fr.response ?? '')
-          });
-        }
-      }
-      if (c.role === 'model') {
-        const out = { role: 'assistant' };
-        if (texts.length) out.content = texts.join('');
-        if (toolCalls.length) out.toolCalls = toolCalls;
-        if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
-      } else if (c.role === 'function') {
-        // functionResponse already pushed above
-      } else {
-        if (texts.length) ir.messages.push({ role: 'user', content: texts.join('') });
-      }
-    }
-  }
-
-  const fns = payload.tools?.flatMap(t => t.functionDeclarations || t.function_declarations || []);
-  if (Array.isArray(fns) && fns.length) {
-    ir.tools = fns.filter(f => f.name).map(f => ({
-      name: f.name, description: f.description || '',
-      parameters: sanitizeJsonSchema(f.parameters || {})
-    }));
-  }
-
-  const gc = payload.generationConfig || payload.generation_config || {};
-  if (typeof gc.maxOutputTokens === 'number') ir.params.maxTokens = gc.maxOutputTokens;
-  if (typeof gc.temperature === 'number') ir.params.temperature = gc.temperature;
-  if (typeof gc.topP === 'number') ir.params.topP = gc.topP;
-  if (Array.isArray(gc.stopSequences)) ir.params.stop = stopList(gc.stopSequences);
-  const th = gc.thinkingConfig || gc.thinking_config;
-  if (th && typeof th === 'object') {
-    if (th.thinkingBudget === 0) ir.thinking = { type: 'disabled' };
-    else if (th.thinkingBudget > 0) ir.thinking = { type: 'enabled', budget: clampBudget(th.thinkingBudget) };
-    else if (th.thinkingLevel) ir.thinking = { type: 'enabled', budget: effortToBudget(th.thinkingLevel), effort: th.thinkingLevel };
-    else if (th.includeThoughts) ir.thinking = { type: 'enabled', budget: 2048 };
-  }
-  return ir;
-}
-
+// R5: two inputs, one per tool — `anthropic` for Claude Code, `responses` for Codex. The
+// openai-chat and vertex routes were removed with their parsers; a format that reaches here
+// anyway is an error, never a silent fallback to another protocol (a different API key!).
+// The UPSTREAM formats are a different axis and are untouched: emitUpstreamBody still speaks
+// openai-chat, anthropic and vertex to whatever provider the profile points at.
 function parseToIR(clientFormat, payload) {
   switch (clientFormat) {
     case 'anthropic': return anthropicToIR(payload);
-    case 'openai-chat': return chatToIR(payload);
     case 'responses': return responsesToIR(payload);
-    case 'vertex': return vertexToIR(payload);
-    default: throw new Error(`Unknown client format: ${clientFormat}`);
+    default: throw new Error(`Unsupported input format: ${clientFormat}. Only anthropic (Claude Code) and responses (Codex) accept requests.`);
   }
 }
 
@@ -1255,6 +1111,8 @@ function toGeminiSchema(schema, root, seen) {
     return schema === 'object' ? { type: 'object', properties: {} } : { type: schema };
   }
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  // The same hole as the string shorthand above: an empty schema has no type Vertex can read.
+  if (Object.keys(schema).length === 0) return { type: 'object', properties: {} };
   root = root || schema;
   seen = seen || new Set();
   if (seen.has(schema)) return {};
@@ -2305,7 +2163,7 @@ export {
   smartReasoning, smartText, smartToolCalls, smartUsage, smartFinish,
   firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
   budgetToEffort, effortToBudget, clampBudget, parseArgs, stringifyArgs,
-  anthropicToIR, chatToIR, responsesToIR, vertexToIR, parseToIR,
+  anthropicToIR, responsesToIR, parseToIR,
   healToolPairs, healAnthropicPayload, rememberToolSignature, lookupToolSignature, estimateTokens, irToChatBody, irToAnthropicBody, irToVertexBody, emitUpstreamBody,
   normalizeUpstream, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags,

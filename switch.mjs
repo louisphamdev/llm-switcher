@@ -4,12 +4,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import {
-  ROOT_DIR, STATE_DIR, TARGETS, configPath, claudeSettingsPath, paths, loadConfig, getConfigLoadError, saveConfig,
+  ROOT_DIR, STATE_DIR, TOOLS, configPath, claudeSettingsPath, paths, certCoversHost, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
   probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher,
-  contractLabSettings, codexPublicModelsWarning
+  contractLabSettings, codexPublicModelsWarning,
+  getMigrationError, getMigrationCollision, getLastLoadError,
+  casClearToolPointers, emptyToolEnvFiles, syncInterceptorTools
 } from './state.mjs';
 import { runProbe, runCheck } from './contract.mjs';
 import {
@@ -34,12 +36,8 @@ if (!config) {
   process.exit(1);
 }
 
-const TARGET_ALIASES = {
-  claude: 'anthropic', anthropic: 'anthropic',
-  codex: 'responses', responses: 'responses',
-  openai: 'openai-chat', chat: 'openai-chat', 'openai-chat': 'openai-chat',
-  vertex: 'vertex', gemini: 'vertex'
-};
+// R5: two commands, one per tool. The openai and vertex commands went with their input routes.
+const TARGET_ALIASES = { claude: 'claude', codex: 'codex' };
 
 // Strip --port/-p and their value from positional args. -p is the global option everywhere, as in
 // resolvePort; `switch port <n>` is the command that changes the port.
@@ -140,13 +138,17 @@ async function requestBlindfoldSync(port) {
   }
 }
 
-// With the gateway up it reconciles; with it down only a stop is safe, and stopping never spawns.
-// When the sync fails and no target wants an interceptor any more, the CLI stops it itself.
+// With the gateway up it reconciles. With the gateway down there are two cases: a target that still
+// wants an interceptor gets the new tool set pushed to it directly (Finding 4) — stopping it here
+// would take the other tool's traffic down with it — and only when no target wants one is a stop
+// safe. Neither branch ever starts an interceptor.
 async function syncOrStopBlindfold(port, cfg) {
+  const wants = computeLaunchState(cfg, port).blindfold;
   if (await checkProxyRunning(port)) {
     const r = await requestBlindfoldSync(port);
-    if (r.ok || computeLaunchState(cfg, port).blindfold) return r;
+    if (r.ok || wants) return r;
   }
+  if (wants) return syncInterceptorTools(cfg, port);
   return stopRecordedBlindfold();
 }
 
@@ -254,6 +256,10 @@ async function changePort(newPortStr) {
     console.error(`[Error] Invalid port: "${newPortStr}". Must be an integer between 1 and 65535.`);
     process.exit(1);
   }
+  if (getMigrationError()) {
+    console.error(`[Error] Migration error: ${getMigrationError().message}`);
+    process.exit(1);
+  }
   const oldPort = resolvePort([], config);
   // Refuse before anything stops: the old gateway keeps running when the new port is taken.
   const target = await probeGateway(p);
@@ -283,7 +289,11 @@ async function changePort(newPortStr) {
     if (startedPid) killPid(startedPid);
     const back = loadConfig() || fresh;
     back.port = oldPort;
-    saveConfig(back);
+    try {
+      saveConfig(back);
+    } catch (err) {
+      console.error(`[Error] Failed to restore config.json during rollback: ${err.message}`);
+    }
     if (svc) installService(oldPort);
     else if (wasRunning) startProxyBackground(oldPort);
     let up = !svc && !wasRunning;
@@ -327,8 +337,8 @@ function printProfile(profile) {
 }
 
 function printTargets(activeMap) {
-  const labels = { anthropic: 'Claude Code', responses: 'Codex', 'openai-chat': 'OpenAI Chat', vertex: 'Vertex' };
-  for (const t of TARGETS) {
+  const labels = { claude: 'Claude Code', codex: 'Codex' };
+  for (const t of TOOLS) {
     console.log(`  ${labels[t].padEnd(12)} (${t.padEnd(11)}) -> ${activeMap[t] ? show(activeMap[t]) : 'OFF (official)'}`);
   }
 }
@@ -349,11 +359,20 @@ function refuseBlindfoldProblem(planned, port) {
   const problem = bf && blindfoldPreflight(bf);
   if (!problem) return bf;
   console.error(`[Error] ${problem}`);
-  console.error('        Or set "blindfold": false in the profile. Nothing was changed.');
+  console.error('        Fix the certificate with: bash blindfold/make-certs.sh - it names all three hosts this switcher routes. Nothing was changed.');
   process.exit(1);
 }
 
 async function turnOn(profileName, cliTarget) {
+  if (getMigrationError()) {
+    console.error(`[Error] Migration error: ${getMigrationError().message}`);
+    process.exit(1);
+  }
+  if (getMigrationCollision()) {
+    console.error(`[Error] Refusing to switch: configuration migration collision: ${JSON.stringify(getMigrationCollision().clashingKeys)}. Nothing was changed.`);
+    process.exit(1);
+  }
+
   const port = getTargetPort();
   const wanted = profileName || config.activeProfile || Object.keys(config.profiles)[0];
   const key = findProfileKey(config, wanted);
@@ -378,8 +397,8 @@ async function turnOn(profileName, cliTarget) {
 
   // Plan again on the file as it is now: a dashboard save made while the gateway started must survive.
   const current = loadConfig();
-  if (!current || getConfigLoadError()) {
-    console.error(`[Error] config.json does not parse any more: ${getConfigLoadError()?.message}. Nothing was changed.`);
+  if (!current || getLastLoadError()) {
+    console.error(`[Error] config.json does not parse any more: ${getLastLoadError()?.message}. Nothing was changed.`);
     process.exit(1);
   }
   planned = planSwitch(current, key, cliTarget);
@@ -387,7 +406,12 @@ async function turnOn(profileName, cliTarget) {
   const profile = planned.profiles[key];
 
   const previousBytes = fs.readFileSync(configPath);
-  saveConfig(planned);
+  try {
+    saveConfig(planned);
+  } catch (err) {
+    console.error(`[Error] ${err.message}`);
+    process.exit(1);
+  }
   const savedBytes = fs.readFileSync(configPath);
   const st = applyLaunchState(planned, port);
   reportSettings(st.settings);
@@ -395,14 +419,14 @@ async function turnOn(profileName, cliTarget) {
   if (!bf.ok) {
     console.error(`[Error] ${bf.error}`);
     // Put back exactly what was there, unless another writer saved in the meantime: then its
-    // change wins and nothing is restored. clearLaunchState would also switch off unrelated targets
-    // and run the settings.json cleaner, so the previous state is re-applied instead.
+    // change wins and nothing is restored. clearLaunchState would also switch off unrelated
+    // targets, so the previous state is re-applied instead.
     if (!fs.readFileSync(configPath).equals(savedBytes)) {
       console.error('        config.json changed while the interceptor started, so it is not restored. Check it, then run the command again.');
       process.exit(1);
     }
     restoreConfigBytes(previousBytes);
-    applyLaunchState(JSON.parse(previousBytes.toString('utf8')), port, { cleanSettings: false });
+    applyLaunchState(JSON.parse(previousBytes.toString('utf8')), port);
     const back = await requestBlindfoldSync(port);
     console.error('        The previous config.json and launcher files are restored.');
     if (!back.ok) console.error(`        The previous interceptor did not come back: ${back.error}`);
@@ -434,20 +458,77 @@ async function turnOn(profileName, cliTarget) {
   printProfile(profile);
   console.log('\nActive targets:');
   printTargets(getActiveMap(planned));
-  console.log(`\nClaude 1M:    ${describeClaude1M(st)}`);
-  console.log(`Codex 1M:     ${st.codex1M ? 'ACTIVE (1,000,000 tokens)' : 'OFF'}`);
-  const codexKey = getActiveMap(planned).responses;
+  const codexKey = getActiveMap(planned).codex;
   const codexWarning = codexPublicModelsWarning(show(codexKey), planned.profiles[codexKey]);
   if (codexWarning) console.warn(`\n[WARN] ${codexWarning}`);
 }
 
+// The one writer that runs while saveConfig refuses (R7b): re-read config.json, change only the tool
+// pointers named here, and let the CAS writer confirm the bytes it started from are still the ones on
+// disk. Every refusal exits before a launcher file or the interceptor has been touched.
+function casOff(tools) {
+  let res;
+  try {
+    res = casClearToolPointers(tools);
+  } catch (err) {
+    console.error(`[Error] Could not read config.json: ${err.message}. Nothing was changed.`);
+    process.exit(1);
+  }
+  if (res.error) {
+    console.error(`[Error] Could not write config.json: ${res.error.message}. Nothing was changed.`);
+    process.exit(1);
+  }
+  if (res.collision) {
+    console.error(`[Error] Refusing to switch off: configuration migration collision: ${JSON.stringify(res.collision.clashingKeys)}. Nothing was changed.`);
+    process.exit(1);
+  }
+  return res.config;
+}
+
+// stopProxy's answer, turned into an exit. Every answer but a clean stop is a port this switcher
+// could not prove it owns, and the user has to act; the launcher files are already cleared.
+function reportStopped(result, port) {
+  if (result === 'still-running') {
+    console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
+    process.exit(1);
+  }
+  if (result === 'legacy') {
+    console.error(`[Error] An llm-switcher gateway older than 1.1.1 runs on port ${port}. Stop it, then run \`switch on\` again.`);
+    process.exit(1);
+  }
+  if (result === 'not-ours' || result === 'silent') {
+    console.error(result === 'silent'
+      ? `[Error] Port ${port} accepts connections but does not answer, so it is not proven to be this switcher. It was not stopped.`
+      : `[Error] Port ${port} is held by a process that did not prove it is this switcher. It was not stopped.`);
+    process.exit(1);
+  }
+  console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
+}
+
 async function turnOff(targetArg) {
   const port = getTargetPort();
+  // saveConfig refuses while a collision or a failed migration stands (R7). Turning a tool off is
+  // still a write the user asked for, so it takes the CAS path instead of throwing (R7b).
+  const refused = Boolean(getMigrationCollision() || getMigrationError());
   if (targetArg) {
     const target = TARGET_ALIASES[targetArg.toLowerCase()];
     if (!target) {
-      console.error(`[Error] Unknown target "${targetArg}". Use one of: claude, codex, openai, vertex`);
+      console.error(`[Error] Unknown target "${targetArg}". Use one of: claude, codex`);
       process.exit(1);
+    }
+    if (refused) {
+      // The order is fixed by R7b: the CAS write, then this tool's env files, then the active-tools
+      // update. If the CAS write cannot land, the env file and the interceptor stay untouched.
+      const saved = casOff([target]);
+      emptyToolEnvFiles(target);
+      const bf = await syncOrStopBlindfold(port, config);
+      if (!bf.ok) {
+        console.error(`[Error] ${target} is switched back, but the interceptor is not in line: ${bf.error}`);
+        process.exit(1);
+      }
+      console.log(`[SUCCESS] ${target} switched back to official endpoint. Other targets unchanged:`);
+      printTargets(getActiveMap(saved));
+      return;
     }
     setTargetProfile(config, target, null);
     saveConfig(config);
@@ -464,41 +545,36 @@ async function turnOff(targetArg) {
   }
 
   console.log('Deactivating Proxy and restoring official endpoints...');
+  if (refused) {
+    // Both pointers through the same writer. Nothing below runs until those bytes are on disk (R7b).
+    casOff(['claude', 'codex']);
+    reportSettings(clearLaunchState(port));
+    const result = await stopProxy(port);
+    reportStopped(result, port);
+    // Direct, not through syncOrStopBlindfold: that asks the gateway this command just stopped.
+    const bfDirect = await stopRecordedBlindfold();
+    if (!bfDirect.ok) {
+      console.error(`[Error] The blindfold interceptor did not stop: ${bfDirect.error}`);
+      process.exit(1);
+    }
+    console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
+    return;
+  }
   deactivateAll(config);
   saveConfig(config);
   reportSettings(clearLaunchState(port));
   const bf = await syncOrStopBlindfold(port, config);
   if (!bf.ok) console.error(`[Error] The blindfold interceptor did not stop: ${bf.error}`);
   const result = await stopProxy(port);
-  if (result === 'still-running') {
-    console.error(`[Error] The gateway on port ${port} is still running. Stop it by hand; the launcher files are already cleared.`);
-    process.exit(1);
-  }
-  if (result === 'legacy') {
-    console.error(`[Error] An llm-switcher gateway older than 1.1.1 runs on port ${port}. Stop it, then run \`switch on\` again.`);
-    process.exit(1);
-  }
-  if (result === 'not-ours' || result === 'silent') {
-    console.error(result === 'silent'
-      ? `[Error] Port ${port} accepts connections but does not answer, so it is not proven to be this switcher. It was not stopped.`
-      : `[Error] Port ${port} is held by a process that did not prove it is this switcher. It was not stopped.`);
-    process.exit(1);
-  }
-  console.log(result === 'stopped' ? 'Stopped local proxy service.' : 'Proxy service was not running.');
+  reportStopped(result, port);
   if (!bf.ok) process.exit(1);
   console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
-}
-
-// The flag carries the main session model only; haiku 1M reaches Claude Code through its tier variable.
-function describeClaude1M(st) {
-  if (!st.claude1MTiers?.length) return 'OFF';
-  return `ACTIVE (${st.claude1MTiers.map(t => `${t}[1m]`).join(', ')})${st.claude1M ? `, main session ${st.claude1M}` : ''}`;
 }
 
 // Only a CLI whose target is active is expected to go through the gateway.
 function auditActiveClis() {
   const map = getActiveMap(config);
-  return auditRunningProcesses([map.anthropic && 'claude', map.responses && 'codex'].filter(Boolean));
+  return auditRunningProcesses([map.claude && 'claude', map.codex && 'codex'].filter(Boolean));
 }
 
 // settings.json edits are never silent: name every value the switcher removed.
@@ -522,8 +598,6 @@ async function showStatus() {
   if (flagged && !isRunning) {
     console.log(`[WARN] active.flag exists but proxy is STOPPED -> launched CLIs will fail to connect. Run 'switch on' or 'switch off'.`);
   }
-  console.log(`Claude 1M:      ${flagged ? describeClaude1M(computeLaunchState(config, port)) : 'OFF'}`);
-  console.log(`Codex 1M Flag:  ${fs.existsSync(paths.flagCodex1M) ? 'ACTIVE' : 'OFF'}`);
   console.log('\nActive targets:');
   printTargets(activeMap);
   console.log('\nAvailable profiles:');
@@ -815,7 +889,6 @@ async function runDoctor() {
     console.log(`[INFO] ANTHROPIC_BASE_URL is not set in current shell (launcher wrapper will inject on demand).`);
   }
 
-  console.log(`[INFO] Claude 1M: ${describeClaude1M(computeLaunchState(config, port))}. Codex 1M flag: ${fs.existsSync(paths.flagCodex1M) ? 'YES' : 'NO'}`);
   console.log(`[INFO] Universal environment loader: env.cmd=${fs.existsSync(paths.envCmd) ? 'READY' : 'PENDING'}`);
   if (fs.existsSync(proxyLogPath)) console.log(`[INFO] Background proxy log: ${proxyLogPath}`);
 
@@ -850,8 +923,73 @@ async function runDoctor() {
 
   console.log('\n--- Intermediary Token Optimizers (Headroom / RTK / Ponytail) ---');
   console.log(`If using a token compressor, ensure its upstream target is configured to http://127.0.0.1:${port}.`);
-  console.log('LLM Switcher will act as the final edge gatekeeper to heal schemas, unlock 1M, and preserve thinking.');
+  console.log('LLM Switcher will act as the final edge gatekeeper: it heals schemas, keeps the context window of the model you picked, and preserves thinking.');
 
+
+  // R10: read-only. The doctor reports what it finds in the tool's own file and never rewrites
+  // it - a diagnosis must not change the thing being diagnosed.
+  if (fs.existsSync(claudeSettingsPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8'));
+      for (const [k, v] of Object.entries(raw.env || {})) {
+        if (/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_MODEL$/.test(k) && /\[1m\]/i.test(String(v))) {
+          warn(`[WARN] ${claudeSettingsPath} sets ${k}=${v}.`);
+          console.log('        That alias is what reaches the provider. Delete the entry and let the gateway map the model.');
+        }
+      }
+    } catch { /* an unreadable settings.json is already reported above */ }
+  }
+
+  // R3a: one certificate serves every host this switcher routes. A certificate missing a host
+  // leaves that tool talking to the provider with no interceptor in between.
+  const leafPath = path.join(path.dirname(paths.blindfoldCA), 'leaf.pem');
+  if (!fs.existsSync(leafPath)) {
+    warn(`[WARN] No interceptor certificate at ${leafPath}: neither tool can be intercepted.`);
+    console.log('        Fix: bash blindfold/make-certs.sh');
+  } else {
+    try {
+      const pem = fs.readFileSync(leafPath, 'utf8');
+      const missing = ['api.anthropic.com', 'api.openai.com', 'chatgpt.com'].filter(h => !certCoversHost(pem, h));
+      if (missing.length) {
+        warn(`[WARN] The interceptor certificate does not cover ${missing.join(', ')}.`);
+        console.log('        Fix: bash blindfold/make-certs.sh   (it names all three hosts this switcher routes)');
+      } else {
+        console.log('[PASS] Interceptor certificate covers api.anthropic.com, api.openai.com and chatgpt.com.');
+      }
+    } catch (e) {
+      warn(`[WARN] The interceptor certificate could not be read: ${e.message}`);
+    }
+  }
+
+  // R8: the shims inject the proxy variables themselves, so an rc file that still sources env.sh
+  // puts a second, stale copy of the routing into every shell.
+  let rcFiles = [];
+  try { rcFiles = suggestedRcFiles() || []; } catch { rcFiles = []; }
+  for (const rc of rcFiles) {
+    try {
+      const rcPath = typeof rc === 'string' ? rc : (rc && rc.path) || '';
+      if (!rcPath || !fs.existsSync(rcPath)) continue;
+      const txt = fs.readFileSync(rcPath, 'utf8');
+      if (/^\s*(\.|source)\s+\S*env\.(sh|cmd)\b/m.test(txt)) {
+        warn(`[WARN] ${rcPath} sources env.sh/env.cmd.`);
+        console.log('        The shims inject the route on their own; remove that line to avoid two conflicting copies.');
+      }
+    } catch { /* not readable is not a finding */ }
+  }
+
+  // R2: a pre-existing proxy variable chains this gateway behind another one, which is out of
+  // scope - the interceptor owns HTTPS_PROXY for the tools it launches.
+  const inherited = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (inherited && !/\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(inherited)) {
+    warn(`[WARN] HTTPS_PROXY/HTTP_PROXY is already set to ${inherited}.`);
+    console.log('        Chaining this gateway behind another proxy is out of scope; unset it before using the shims.');
+  }
+
+  // R7: a collision is a report, not a failure - the doctor still exits 0.
+  if (getMigrationCollision()) {
+    console.log(`[INFO] Configuration migration collision: ${JSON.stringify(getMigrationCollision().clashingKeys)}.`);
+    console.log('       config.json is left exactly as it is. Fix the two pointers by hand, then run switch on.');
+  }
   console.log(`\nDoctor summary: ${allHealthy ? 'ALL CHECKS PASSED (HEALTHY)' : 'ATTENTION RECOMMENDED (CHECK WARNINGS ABOVE)'}`);
 }
 
@@ -898,6 +1036,42 @@ async function runContractCheck() {
   }
 }
 
+async function showModels(target) {
+  const { loadCatalogCache, refreshCatalog } = await import('./catalog.mjs');
+  if (optionValue('--refresh') || process.argv.includes('--refresh')) {
+    console.log('Refreshing models catalog from official endpoints...');
+    await refreshCatalog(STATE_DIR);
+  }
+  const cache = loadCatalogCache(STATE_DIR);
+  console.log('=== LLM Switcher Discovered Models Catalog ===\n');
+  const t = target ? target.toLowerCase() : '';
+  if (!t || t === 'claude') {
+    console.log('Claude Code Models:');
+    const grouped = { opus: [], sonnet: [], haiku: [], fable: [] };
+    for (const m of (cache.claude?.models || [])) {
+      if (grouped[m.tier]) grouped[m.tier].push(m.id);
+    }
+    for (const [tier, ids] of Object.entries(grouped)) {
+      console.log(`  [${tier.padEnd(6)}] : ${ids.join(', ')}`);
+    }
+    console.log('');
+  }
+  if (!t || t === 'codex') {
+    console.log('Codex CLI Models:');
+    const grouped = { main: [], review: [], subagent: [] };
+    for (const m of (cache.codex?.models || [])) {
+      if (grouped[m.role]) grouped[m.role].push(m.id);
+    }
+    for (const [role, ids] of Object.entries(grouped)) {
+      console.log(`  [${role.padEnd(8)}] : ${ids.join(', ')}`);
+    }
+    console.log('');
+  }
+  const updatedStr = cache.updatedAt ? new Date(cache.updatedAt).toLocaleString() : 'built-in catalog baseline';
+  console.log(`Catalog timestamp: ${updatedStr}`);
+  console.log('Run `switch models --refresh` to query latest upstream models.');
+}
+
 const [rawCmd = '', subArg = ''] = positionalArgs();
 const cmd = rawCmd.toLowerCase();
 
@@ -919,6 +1093,8 @@ if (cmd === 'off' || cmd === 'stop') {
   await runContractProbe();
 } else if (cmd === 'contract-check') {
   await runContractCheck();
+} else if (cmd === 'models' || cmd === 'catalog') {
+  await showModels(subArg);
 } else if (cmd === 'status' || cmd === 'st') {
   await showStatus();
 } else if (cmd === 'on' || cmd === 'start') {
@@ -934,8 +1110,6 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch <profile>               # Activate profile for all compatible targets');
   console.log('  switch claude <profile>        # Set active profile for Claude Code');
   console.log('  switch codex <profile>         # Set active profile for Codex');
-  console.log('  switch openai <profile>        # Set active profile for OpenAI Chat');
-  console.log('  switch vertex <profile>        # Set active profile for Vertex');
   console.log('  switch port <number>           # Change gateway port');
   console.log('  switch service install         # Install OS background autostart service');
   console.log('  switch service uninstall       # Uninstall background autostart service');
@@ -943,6 +1117,7 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');
   console.log('  switch shim uninstall          # Remove launcher shims');
   console.log('  switch off [target]            # Restore official endpoints (all, or one target)');
+  console.log('  switch models [--refresh]      # Show discovered models catalog for Claude Code & Codex');
   console.log('  switch contract-probe [--model m] # Drive the contract-lab variants through the gateway');
   console.log('  switch contract-check          # Turn the open contract findings into failing tests');
   console.log('\nGlobal option: --port <n> (or env LLM_SWITCHER_PORT)');

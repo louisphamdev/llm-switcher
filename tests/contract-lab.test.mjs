@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createFrameReader } from '../blindfold/wsframe.mjs';
 import {
   createContractLab, createHalfTap, newTraceId, switcherVersion, toolVersionFromUA, capJson,
@@ -85,7 +85,7 @@ test('contractLab is absent by default, and a saved block survives a rewrite', (
   fs.writeFileSync(cfgPath, JSON.stringify(cfg));
   const out = JSON.parse(spawnNodeSync(`
     import fs from 'node:fs';
-    import { loadConfig, saveConfig, contractLabSettings, redactConfig } from '${ROOT}/state.mjs';
+    import { loadConfig, saveConfig, contractLabSettings, redactConfig } from '${pathToFileURL(path.join(ROOT, 'state.mjs')).href}';
     saveConfig({ ...loadConfig(), debug: true });
     const again = JSON.parse(fs.readFileSync(process.env.LLM_SWITCHER_CONFIG, 'utf8'));
     console.log(JSON.stringify({ settings: contractLabSettings(again), masked: redactConfig(again).contractLab }));
@@ -312,11 +312,13 @@ function startIntact() {
 
 async function startProxy(name, contractLab) {
   const port = await freePort();
+  const bfPort = await freePort();
   const dir = path.join(tmpDir, name);
   fs.mkdirSync(dir, { recursive: true });
   const models = { opus: 'up-opus', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' };
   const cfg = {
     port,
+    blindfold: { port: bfPort },
     activeProfiles: { anthropic: 'ant', responses: 'ant', 'openai-chat': 'ant', vertex: 'ant' },
     profiles: {
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `http://127.0.0.1:${upstreamPort}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
@@ -365,7 +367,16 @@ before(async () => {
 });
 
 after(() => {
-  for (const p of Object.values(proxies)) p.child?.kill();
+  for (const [name, p] of Object.entries(proxies)) {
+    try {
+      const bfState = JSON.parse(fs.readFileSync(path.join(tmpDir, name, 'blindfold.json'), 'utf8'));
+      if (bfState?.pid) {
+        if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/PID', String(bfState.pid)], { stdio: 'ignore' });
+        else process.kill(bfState.pid, 'SIGTERM');
+      }
+    } catch {}
+    p.child?.kill();
+  }
   upstream?.close();
   intact?.close();
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -459,10 +470,12 @@ test('failed exchanges upload no half: 400 upstream and mid-stream error are ign
 });
 
 test('a converted stream cut mid-way uploads no half, a complete one does', async () => {
-  const chat = (text) => fetch(`http://127.0.0.1:${proxies.on.port}/v1/chat/completions`, {
+  // R5: /v1/chat/completions no longer exists. A converted stream is now an Anthropic request
+  // whose upstream speaks the other protocol, which is the same conversion by another door.
+  const chat = (text) => fetch(`http://127.0.0.1:${proxies.on.port}/v1/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'user-agent': 'codex/1.0.0' },
-    body: JSON.stringify({ model: 'claude-opus-4-6', stream: true, messages: [{ role: 'user', content: text }] })
+    body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 16, stream: true, messages: [{ role: 'user', content: text }] })
   });
   let traceOk;
   await waitFor(async () => {
@@ -636,10 +649,12 @@ test('Anthropic probe with thinking sets max_tokens greater than budget_tokens',
 
 test('the probe models are every mapped model of the active profiles, once each', () => {
   const cfg = {
-    activeProfiles: { anthropic: 'a', responses: 'a', 'openai-chat': 'b', vertex: null },
+    // R5: `openai-chat` and `vertex` are retired pointer keys. They name a real profile here on
+    // purpose - a retired key must not activate anything, so `never-probed` has to stay unprobed.
+    activeProfiles: { claude: 'a', codex: 'b', 'openai-chat': 'unused', vertex: null },
     profiles: {
       a: { inFormat: 'auto', defaultModels: { opus: 'up-opus', sonnet: 'up-sonnet', haiku: '', fable: 'up-opus' } },
-      b: { inFormat: 'openai-chat', defaultModels: { default: 'up-chat' } },
+      b: { inFormat: 'auto', defaultModels: { opus: 'up-chat' } },
       unused: { inFormat: 'auto', defaultModels: { opus: 'never-probed' } }
     }
   };

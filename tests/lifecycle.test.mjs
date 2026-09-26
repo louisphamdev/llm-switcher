@@ -13,14 +13,16 @@ import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFile, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POSIX = process.platform !== 'win32';
 const HAS_OPENSSL = POSIX && fs.existsSync('/usr/bin/openssl');
 
 // switch.mjs writes the launcher files into the repository root; keep whatever was there.
-const LAUNCH_FILES = ['active.flag', '1m.flag', 'codex-1m.flag', 'openai-1m.flag', 'env.sh', 'env.cmd', 'env-codex.sh', 'env-codex.cmd', 'model-catalog.json'];
+// One file per tool now (env-claude.*, env-codex.*), plus the stub env.sh/env.cmd and the
+// recorded gateway port. The 1M flags and model-catalog.json are gone (R2, R9).
+const LAUNCH_FILES = ['active.flag', 'gateway.port', 'env.sh', 'env.cmd', 'env-claude.sh', 'env-claude.cmd', 'env-codex.sh', 'env-codex.cmd', 'model-catalog.json'];
 // Every child runs with LLM_SWITCHER_STATE_DIR = ws.dir, so the launch files of the checkout stay untouched.
 function snapshotLaunchFiles(dir) {
   return Object.fromEntries(LAUNCH_FILES.map(f => {
@@ -71,7 +73,7 @@ function writeConfig(ws, gwPort, bfPort, activeResponses = null) {
 function probe(ws, expr) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, ['--input-type=module', '-e',
-      `const s = await import(${JSON.stringify(path.join(ROOT, 'state.mjs'))}); console.log(JSON.stringify(await (${expr})));`
+      `const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'state.mjs')).href)}); console.log(JSON.stringify(await (${expr})));`
     ], { env: envFor(ws), encoding: 'utf8' }, (err, stdout) => (err ? reject(err) : resolve(JSON.parse(stdout.trim()))));
   });
 }
@@ -323,20 +325,22 @@ test('reconcile reports an interceptor that does not stop instead of calling it 
   const bfPort = await freePort();
   writeConfig(ws, gwPort, bfPort);
   const fake = spawn(process.execPath, ['--input-type=module', '-e', `
-    const s = await import(${JSON.stringify(path.join(ROOT, 'state.mjs'))});
+    const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'state.mjs')).href)});
     const http = await import('node:http');
     s.ensureAdminToken();
     process.on('SIGTERM', () => {});
     const port = ${bfPort};
     http.createServer((req, res) => {
       const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
-      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, host: 'chatgpt.com', prefix: '/backend-api/codex' };
-      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, host: f.host, prefix: f.prefix, proof: s.identityProof(nonce, f) }));
+      // R3: the proof signs the active tool set, not a host and a prefix.
+      const activeTools = s.deriveActiveTools(s.loadConfig()).join(',');
+      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, activeTools };
+      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, activeTools: f.activeTools, proof: s.identityProof(nonce, f) }));
     }).listen(port, '127.0.0.1');
   `], { env: envFor(ws), stdio: 'ignore' });
   try {
     await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
-    fs.writeFileSync(path.join(ws.dir, 'blindfold.json'), JSON.stringify({ pid: fake.pid, port: bfPort, gatewayPort: gwPort, host: 'chatgpt.com', prefix: '/backend-api/codex' }));
+    fs.writeFileSync(path.join(ws.dir, 'blindfold.json'), JSON.stringify({ pid: fake.pid, port: bfPort, gatewayPort: gwPort, activeTools: '' }));
     const r = await probe(ws, `s.reconcileBlindfold(s.loadConfig(), ${gwPort})`);
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.match(r.error, /did not stop/);
@@ -356,14 +360,16 @@ test('a dashboard change never overwrites a config.json that another process sav
   writeConfig(ws, gwPort, bfPort, 'bf');
   // A genuine-looking interceptor that answers each probe after 1 s.
   const fake = spawn(process.execPath, ['--input-type=module', '-e', `
-    const s = await import(${JSON.stringify(path.join(ROOT, 'state.mjs'))});
+    const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'state.mjs')).href)});
     const http = await import('node:http');
     s.ensureAdminToken();
     const port = ${bfPort};
     http.createServer((req, res) => setTimeout(() => {
       const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
-      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, host: 'chatgpt.com', prefix: '/backend-api/codex' };
-      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, host: f.host, prefix: f.prefix, proof: s.identityProof(nonce, f) }));
+      // R3: the proof signs the active tool set, not a host and a prefix.
+      const activeTools = s.deriveActiveTools(s.loadConfig()).join(',');
+      const f = { role: 'blindfold', port, pid: process.pid, gatewayPort: ${gwPort}, activeTools };
+      res.end(JSON.stringify({ proxy: 'llm-switcher-blindfold', port, pid: process.pid, gatewayPort: f.gatewayPort, activeTools: f.activeTools, proof: s.identityProof(nonce, f) }));
     }, 1000)).listen(port, '127.0.0.1');
   `], { env: envFor(ws), stdio: 'ignore' });
   let gw;

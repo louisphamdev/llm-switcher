@@ -1,0 +1,30 @@
+flowchart LR
+    subgraph Clients[" Dev Clients & Coding CLIs "]
+        CC["Claude Code CLI\n(/v1/messages)"]
+        CDX["OpenAI Codex CLI\n(/v1/responses)"]
+    end
+
+    subgraph Optimizers[" Optional Middle-Layer "]
+        OPT["Token Optimizers\n(Headroom / RTK)"]
+    end
+
+    subgraph Gateway[" LLM Switcher Edge Gateway (:3456) "]
+        ROUTER["Edge Router\n(Zero-Mutation)"]
+        HEALER["Healer Engine\n(Auto-Fix Schemas)"]
+        IR["Bi-Directional IR\n(Event Stream Synth)"]
+        ROUTER --> HEALER --> IR
+    end
+
+    subgraph Upstreams[" Upstream Providers "]
+        INTACT["intact Gateway\n(Recommended Pooler)"]
+        OTHER["9Router / Vertex / Other"]
+    end
+
+    CC -->|direct /v1/messages| ROUTER
+    CDX -->|direct /v1/responses| ROUTER
+    CC -.->|prune prompt| OPT
+    CDX -.->|prune prompt| OPT
+    OPT -->|forward :3456| ROUTER
+
+    IR -->|contract & pool| INTACT
+    IR -->|standard call| OTHER

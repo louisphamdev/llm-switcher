@@ -1,19 +1,19 @@
 {
   "port": 3456,
-  "activeProfile": "9router",
   "activeProfiles": {
-    "anthropic": "9router",
-    "responses": "example-codex-vertex",
-    "openai-chat": "9router",
-    "vertex": "example-codex-vertex"
+    "claude": "claude-default",
+    "codex": "codex-default"
+  },
+  "blindfold": {
+    "port": 3457
   },
   "profiles": {
-    "9router": {
-      "name": "9Router",
+    "claude-default": {
+      "name": "Claude default (Claude client -> router)",
       "mode": "convert",
-      "inFormat": "auto",
+      "tool": "claude",
       "outFormat": "openai-chat",
-      "baseURL": "https://YOUR-9ROUTER-HOST/v1",
+      "baseURL": "https://YOUR-ROUTER-HOST/v1",
       "apiKey": "sk-REPLACE-ME",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
@@ -28,30 +28,10 @@
         "fable": true
       }
     },
-    "example-direct": {
-      "name": "Example Native Anthropic (Direct Forward)",
-      "mode": "direct",
-      "inFormat": "auto",
-      "outFormat": "anthropic",
-      "baseURL": "https://api.anthropic.com/v1",
-      "apiKey": "sk-ant-REPLACE-ME",
-      "defaultModels": {
-        "opus": "claude-opus-4-7",
-        "sonnet": "claude-sonnet-4-6",
-        "haiku": "claude-haiku-4-5-20251001",
-        "fable": "claude-haiku-4-5-20251001"
-      },
-      "model1M": {
-        "opus": false,
-        "sonnet": false,
-        "haiku": false,
-        "fable": false
-      }
-    },
-    "example-codex-vertex": {
-      "name": "Example Codex client -> Vertex upstream",
+    "codex-default": {
+      "name": "Codex default (Codex client -> Vertex upstream)",
       "mode": "convert",
-      "inFormat": "responses",
+      "tool": "codex",
       "outFormat": "vertex",
       "baseURL": "https://YOUR-VERTEX-GATEWAY/v1",
       "apiKey": "REPLACE-ME",
@@ -61,8 +41,6 @@
         "review": "gpt-5.6-terra",
         "subagent": "gpt-5.6-luna"
       },
-      "blindfold": false,
-      "blindfoldPort": 3457,
       "defaultModels": {
         "main": "gemini-3.8-flash",
         "review": "gemini-3.7-flash-medium",

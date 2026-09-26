@@ -50,11 +50,16 @@ test('a real Codex API path is routed, and its query string survives', () => {
   assert.equal(toGatewayPath('/backend-api/codex/responses'), `${GATEWAY_PREFIX}/responses`);
 });
 
-// A CONNECT to any other host must be tunneled, not intercepted: the process then
-// only copies bytes and never holds that host's plaintext.
-test('only the target host is intercepted; every other public host is tunneled', () => {
-  assert.equal(isInterceptedHost('chatgpt.com'), true);
-  for (const other of ['api.openai.com', 'auth.openai.com', 'example.com', 'chatgpt.com.evil.test']) {
+// A CONNECT to any host outside the table must be tunneled, not intercepted: the process then
+// only copies bytes and never holds that host's plaintext. The table of R3 names exactly three
+// hosts, and it is an exact lookup — a name that merely ends in one of them is not in it.
+test('the host table names exactly three hosts; every other public host is tunneled', () => {
+  for (const host of ['api.anthropic.com', 'api.openai.com', 'chatgpt.com']) {
+    assert.equal(isInterceptedHost(host), true, `must intercept ${host}`);
+    assert.equal(isInterceptedHost(host.toUpperCase()), true, 'DNS case never matters');
+  }
+  for (const other of ['auth.openai.com', 'api.chatgpt.com', 'openai.com', 'example.com',
+    'chatgpt.com.evil.test', 'anthropic.com']) {
     assert.equal(isInterceptedHost(other), false, `must not intercept ${other}`);
   }
 });

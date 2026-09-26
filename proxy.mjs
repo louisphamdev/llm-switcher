@@ -7,21 +7,23 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
-  OUT_FORMATS, IN_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
+  OUT_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
   toGeminiSchema, isAntigravityModel,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage
 } from './formats.mjs';
 import {
-  TARGETS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
+  TOOLS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
+  getMigrationError, getMigrationCollision,
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
   ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
-  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot, computeLaunchState,
-  contractLabSettings
+  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
+  contractLabSettings, STATE_DIR
 } from './state.mjs';
+import { classifyCodexRole, classifyClaudeTier, loadCatalogCache, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -198,6 +200,9 @@ async function readJsonBody(req, limit = MAX_API_BODY_SIZE) {
 // ----------------------------------------------------
 // Profile & model resolution
 // ----------------------------------------------------
+// R5: the only two input protocols, each owned by one tool.
+const CLIENT_FORMAT_TOOL = { anthropic: 'claude', responses: 'codex' };
+
 function getActiveProfile(clientFormat, req) {
   const cfg = loadConfig();
   if (!cfg) return { cfg: null, profileKey: null, profile: null };
@@ -214,9 +219,12 @@ function getActiveProfile(clientFormat, req) {
     return { cfg, profileKey: reqProfile, profile: null, error: `Profile "${reqProfile}" requested via x-llm-profile/?profile= does not exist` };
   }
 
-  // Look up the active profile by CLI target (clientFormat: anthropic | responses | openai-chat | vertex).
-  // Deleted profile / disabled target counts as OFF, never silently fall through to another profile (different API key!).
-  const key = clientFormat ? getActiveMap(cfg)[clientFormat] : (cfg.activeProfile || null);
+  // R4: resolve by TOOL, not by the protocol the request arrived in. Only two client formats
+  // exist anymore — anthropic is Claude Code's, responses is Codex's — and each has exactly one
+  // pointer, activeProfiles.claude and activeProfiles.codex. A deleted profile or a disabled tool
+  // counts as OFF and never falls through to the other tool's profile (different API key!).
+  const key = clientFormat ? getActiveMap(cfg)[CLIENT_FORMAT_TOOL[clientFormat]] ?? null
+    : (cfg.activeProfile || null);
   if (!key || !hasProfile(cfg, key)) return { cfg, profileKey: key || null, profile: null };
   return { cfg, profileKey: key, profile: cfg.profiles[key] };
 }
@@ -266,11 +274,11 @@ function mapModel(requestedModel, profile, clientFormat) {
     // retired gpt-5.3-codex) have no credentials behind 9Router -> fail closed to the main slot
     // instead of passing through to an upstream 404. Provider-prefixed names (ag/..., cf/...)
     // are preserved by the early return above.
-    if (/^(gpt|o\d|codex)([-/]|$)/i.test(clean)) return modelForSlot(profile, 'main') || clean;
+    if (/^(gpt|o\d|codex)([-/]|$)/i.test(clean)) {
+      const autoRole = classifyCodexRole(clean);
+      return (autoRole !== 'main' ? modelForSlot(profile, autoRole) : null) || modelForSlot(profile, 'main') || clean;
+    }
     return clean || requestedModel;
-  }
-  if (clientFormat === 'openai-chat' || clientFormat === 'vertex') {
-    if (m === 'default' || m === 'main' || !clean) return modelForSlot(profile, 'default') || clean;
   }
   if (m.includes('fable')) return modelForSlot(profile, 'fable') || clean;
   if (m.includes('opus')) return modelForSlot(profile, 'opus') || clean;
@@ -974,7 +982,15 @@ function validateProfileInput(p) {
   for (const k of ['name', 'baseURL', 'optimizerURL']) {
     if (typeof p[k] === 'string' && CONTROL_CHARS.test(p[k])) return `${k} must not contain control characters`;
   }
-  if (p.inFormat && p.inFormat !== 'auto' && !IN_FORMATS.includes(p.inFormat)) return `Invalid inFormat "${p.inFormat}"`;
+  // R6 / R7(c): a profile declares exactly one tool. An old-format field must never be written back.
+  if (p.inFormat !== undefined) return 'inFormat is not supported; use "tool": "claude" or "tool": "codex"';
+  if (p.blindfold !== undefined) return 'blindfold per-profile setting is deprecated';
+  if (p.blindfoldPort !== undefined) return 'blindfoldPort per-profile setting is deprecated';
+  if (p.blindfoldHost !== undefined) return 'blindfoldHost per-profile setting is deprecated';
+  if (p.blindfoldPrefix !== undefined) return 'blindfoldPrefix per-profile setting is deprecated';
+  if (p.tool !== undefined && p.tool !== null && !TOOLS.includes(p.tool)) {
+    return `Invalid tool "${p.tool}". Valid: ${TOOLS.join(', ')}`;
+  }
   if (p.outFormat && !OUT_FORMATS.includes(p.outFormat)) return `Invalid outFormat "${p.outFormat}"`;
   if (p.mode && !VALID_MODES.includes(p.mode)) return `Invalid mode "${p.mode}"`;
   if (p.thinkingMode && !THINKING_MODES.includes(p.thinkingMode)) return `Invalid thinkingMode "${p.thinkingMode}"`;
@@ -1080,7 +1096,9 @@ async function fetchModels(body, cfg) {
 
 // Vertex/Gemini: /v1beta/models/{m}:{action} (Gemini API) and
 // /v1/projects/{p}/locations/{l}/publishers/{pub}/models/{m}:{action} (Vertex AI SDK).
-const VERTEX_ROUTE = /^\/(?:v1|v1beta|v1beta1)\/(?:projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/)?models\/([^/:]+):(generateContent|streamGenerateContent)$/;
+// R4/Codex: model mapping for the responses input only. Claude Code's mapping is the tier
+// substring chain at the bottom of mapModel. No alias (`main`, `opus[1m]`) ever leaves this
+// function: the `[1m]` suffix is stripped before anything is looked up.
 
 // ----------------------------------------------------
 // Router
@@ -1123,7 +1141,7 @@ async function route(req, res) {
 
   // Health check
   if (method === 'GET' && pathname === '/health') {
-    const { profileKey, profile } = getFirstActiveProfile(TARGETS, req);
+    const { profileKey, profile } = getFirstActiveProfile(['responses', 'anthropic'], req);
     // ?challenge=<nonce> lets the CLI tell this gateway from a process that replays a /health body.
     const challenge = parsedUrl.searchParams.get('challenge');
     return sendJson(res, 200, {
@@ -1151,6 +1169,7 @@ async function route(req, res) {
   // advertised: Codex sends them in-request and mapModel resolves them server-side.
   // Without publicModels, fall back to the deduplicated mapped upstream IDs.
   if (method === 'GET' && (pathname === '/v1/models' || pathname === '/models')) {
+    checkVersionAndRefresh(req.headers['anthropic-version'] ? 'claude' : 'codex', req.headers, STATE_DIR);
     const { ids, windows } = servedModels(req);
     const created = Math.floor(Date.now() / 1000);
     return sendJson(res, 200, {
@@ -1183,9 +1202,7 @@ async function route(req, res) {
     return handleCountTokens(req, res, buf);
   }
 
-  // Client endpoints, one per input protocol (auto-detected by path).
   let clientFormat = null;
-  const vmatch = method === 'POST' ? pathname.match(VERTEX_ROUTE) : null;
 
   // Codex CLI sends GET /v1/responses (and /v1/responses/{id}) to fetch model
   // metadata and retrieve previous responses.  The gateway is stateless, so
@@ -1206,18 +1223,18 @@ async function route(req, res) {
 
   if (method === 'POST') {
     if (pathname === '/v1/messages' || pathname === '/messages') clientFormat = 'anthropic';
-    else if (pathname === '/v1/chat/completions' || pathname === '/chat/completions') clientFormat = 'openai-chat';
     else if (pathname === '/v1/responses' || pathname === '/responses') clientFormat = 'responses';
-    else if (vmatch) clientFormat = 'vertex';
   }
   if (clientFormat) {
+    if (clientFormat === 'anthropic') checkVersionAndRefresh('claude', req.headers, STATE_DIR);
+    else if (clientFormat === 'responses') checkVersionAndRefresh('codex', req.headers, STATE_DIR);
     let buf;
     try {
       buf = await readBody(req, MAX_BODY_SIZE);
     } catch (err) {
       return sendClientError(res, clientFormat, err.status || 400, err.message);
     }
-    const opts = vmatch ? { vertexModel: decodeURIComponent(vmatch[1]), vertexStream: vmatch[2] === 'streamGenerateContent' } : {};
+    const opts = {};
     return handleConvert(clientFormat, req, res, buf, opts);
   }
 
@@ -1228,7 +1245,7 @@ async function route(req, res) {
 // The names /v1/models serves, and the window of each. Official names when the profile publishes
 // them, otherwise the mapped upstream IDs; each window follows model1M of its slot.
 function servedModels(req) {
-  const { profile } = getFirstActiveProfile(['responses', 'openai-chat', 'anthropic', 'vertex'], req);
+  const { profile } = getFirstActiveProfile(['responses', 'anthropic'], req);
   if (Array.isArray(profile?.publicModels) && profile.publicModels.length) {
     return { ids: [...new Set(profile.publicModels.filter(Boolean))], windows: publicModelWindows(profile) };
   }
@@ -1247,9 +1264,8 @@ async function routeApi(req, res, method, pathname) {
       activeProfile: cfg.activeProfile || null,
       activeProfiles,
       revision: configRevision(cfg),
-      claude1MTiers: computeLaunchState(cfg, PORT).claude1MTiers,
       ...readLaunchFlags(),
-      claudeBaseURL: activeProfiles.anthropic ? `http://127.0.0.1:${PORT} (injected via launcher)` : '(none / official)',
+      claudeBaseURL: activeProfiles.claude ? `http://127.0.0.1:${PORT} (injected via launcher)` : '(none / official)',
       config: redactConfig(cfg)
     });
   }
@@ -1269,6 +1285,24 @@ async function routeApi(req, res, method, pathname) {
     body = await readJsonBody(req);
   } catch (err) {
     return sendJson(res, err.status || 400, { error: err.message });
+  }
+
+  // GET /api/catalog
+  if (method === 'GET' && pathname === '/api/catalog') {
+    return sendJson(res, 200, loadCatalogCache(STATE_DIR));
+  }
+
+  // POST /api/catalog/refresh
+  if (method === 'POST' && pathname === '/api/catalog/refresh') {
+    const active = getActiveMap(requireConfig(res) || {});
+    const cfg = requireConfig(res) || {};
+    const claudeProfile = active.claude ? cfg.profiles?.[active.claude] : null;
+    const codexProfile = active.codex ? cfg.profiles?.[active.codex] : null;
+    const updated = await refreshCatalog(STATE_DIR, {
+      claudeKey: claudeProfile?.apiKey,
+      codexKey: codexProfile?.apiKey
+    });
+    return sendJson(res, 200, { success: true, catalog: updated });
   }
 
   // POST /api/logs/clear
@@ -1292,6 +1326,12 @@ async function routeConfigApi(res, method, pathname, body) {
   }
 
   // POST /api/switch  { target?, profile? | null, deactivate? }
+  // R7: a migration collision means config.json is in a shape this build refuses to rewrite.
+  // Every route that writes it answers the same way, and the bytes on disk stay as they are.
+  if (getMigrationCollision() && ['/api/switch', '/api/toggle', '/api/save-profile', '/api/delete-profile'].includes(pathname)) {
+    return sendJson(res, 409, { error: 'Migration collision', clashingKeys: getMigrationCollision().clashingKeys });
+  }
+
   if (pathname === '/api/switch') {
     let err = null;
     if (body.deactivate) {
@@ -1313,7 +1353,7 @@ async function routeConfigApi(res, method, pathname, body) {
     const map = getActiveMap(cfg);
     let err = null;
     if (body.target) {
-      if (!TARGETS.includes(body.target)) return sendJson(res, 400, { error: `Unknown target "${body.target}"` });
+      if (!TOOLS.includes(body.target)) return sendJson(res, 400, { error: `Unknown target "${body.target}"` });
       let key = null;
       if (body.enabled) {
         const candidates = [map[body.target], cfg.activeProfile, ...Object.keys(cfg.profiles)];
@@ -1361,7 +1401,7 @@ async function routeConfigApi(res, method, pathname, body) {
     const map = getActiveMap(cfg);
     cfg.activeProfiles = map;
     let unassigned = false;
-    for (const t of TARGETS) {
+    for (const t of TOOLS) {
       if (map[t] === key && !profileAcceptsTarget(merged, t)) {
         map[t] = null;
         unassigned = true;
@@ -1369,7 +1409,16 @@ async function routeConfigApi(res, method, pathname, body) {
     }
 
     // Profile is active (or was just unassigned from a target) -> refresh 1M flags / env files.
-    const applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg, baseRevision) : (saveConfig(cfg), { revision: configRevision(cfg) });
+    let applied;
+    try {
+      applied = isProfileActive(cfg, key) || unassigned ? await commit(cfg, baseRevision) : (saveConfig(cfg), { revision: configRevision(cfg) });
+    } catch (err) {
+      // saveConfig refuses while a migration collision or migration error blocks writes (R7).
+      if (getMigrationError() || getMigrationCollision()) {
+        return sendJson(res, 409, { error: err.message });
+      }
+      throw err;
+    }
     return sendJson(res, applied.status || (applied.success === false ? 502 : 200), { success: true, ...applied });
   }
 
@@ -1677,6 +1726,8 @@ server.on('upgrade', (req, socket) => {
     return;
   }
 
+  checkVersionAndRefresh('codex', req.headers, STATE_DIR);
+
   const key = req.headers['sec-websocket-key'];
   if (!key) {
     socket.destroy();
@@ -1788,12 +1839,26 @@ server.on('error', (err) => {
 if (!loadConfig()) {
   console.warn(`[llm-switcher:WARN] Could not load ${configPath}: ${getConfigLoadError()?.message}. Copy config.example.json to config.json.`);
 }
+// R7: a migration that could not complete blocks every write. Say so at startup instead of
+// failing later, on the first save, with an error nobody connects back to this.
+if (getMigrationError()) {
+  console.error(`[llm-switcher:ERROR] ${getMigrationError().message}`);
+}
+if (getMigrationCollision()) {
+  console.error(`[llm-switcher:ERROR] Configuration migration collision: ${JSON.stringify(getMigrationCollision().clashingKeys)}. Fix config.json; it is not being rewritten.`);
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   // A service start or a restart on a new port finds env-codex.* already pointing at the interceptor.
   const cfg = loadConfig();
-  if (cfg && !getConfigLoadError()) serialized(() => reconcile(cfg));
+  if (getMigrationCollision()) {
+    console.error('[llm-switcher] Skipping reconcile: a configuration migration collision blocks writes.');
+  } else if (cfg && !getConfigLoadError()) {
+    serialized(() => reconcile(cfg));
+  }
   console.log(`[llm-switcher] Server running on http://127.0.0.1:${PORT}`);
   console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui`);
-  console.log(`[llm-switcher] Endpoints: /v1/messages (anthropic) | /v1/chat/completions (openai) | /v1/responses (codex) | /v1beta/models/* (vertex)`);
+  console.log(`[llm-switcher] Endpoints: /v1/messages (Claude Code) | /v1/responses (Codex)`);
+  // Asynchronously discover latest tool models in the background without blocking startup
+  refreshCatalog(STATE_DIR).catch(() => {});
 });

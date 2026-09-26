@@ -11,7 +11,7 @@
 // ============================================================
 
 import fs from 'node:fs';
-import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken, TARGETS } from './state.mjs';
+import { claudeSettingsPath, loadConfig as loadSharedConfig, resolvePort, readAdminToken, STATE_DIR } from './state.mjs';
 
 const VERSION = (() => {
   try { return JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version; } catch { return '0.0.0'; }
@@ -80,7 +80,7 @@ async function postSwitch(port, target, profile) {
 const TOOLS = [
   {
     name: 'switcher_status',
-    description: 'Get live status of LLM Switcher gateway: port, active multi-CLI targets (Claude Code, Codex, OpenAI, Vertex), and 1M context flags.',
+    description: 'Get live status of LLM Switcher gateway: port, the two tool targets (Claude Code, Codex), and the active profile of each.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -98,14 +98,14 @@ const TOOLS = [
   },
   {
     name: 'switcher_switch_profile',
-    description: 'Programmatically change the active profile for a specific CLI target (e.g. Claude Code, Codex, OpenAI, Vertex) or globally.',
+    description: 'Programmatically change the active profile for one tool: Claude Code (claude) or Codex (codex).',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'CLI target to switch: "anthropic" (Claude Code), "responses" (Codex), "openai-chat", or "vertex"',
-          enum: TARGETS
+          description: 'Tool to switch: "claude" (Claude Code) or "codex" (Codex)',
+          enum: ['claude', 'codex']
         },
         profile: {
           type: 'string',
@@ -124,6 +124,17 @@ const TOOLS = [
         limit: { type: 'number', description: 'Maximum number of recent logs to return (default: 5)' }
       }
     }
+  },
+  {
+    name: 'switcher_models',
+    description: 'Get the latest model catalog for Claude Code and Codex, including discovered upstream models and slot assignments.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', enum: ['claude', 'codex'], description: 'Optional: filter by tool ("claude" or "codex")' },
+        refresh: { type: 'boolean', description: 'Query official upstream endpoints for new models before returning' }
+      }
+    }
   }
 ];
 
@@ -131,17 +142,29 @@ async function handleToolCall(name, args) {
   const cfg = loadConfig();
   const port = getMcpPort();
 
+  if (name === 'switcher_models') {
+    const { loadCatalogCache, refreshCatalog } = await import('./catalog.mjs');
+    if (args?.refresh) {
+      await refreshCatalog(STATE_DIR);
+    }
+    const cache = loadCatalogCache(STATE_DIR);
+    const t = args?.tool?.toLowerCase();
+    const res = {};
+    if (!t || t === 'claude') res.claude = cache.claude;
+    if (!t || t === 'codex') res.codex = cache.codex;
+    res.updatedAt = cache.updatedAt;
+    return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
+  }
+
   if (name === 'switcher_status') {
     const live = await fetchStatus(port);
     const activeMap = live?.activeProfiles || cfg.activeProfiles || {};
     const text = [
       '=== LLM Switcher Gateway Status ===',
       `Service Running: ${live ? `YES (http://127.0.0.1:${port})` : 'NO / UNREACHABLE'}`,
-      `Active Profiles by CLI:`,
-      `  - Claude Code (/v1/messages)       : [${activeMap.anthropic || 'OFF'}] ${live?.claude1MTiers?.length ? `• 1M Context ACTIVE (${live.claude1MTiers.join(', ')})` : ''}`,
-      `  - Codex CLI   (/v1/responses)      : [${activeMap.responses || 'OFF'}] ${live?.isCodex1MActive ? '• 1M Context ACTIVE' : ''}`,
-      `  - OpenAI Chat (/v1/chat/completions): [${activeMap['openai-chat'] || 'OFF'}]`,
-      `  - Vertex      (/v1beta/models/*)   : [${activeMap.vertex || 'OFF'}]`,
+      `Active Profiles by tool:`,
+      `  - Claude Code (/v1/messages)  : [${activeMap.claude || 'OFF'}]`,
+      `  - Codex CLI   (/v1/responses) : [${activeMap.codex || 'OFF'}]`,
       '',
       `Available Profiles in config: ${Object.keys(cfg.profiles || {}).join(', ')}`,
       `Dashboard Web UI: http://127.0.0.1:${port}/ui`
@@ -220,7 +243,12 @@ async function handleToolCall(name, args) {
       if (res.success) {
         return { content: [{ type: 'text', text: `Successfully set ${target || 'global'} active profile to "${profile || 'OFF'}".` }] };
       }
-      return { content: [{ type: 'text', text: `Switch failed: ${res.error || 'Unknown error'}` }], isError: true };
+      // A 409 answer carries the clashing keys. Without them the agent cannot tell which two
+      // pointers of config.json disagree, and the only advice left is "go read the file".
+      const detail = Array.isArray(res.clashingKeys) && res.clashingKeys.length
+        ? ` Clashing keys: ${res.clashingKeys.join(', ')}.`
+        : '';
+      return { content: [{ type: 'text', text: `Switch failed: ${res.error || 'Unknown error'}.${detail}` }], isError: true };
     } catch (err) {
       return { content: [{ type: 'text', text: `Gateway connection failed: ${err.message}` }], isError: true };
     }

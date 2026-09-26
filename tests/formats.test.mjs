@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  anthropicToIR, chatToIR, responsesToIR, vertexToIR,
+  anthropicToIR, responsesToIR,
   healToolPairs, irToChatBody, irToAnthropicBody, irToVertexBody, toGeminiSchema,
   createUpstreamNormalizer, createCollector, createThinkTagSplitter,
   createAnthropicStream, createResponsesStream, createVertexStream,
@@ -62,11 +62,6 @@ test('healAnthropicPayload: native Anthropic passthrough keeps the billing heade
   assert.equal(payload.system[0].text, header);
 });
 
-test('chatToIR: reasoning_effort "none" disables thinking', () => {
-  const ir = chatToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], reasoning_effort: 'none' });
-  assert.equal(ir.thinking.type, 'disabled');
-});
-
 test('healToolPairs: orphan result -> user text, missing result -> placeholder, adjacency kept', () => {
   const healed = healToolPairs([
     { role: 'user', content: 'start' },
@@ -118,21 +113,6 @@ test('responsesToIR: parallel function_call items merge into one assistant turn;
   assert.equal(messages[2].tool_calls.length, 2);
 });
 
-test('vertexToIR: functionCall/functionResponse are paired by generated ids', () => {
-  const ir = vertexToIR({
-    contents: [
-      { role: 'user', parts: [{ text: 'weather?' }] },
-      { role: 'model', parts: [{ functionCall: { name: 'w', args: { c: 'A' } } }, { functionCall: { name: 'w', args: { c: 'B' } } }] },
-      { role: 'function', parts: [{ functionResponse: { name: 'w', response: { t: 1 } } }, { functionResponse: { name: 'w', response: { t: 2 } } }] }
-    ]
-  });
-  const calls = ir.messages[1].toolCalls.map(t => t.id);
-  const results = ir.messages.filter(m => m.role === 'tool').map(m => m.toolCallId);
-  assert.deepEqual(results, calls);
-  const { messages } = irToChatBody(ir, 'gpt-4o');
-  assert.equal(messages.filter(m => m.role === 'tool').length, 2);
-});
-
 test('irToVertexBody: functionResponse uses the function name and parallel responses share one content', () => {
   const ir = anthropicToIR({
     model: 'x', messages: [
@@ -164,19 +144,19 @@ test('toGeminiSchema strips unsupported JSON Schema keywords', () => {
 });
 
 test('irToAnthropicBody: thinking constraints (budget < max_tokens, no top_k, temperature 1)', () => {
-  const ir = chatToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], max_tokens: 3000, temperature: 0.2, reasoning_effort: 'high' });
+  const ir = anthropicToIR({ model: 'x', max_tokens: 3000, temperature: 0.2, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 2048 } });
   ir.params.topK = 5;
   const body = irToAnthropicBody(ir, 'claude-opus-4-6');
   assert.ok(body.thinking.budget_tokens < body.max_tokens);
   assert.equal(body.temperature, undefined);
   assert.equal(body.top_k, undefined);
 
-  const small = irToAnthropicBody(chatToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], max_tokens: 100, reasoning_effort: 'high' }), 'claude');
+  const small = irToAnthropicBody(anthropicToIR({ model: 'x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 2048 } }), 'claude');
   assert.equal(small.thinking, undefined, 'thinking dropped when max_tokens <= 1024');
 });
 
 test('irToAnthropicBody: never emits empty text blocks', () => {
-  const ir = chatToIR({ model: 'x', messages: [{ role: 'user', content: [{ type: 'text', text: '' }, { type: 'text', text: 'hi' }] }] });
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: [{ type: 'text', text: '' }, { type: 'text', text: 'hi' }] }] });
   const body = irToAnthropicBody(ir, 'claude');
   assert.ok(body.messages.every(m => m.content.every(b => b.type !== 'text' || b.text)));
 });
@@ -699,26 +679,16 @@ test('Responses tool_choice: allowed_tools restricts the tools and keeps its mod
   assert.deepEqual(responsesToIR({ ...base, tool_choice: { type: 'function', name: 'b' } }).toolChoice, { name: 'b' });
 });
 
-test('Chat tool_choice: allowed_tools restricts the tools and keeps its mode', () => {
-  const tools = ['a', 'b'].map(name => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }));
-  const ir = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }], tools,
-    tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ type: 'function', function: { name: 'b' } }] } } });
-  assert.deepEqual(ir.tools.map(t => t.name), ['b']);
-  assert.equal(ir.toolChoice, 'auto');
-});
-
 test('smartText and smartReasoning return each string once', () => {
   assert.equal(smartText({ content: ['line 1', 'line 2'] }), 'line 1\nline 2');
   assert.equal(smartReasoning({ reasoning_content: 'step 1', parts: [{ text: 'step 1', thought: true }] }).text, 'step 1');
 });
 
-test('an empty stop string is dropped in every input format', () => {
+test('an empty stop string is dropped, and stop reaches the body only when it has values', () => {
   const msgs = [{ role: 'user', content: 'x' }];
-  assert.deepEqual(chatToIR({ model: 'm', messages: msgs, stop: '' }).params.stop, []);
-  assert.deepEqual(chatToIR({ model: 'm', messages: msgs, stop: ['', 'END'] }).params.stop, ['END']);
+  assert.deepEqual(anthropicToIR({ model: 'm', max_tokens: 10, messages: msgs, stop_sequences: [''] }).params.stop, []);
   assert.deepEqual(anthropicToIR({ model: 'm', max_tokens: 10, messages: msgs, stop_sequences: ['', 'END'] }).params.stop, ['END']);
-  assert.deepEqual(vertexToIR({ contents: [{ role: 'user', parts: [{ text: 'x' }] }], generationConfig: { stopSequences: [''] } }).params.stop, []);
-  const body = irToAnthropicBody(chatToIR({ model: 'm', messages: msgs, stop: '' }), 'claude-x');
+  const body = irToAnthropicBody(anthropicToIR({ model: 'm', max_tokens: 10, messages: msgs, stop_sequences: [''] }), 'claude-x');
   assert.equal(body.stop_sequences, undefined);
 });
 
@@ -736,7 +706,7 @@ test('Vertex usage: thoughts count as output, and the Vertex reply splits them b
 });
 
 test('reasoning model families get no <think> guide', () => {
-  const ir = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }], reasoning_effort: 'high' });
+  const ir = anthropicToIR({ model: 'm', max_tokens: 100, messages: [{ role: 'user', content: 'x' }], thinking: { type: 'enabled', budget_tokens: 2048 } });
   for (const model of ['o3-mini', 'openai/o1', 'o4-mini-high', 'deepseek-r1', 'deepseek-reasoner', 'qwq-32b']) {
     const sys = irToChatBody(ir, model).messages.find(m => m.role === 'system')?.content || '';
     assert.ok(!sys.includes('<think>'), `${model} must not get the guide`);
@@ -781,15 +751,10 @@ test('healAnthropicPayload keeps an unchanged user turn as the same object', () 
 });
 
 test('allowed_tools that matches no declared tool gives a request without tools, not a crash', () => {
-  const chat = chatToIR({ model: 'm', messages: [{ role: 'user', content: 'x' }],
-    tools: [{ type: 'function', function: { name: 'a', parameters: { type: 'object', properties: {} } } }],
-    tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ type: 'function', function: { name: 'b' } }] } } });
   const hosted = responsesToIR({ model: 'm', input: 'x', tools: [fn('a')], tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] } });
-  for (const ir of [chat, hosted]) {
-    for (const body of [irToChatBody(ir, 'm'), irToAnthropicBody(ir, 'claude-x'), irToVertexBody(ir, 'gemini-x')]) {
-      assert.equal(body.tools, undefined);
-      assert.equal(body.tool_choice, undefined);
-    }
+  for (const body of [irToChatBody(hosted, 'm'), irToAnthropicBody(hosted, 'claude-x'), irToVertexBody(hosted, 'gemini-x')]) {
+    assert.equal(body.tools, undefined);
+    assert.equal(body.tool_choice, undefined);
   }
 });
 
@@ -814,4 +779,26 @@ test('tool schemas keep 0, false, "" and null values', () => {
   assert.equal(p.properties.tags.minItems, 0);
   assert.equal(p.properties.tags.items.default, '');
   assert.equal(p.properties.note.default, null);
+});
+
+// Claude Code sends `advisor` with `input_schema: {}`. That survived as `parameters: {}`, so
+// Vertex failed the whole request with `tools.18.custom.input_schema.type: Field required` —
+// while the same call with a real tool list succeeded. An empty shape must be healed exactly
+// like a missing one, on the chat path a profile actually uses.
+test('an empty tool schema is healed, not forwarded as {}', () => {
+  assert.deepEqual(sanitizeJsonSchema({}), { type: 'object', properties: {} });
+  assert.deepEqual(
+    sanitizeJsonSchema({ type: 'object', properties: { nested: {} } }),
+    { type: 'object', properties: { nested: { type: 'object', properties: {} } } }
+  );
+  assert.deepEqual(toGeminiSchema({}), { type: 'object', properties: {} });
+
+  const body = irToChatBody(
+    anthropicToIR({
+      model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'x' }],
+      tools: [{ name: 'advisor', description: '', input_schema: {} }]
+    }),
+    'antigravity/claude-opus-4-6-thinking'
+  );
+  assert.deepEqual(body.tools[0].function.parameters, { type: 'object', properties: {} });
 });

@@ -3,7 +3,7 @@
 <p align="center">
   <b>Cổng ngõ biên (Edge Gateway) chuyển đổi đa giao thức LLM siêu nhẹ, Zero-Dependency</b><br>
   Cầu nối hai chiều giữa <b>Claude Code</b>, <b>Codex</b>, OpenAI SDKs, Gemini/Vertex SDKs với mọi nhà cung cấp LLM.<br>
-  Chuyển đổi giao thức qua IR, mở khoá 1M context, trích xuất thinking blocks và tự chữa lành đồ thị tin nhắn trước khi ra Internet.
+  Chuyển đổi giao thức qua IR, cửa sổ context theo model chính thức, trích xuất thinking blocks và tự chữa lành đồ thị tin nhắn trước khi ra Internet.
 </p>
 
 <p align="center">
@@ -13,162 +13,118 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-22c55e?logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Phụ_thuộc-Zero_Dependencies-38bdf8" alt="Zero Dependencies">
-  <img src="https://img.shields.io/badge/Context-1%2C000%2C000_tokens-6366f1" alt="1M Context">
+  <img src="https://img.shields.io/badge/Context-window_follows_the_model-6366f1" alt="Context window follows the model">
   <img src="https://img.shields.io/badge/Multi--Active-Đa_CLI_Độc_Lập-f59e0b" alt="Multi-Active">
   <img src="https://img.shields.io/badge/Giấy_phép-MIT-gray" alt="License MIT">
 </p>
 
 ---
 
-> ### 🎯 Vấn đề Cốt lõi: Vì sao Proxy Chung Chung Làm "Tê Liệt" Công cụ Coding AI?
+> ### 🛡️ Zero-Loss Native Emulation Cho Coding Agent
 >
-> Mỗi nhà cung cấp LLM hiện nay sử dụng một **chuẩn API response hoàn toàn khác nhau**:
-> - **Anthropic** bắt buộc phải có các block `thinking` riêng biệt (`thinking_delta` + `signature_delta`), luật xen kẽ lượt nghiêm ngặt (`roles must alternate`), và schema `tool_use` có định kiểu.
-> - **OpenAI** stream reasoning qua các chunk delta `reasoning_content` hoặc `reasoning_details[]`, và định dạng tool thành `tool_calls` chứa chuỗi JSON arguments.
-> - **Google Vertex AI** đặt khối suy luận vào `candidates[0].content.parts[{thought: true, text, thoughtSignature}]` và truyền arguments dạng object thuần.
-> - **Các model mã nguồn mở (DeepSeek, Qwen, GLM)** thường đổ thẳng chain-of-thought vào nội dung `content`, hoặc trả trùng lặp nhiều trường gây rối loạn parser.
+> Proxy thông thường làm biến dạng API response: Claude Code mất block reasoning `thinking_delta`, argument tool bị cắt vụn, và prompt cache bị lệch.
 >
-> **Khi các công cụ lập trình cao cấp như Claude Code hoặc Codex nhận về response không chuẩn định dạng gốc, chúng không chỉ hiển thị lỗi — mà hiệu năng và trí thông minh của AI bị suy giảm nghiêm trọng:**
-> 1. **Mất Khối Suy Luận (Lost Chain-of-Thought):** Nếu Claude Code không nhận được block `thinking_delta` chuẩn của Anthropic, nó **hoàn toàn không nhận biết được tiến trình suy luận** của model. Agent sẽ hành động vội vàng, bỏ qua bước lập kế hoạch kiến trúc, và sinh ra code lỗi.
-> 2. **Lỗi Thực Thi Công Cụ (Broken Tool Calling):** Sự sai lệch về stop reason (`tool_calls` vs `tool_use`) hoặc cách cắt chunk arguments làm agent không parse được tham số lệnh, dẫn đến vòng lặp lỗi vô tận.
-> 3. **Lệch Token & Hỏng Prompt Cache:** Tính toán sai cấu trúc token usage làm vỡ cơ chế KV-cache của provider và kích hoạt nén ngữ cảnh (compaction) quá sớm.
->
-> Nhiều lập trình viên lầm tưởng model AI "ngày càng ngáo đi", nhưng thực chất là **do proxy trung gian đã làm biến dạng cấu trúc response!**
->
-> ### 🛡️ Giải pháp: Giả Lập Chuẩn Gốc Không Hao Hụt (Zero-Loss Native Emulation)
->
-> **LLM Switcher giải quyết triệt để bài toán này bằng cơ chế giả lập giao thức chuẩn xác 100%.**
->
-> Dù upstream phía sau của bạn là 9Router, OpenRouter, Vertex hay DeepSeek, Switcher sẽ chuẩn hoá và tái tạo lại **chính xác từng byte event stream theo đúng chuẩn mà client đó được thiết kế để tiếp nhận**:
-> - **Claude Code** nhận về 100% luồng Anthropic SSE xịn (`message_start` ➔ `thinking_delta` ➔ `signature_delta` ➔ `tool_use` ➔ `message_delta`), hoạt động **mượt mà y hệt như đang dùng gói thuê bao chính chủ đắt đỏ**.
-> - **Codex** nhận về 100% luồng Responses API xịn (`response.created` ➔ `output_text.delta` ➔ `function_call` ➔ `response.completed`).
->
-> **Bạn vừa được hưởng lợi ích chi phí và độ phủ 1M context của các API bên thứ ba, vừa giữ trọn 100% trí thông minh và sức mạnh của công cụ như dùng gói subscription gốc.**
+> **LLM Switcher giải quyết triệt để vấn đề này ngay tại network edge cục bộ:**
+> - **100% Native Emulation:** Chuẩn hóa upstream API (intact, 9Router, Vertex, DeepSeek) thành luồng Anthropic SSE xịn (`thinking_delta` + `tool_use`) cho Claude Code, và Responses API event cho Codex.
+> - **Client-Side Edge Companion:** Cố tình tách biệt các tác vụ nặng như account pooling, key rotation cho **[intact](https://github.com/louisphamdev/intact)** (khuyên dùng) hoặc 9Router (cơ bản), giúp Switcher giữ vững tiêu chí Zero-Dependency siêu nhẹ.
+> - **Phạm vi Tập trung:** Tối ưu chuyên sâu cho **Claude Code** và **OpenAI Codex** (OpenCode đã hỗ trợ đổi model native ngay trong config; muốn pooling thì dùng intact; còn Antigravity thì không đáng để bận tâm làm 😏).
 
 ---
 
-> ### 💡 Triết lý Thiết kế: Phần Mở Rộng Ở Biên Tối Ưu Cho 9Router
->
-> **LLM Switcher CỐ TÌNH KHÔNG làm các tính năng xoay vòng API key (key rotation), quản lý account pool, theo dõi quota, hay chia tải (load balancing) giữa nhiều key của cùng một nhà cung cấp.**
->
-> Những việc nặng nhọc đó thuộc về các gateway định tuyến chuyên dụng ở phía máy chủ như **[9Router](https://github.com/decolua/9router)**. Máy chủ trung tâm quản lý việc xoay vòng tài khoản, tự động retry khi gặp rate-limit, và tính toán hạn mức tập trung hiệu quả và an toàn hơn rất nhiều so với một công cụ chạy trên từng máy cá nhân.
->
-> **LLM Switcher được thiết kế chuẩn xác là phần mở rộng ở biên (Client-Side Edge Extension) tối ưu nhất khi kết hợp với 9Router (hoặc các gateway tương tự):**
-> - **Phía máy cá nhân (LLM Switcher đảm nhiệm):** Chuyển đổi giao thức cho các coding tool trên máy bạn (Claude Code `/v1/messages`, Codex `/v1/responses`, Vertex `/v1beta/...`, OpenAI Chat), mở khoá 1M context cục bộ, quản lý đa profile song song cho từng CLI, và làm chốt chặn Healer Engine để tự chữa lành tin nhắn bị các tool nén token ngoài (RTK, Headroom, Ponytail) cắt xén trước khi gửi đi.
-> - **Phía máy chủ trung tâm (9Router đảm nhiệm):** Quản lý account pool, xoay vòng API key, chia tải weighted routing, theo dõi quota và tự động failover giữa các nhà cung cấp.
->
-> Sự phân định ranh giới rõ ràng này giúp LLM Switcher giữ vững tiêu chí **siêu nhẹ, Zero-Dependency, không phình to tính năng (no bloatware)** nhưng vẫn mang lại trải nghiệm lập trình AI mạnh mẽ nhất.
+## Kiến trúc & Sơ đồ Trực quan (Interactive Diagrams)
+
+LLM Switcher lắng nghe cục bộ trên máy bạn (`127.0.0.1:3456`), đóng vai trò là transparent edge interceptor và protocol bridge.
+
+<p align="center">
+  <a href="docs/diagrams/system-architecture.html">
+    <img src="docs/diagrams/system-topology.svg" alt="LLM Switcher System Topology & Architecture" width="100%">
+  </a>
+  <br>
+  <sub><i>🎨 Theme Pretty-Mermaid (Tokyo Night). Click vào ảnh để mở trình xem tương tác Archify HTML (zoom, pan, tracing).</i></sub>
+</p>
+
+### 1. Thư viện Sơ đồ Tương tác Archify
+
+Toàn bộ sơ đồ kiến trúc và luồng xử lý được biên soạn bằng **[Archify](https://github.com/tt-a1i/archify)** và render bằng **[Pretty-Mermaid](https://github.com/imxv/Pretty-mermaid-skills)**:
+
+| Sơ đồ | Mô tả luồng | Bản đồ Tương tác (HTML) | Vector Sắc Nét |
+|---|---|---|---|
+| **System Topology** | Kiến trúc tổng thể: Client CLIs ➔ Optimizer ➔ Gateway & Healer Core ➔ Upstream Providers | [📊 Mở Sơ đồ](docs/diagrams/system-architecture.html) | [SVG](docs/diagrams/system-topology.svg) • [PNG](docs/diagrams/system-topology.png) |
+| **IR Healer Pipeline** | Chuẩn hoá request, tự sửa schema lỗi, tổng hợp stream SSE và cơ chế abort | [🔄 Mở Sơ đồ](docs/diagrams/ir-translation-pipeline.html) | [SVG](docs/diagrams/ir-healer-pipeline.svg) • [PNG](docs/diagrams/ir-healer-pipeline.png) |
+| **Codex Blindfold Routing** | Luồng TLS CONNECT proxy, bóc tách credential và định tuyến an toàn | [🛡️ Mở Sơ đồ](docs/diagrams/blindfold-request-routing.html) | [HTML](docs/diagrams/blindfold-request-routing.html) |
+| **Switch Lifecycle** | Vòng đời chuyển đổi profile không downtime, CAS config và sync interceptor | [⚡ Mở Sơ đồ](docs/diagrams/blindfold-switch-lifecycle.html) | [HTML](docs/diagrams/blindfold-switch-lifecycle.html) |
 
 ---
 
-## Kiến trúc & Luồng hoạt động
+### 2. Vòng đời Request & Pipeline Healer Engine
 
-LLM Switcher lắng nghe cục bộ trên máy bạn (`127.0.0.1:3456`), đóng vai trò là **chốt chặn cuối cùng ở cửa ngõ ra Internet** trước khi request được gửi đến các nhà cung cấp LLM (9Router, OpenRouter, Anthropic, Vertex, v.v.).
+<p align="center">
+  <a href="docs/diagrams/ir-translation-pipeline.html">
+    <img src="docs/diagrams/ir-healer-pipeline.svg" alt="Bi-Directional IR Healer Pipeline" width="100%">
+  </a>
+  <br>
+  <sub><i>💡 Click vào sơ đồ phía trên để kiểm tra chi tiết chuỗi sequence tương tác.</i></sub>
+</p>
 
-### 1. Sơ đồ Tổng quan Hệ thống (System Topology)
-
-```mermaid
-flowchart TD
-    subgraph Clients["Công cụ Dev & Coding CLI"]
-        CC["Claude Code CLI\n(/v1/messages)"]
-        CDX["OpenAI Codex CLI\n(/v1/responses)"]
-        OAI["OpenAI SDKs / Cursor\n(/v1/chat/completions)"]
-        VTX["Gemini / Vertex SDKs\n(/v1beta/models/*)"]
-    end
-
-    subgraph Optimizers["Lớp nén trung gian (Tùy chọn — cài sẵn trong CLI)"]
-        OPT["Tool cắt tỉa & nén token\n(Headroom / RTK / Ponytail)\n[Cấu hình upstream: :3456]"]
-    end
-
-    subgraph Switcher["LLM Switcher (:3456) — Chốt chặn cửa ngõ biên ra Internet"]
-        direction TB
-        ROUTER["Tự nhận diện giao thức & Định tuyến Multi-Active"]
-        HEALER["Healer Engine (Tự chữa lành)\n• Cứu tool_result mồ côi\n• Khôi phục thinking params bị cắt\n• Gộp các turn cùng role liên tiếp"]
-        IR["Bộ chuyển đổi IR 2 chiều đối xứng\n(4 Chuẩn Client ⟷ 3 Chuẩn Upstream)"]
-        M1M["Mở khoá 1M Context\n& Tự tính ngưỡng Auto-Compact"]
-        LOGS["Live Inspector\n(Ring Buffer lưu RAM thời gian thực)"]
-        ROUTER --> HEALER --> IR --> M1M --> LOGS
-    end
-
-    subgraph Upstream["Internet / Nhà cung cấp LLM Upstream"]
-        R9["9Router / Selfhost Gateway"]
-        OR["OpenRouter / Together / Groq"]
-        ANT["Anthropic Native API"]
-        GCP["Google Vertex AI / Gemini"]
-    end
-
-    CC -->|Trực tiếp| ROUTER
-    CC -.->|Tùy chọn| OPT
-    CDX -->|Trực tiếp| ROUTER
-    CDX -.->|Tùy chọn| OPT
-    OAI --> ROUTER
-    VTX --> ROUTER
-    OPT -->|Chuyển tiếp về Switcher| ROUTER
-
-    LOGS -->|Request đã chuẩn hoá| R9
-    LOGS -->|Request đã chuẩn hoá| OR
-    LOGS -->|Request đã chuẩn hoá| ANT
-    LOGS -->|Request đã chuẩn hoá| GCP
-```
-
----
-
-### 2. Pipeline Chuyển đổi Giao thức qua IR & Healer Engine
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor CLI as Client (Claude Code / Codex / SDK)
-    participant GW as LLM Switcher (:3456)
-    participant IR as IR & Healer Engine
-    participant UP as Upstream (9Router / Anthropic / Vertex)
-
-    CLI->>GW: Gửi request (Anthropic, Responses, Chat hoặc Vertex)
-    Note over GW,IR: Chuẩn hoá về IR (Intermediate Representation)
-    GW->>IR: parseToIR(clientFormat, payload)
-    Note over IR: Healer Engine kiểm tra & nắn chỉnh:<br/>1. Biến tool_result mồ côi thành text block ngữ cảnh<br/>2. Tự khôi phục tham số thinking nếu tool ngoài cắt mất<br/>3. Gộp các turn user liên tiếp (chống lỗi 400)<br/>4. Kích hoạt ngưỡng 1M context
-    IR->>GW: emitUpstreamBody(outFormat, healedIR)
-    GW->>UP: Gọi API Upstream (fetch kèm AbortSignal)
-    UP-->>GW: Trả về SSE Stream / JSON Chunks
-    Note over GW: normalizeUpstream(chunk)<br/>Bóc tách reasoning_content, tag <think>, tính usage
-    GW->>CLI: Render stream chuẩn theo giao thức của Client (ví dụ: thinking_delta + text_delta)
-    Note over CLI,GW: Khi Client ngắt kết nối (Ctrl+C) -> Switcher lập tức abort Upstream (tiết kiệm token!)
-```
-
----
-
-### 3. Cơ chế Định tuyến Đa CLI Độc lập (Multi-Active Concurrent Routing)
-
-Bạn có thể kích hoạt **đồng thời nhiều profile hoạt động song song** — mỗi công cụ CLI kết nối tới 1 profile riêng biệt mà không hề xung đột:
+### 3. Sơ đồ Luồng Tổng quát
 
 ```mermaid
 flowchart LR
-    subgraph Inbound["Lượt gọi từ các Client"]
-        C1["Claude Code\n(/v1/messages)"]
-        C2["Codex CLI\n(/v1/responses)"]
-        C3["OpenAI SDK\n(/v1/chat/completions)"]
-        C4["Vertex SDK\n(/v1beta/models/*)"]
+    classDef client fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef edge fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#f8fafc;
+    classDef healer fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef upstream fill:#2e1065,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef opt fill:#1e1b4b,stroke:#818cf8,stroke-dasharray: 4 4,color:#e0e7ff;
+
+    subgraph Clients[" 💻 Dev Clients & Coding CLIs "]
+        CC["Claude Code CLI\n(/v1/messages)"]:::client
+        CDX["OpenAI Codex CLI\n(/v1/responses)"]:::client
     end
 
-    subgraph Core["Lõi LLM Switcher (:3456)"]
-        SLOT1["Slot: Anthropic\nActive: [9Router]"]
-        SLOT2["Slot: Responses\nActive: [OpenRouter]"]
-        SLOT3["Slot: OpenAI\nActive: [Local LLM]"]
-        SLOT4["Slot: Vertex\nActive: [Tắt / Official]"]
+    subgraph Middle[" ⚡ Optional Middle-Layer "]
+        OPT["Token Optimizers\n(Headroom / RTK)"]:::opt
     end
 
-    subgraph Egress["Đích Upstream tương ứng"]
-        U1["9Router (Mở 1M Context Opus)"]
-        U2["OpenRouter (Sonnet Thinking)"]
-        U3["Local OpenAI Server (:8000)"]
-        U4["Google Cloud Endpoint"]
+    subgraph Gateway[" 🛡️ LLM Switcher Edge Gateway (:3456) "]
+        ROUTER["Edge Router\n(Zero-Mutation)"]:::edge
+        HEALER["Healer Engine\n(Auto-Fix Schemas)"]:::healer
+        IR["Bi-Directional IR\n(Event Synth)"]:::healer
+        ROUTER --> HEALER --> IR
     end
 
-    C1 --> SLOT1 --> U1
-    C2 --> SLOT2 --> U2
-    C3 --> SLOT3 --> U3
-    C4 --> SLOT4 --> U4
+    subgraph Upstreams[" ☁️ Upstream Providers "]
+        INTACT["intact Gateway\n(Recommended Pooler)"]:::upstream
+        OTHER["9Router / Vertex / Other"]:::upstream
+    end
+
+    CC -->|direct| ROUTER
+    CDX -->|direct| ROUTER
+    CC -.->|prune| OPT
+    CDX -.->|prune| OPT
+    OPT -->|forward| ROUTER
+
+    IR -->|contract & pool| INTACT
+    IR -->|standard call| OTHER
 ```
+
+---
+
+### 4. Cơ chế "Bắt cóc" & Chuyển đổi Request Diễn Ra Như Thế Nào?
+
+LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (transparent network proxy) mà tuyệt đối không sửa file cấu hình của công cụ:
+
+1. **Shim kích hoạt cục bộ trong RAM:** Khi bạn gõ lệnh `claude` hoặc `codex`, file shim nằm đầu `PATH` sẽ chạy trước. Shim nạp tạm thời `HTTPS_PROXY=http://127.0.0.1:3457` và chứng chỉ CA *chỉ trong bộ nhớ của tiến trình đó*, hoàn toàn không chạm vào `~/.claude/settings.json` hay `~/.codex/config.toml`.
+2. **Blindfold Interceptor chặn ở tầng mạng (`:3457`):** Công cụ gửi request HTTPS tới domain chính hãng (`api.anthropic.com` hoặc `api.openai.com`). Interceptor giải mã TLS cục bộ, bóc sạch token cũ của client, và chuyển tiếp các đường dẫn API (`/v1/messages`, `/v1/responses`, `/v1/models`) về Gateway nội bộ (`:3456`). Các traffic khác (đăng nhập OAuth, GitHub, web search...) được tunnel nguyên vẹn ra Internet thật.
+3. **Chuyển đổi giao thức & Gọi Upstream (`:3456`):** Gateway đọc profile được kích hoạt trong `config.json`, kích hoạt Healer Engine (tự sửa schema rỗng `{}`, cứu `tool_result` mồ côi, phục hồi thinking budget), rồi đóng gói request sang định dạng của provider được cấu hình (Gemini, OpenAI Chat, Anthropic...) với `baseURL` và `apiKey` tương ứng.
+4. **Tái tạo Response chuẩn Native:** Khi provider phản hồi stream về, Gateway bóc tách reasoning token và tool call, tổng hợp lại thành 100% genuine Anthropic SSE (`thinking_delta` + `tool_use`) hoặc Codex Responses events. Công cụ nhận được response chuẩn chỉ và tin rằng nó vừa nói chuyện trực tiếp với server chính hãng!
+
+> #### 🔒 Độ An Toàn & Nguồn Gốc Chứng Chỉ CA: CA từ đâu ra và an toàn thế nào?
+>
+> - **Tự sinh 100% tại máy cục bộ:** File chứng chỉ (`ca.pem`) và private key (`ca.key`) được sinh trực tiếp trên chính máy tính của bạn bằng OpenSSL nội bộ (`blindfold/make-certs.sh`). Tuyệt đối không tải bất kỳ chứng chỉ nào từ internet về, private key được lưu với quyền bảo mật nghiêm ngặt `0600`.
+> - **Không can thiệp vào System Trust Store của hệ điều hành:** Khác với các công cụ bắt proxy như Charles hay Fiddler, LLM Switcher **tuyệt đối KHÔNG cài đặt chứng chỉ vào OS Root Store** (không đụng vào Windows Certificate Manager, macOS Keychain hay Linux `/etc/ssl/certs`). Bạn **không cần quyền Administrator hay sudo**.
+> - **Chỉ tin cậy trong phạm vi tiến trình (Process-Scoped):** Chứng chỉ CA chỉ được nạp tạm thời vào bộ nhớ của `claude` (qua `NODE_EXTRA_CA_CERTS`) và `codex` (qua `CODEX_CA_CERTIFICATE`). Trình duyệt web (Chrome, Edge), ứng dụng ngân hàng, git và các app khác trên máy hoàn toàn không biết và không tin cậy chứng chỉ này.
+> - **Giới hạn tên miền bằng mật mã học (Name Constraints):** Chứng chỉ CA được cấu hình thuộc tính X.509 `nameConstraints` bắt buộc, chỉ cho phép ký duy nhất cho 3 domain: `api.anthropic.com`, `api.openai.com`, và `chatgpt.com`. Dù có ai đánh cắp được private key, các trình xác thực TLS chuẩn sẽ lập tức từ chối chứng chỉ này đối với mọi trang web khác (Google, GitHub, ngân hàng...).
+> - **Bảo toàn chứng chỉ VPN / Doanh nghiệp:** Nếu máy bạn đã có sẵn chứng chỉ proxy công ty trong `NODE_EXTRA_CA_CERTS`, script `ensure-ca-bundle.mjs` sẽ tự động gộp cả 2 chứng chỉ vào một bundle tạm thời, không bao giờ ghi đè làm hỏng mạng nội bộ công ty bạn.
 
 ---
 
@@ -184,68 +140,21 @@ flowchart LR
   - Khắc phục lỗi mồ côi `tool_result` do các công cụ nén token (RTK, Headroom, Ponytail) vô tình cắt mất turn `assistant` phía trước $\implies$ chống lỗi `HTTP 400 Bad Request`.
   - Tự động bù lại tham số `thinking` nếu tool ngoài cắt mất trên các reasoning model.
   - Gộp các turn cùng role liên tiếp để đáp ứng nghiêm ngặt luật xen kẽ lượt nói của Anthropic.
-- **Mở khoá Context 1,000,000 Tokens (1M):** Đi theo `model1M` của profile cho từng tier: tier nào bật 1M thì được `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` (nên `/model sonnet`, đổi tier hay subagent vẫn giữ 1M; tier không bật thì ở 200K), kèm cửa sổ nén `CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000`, tích hợp badge cảnh báo trực quan cho model không hỗ trợ.
-- **Không làm bẩn `settings.json` (Zero Config Mutation):** Tuyệt đối không lưu endpoint hay key vào `~/.claude/settings.json` (chỉ gỡ đúng các giá trị do chính switcher ghi: `ANTHROPIC_BASE_URL` trỏ vào cổng của nó và `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]`). Dùng launcher flags và biến môi trường động để không bao giờ bị hiện banner cảnh báo đỏ.
+- **Context window theo model chính thức:** switcher không còn ép cửa sổ 1M hay ngưỡng auto-compact, và không ghi tên model nào vào môi trường của bạn. Claude Code tự ước lượng phiên theo cửa sổ của model bạn chọn; backend có cửa sổ nhỏ hơn model đó có thể tràn trong phiên dài. `model1M` giờ chỉ quyết định `/v1/models` liệt kê gì.
+- **Không làm bẩn `settings.json` (Zero Config Mutation):** Không bao giờ đọc hay ghi `~/.claude/settings.json` hay `~/.codex/config.toml`, và không ghi biến môi trường nào cũng không thêm tham số `--config` nào mà công cụ đọc như cấu hình. Công cụ chỉ đến gateway qua interceptor, nên không hiện banner cảnh báo của nhà cung cấp.
 - **Live Request / Response Inspector:** Bảng theo dõi thời gian thực ngay trên Web UI: xem độ trễ, token prompt/output, preview prompt câu hỏi và khối suy luận thinking.
 - **Cài đặt Daemon Service nền:** Cung cấp lệnh cài đặt gateway chạy ngầm tự khởi động cùng hệ điều hành trên Windows (Task Scheduler), macOS (launchd) và Linux (systemd).
 
 ---
 
-## Thay đổi trong bản 1.1.10
+## Thay đổi gần đây (v1.2.0)
 
-- **README.** Mục mới "Tự cải thiện cùng intact" giải thích cách gateway này và intact tự sửa lỗi của nhau. intact giờ đã public và có trên npm với tên `intact-gateway`.
-
-### Thay đổi trong bản 1.1.9
-
-- **Dashboard.** Mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Trang không cần link từ `switch ui` nữa: gateway đặt admin token vào trang. Trang của web khác vẫn không đọc được token.
-
-### Thay đổi trong bản 1.1.8
-
-- **Tool của Claude Code.** Giá trị `0`, `false`, `""` hoặc `null` trong schema của tool (ví dụ `minimum: 0`) bị đổi thành schema object rỗng. Gemini từ chối mọi request của Claude Code với HTTP 400 "Starting an object on a scalar field". Giờ các giá trị này được giữ nguyên.
-- **Thứ tự PATH của shim.** Nếu thư mục shim có trong `PATH` nhưng đứng sau `claude` hoặc `codex` thật, `switch shim status` và `switch doctor` giờ chỉ cách sửa: đặt dòng export ở cuối các file cấu hình shell.
-
-### Thay đổi trong bản 1.1.7
-
-- **Tool của Codex.** Khi có `publicModels`, Codex mất hết tool và dừng sau một câu trả lời. Model catalog chép metadata của một model OpenAI thật, và metadata này đưa Codex sang dạng "Responses Lite". Giờ catalog giữ Codex ở chế độ tool trực tiếp, và gateway cũng đọc tool gửi đến dưới dạng input item `additional_tools`.
-
-### Thay đổi trong bản 1.1.6
-
-- **Codex qua WebSocket.** Gateway giữ các lượt của mỗi phiên WebSocket. Lượt nào gửi `previous_response_id` sẽ nhận lại các lượt trước, nên Codex không còn mất nhiệm vụ sau lần gọi tool đầu tiên. Id không tồn tại làm lượt đó lỗi với `previous_response_not_found`.
-- **Warmup của Codex.** Frame `response.create` có `generate: false` được trả lời ngay tại máy. Frame này không còn tốn một lần gọi model.
-- **Tên model cho Codex.** Profile không có `publicModels` không còn gửi `OpenAI-Model: main` trong handshake, và `switch codex` cùng `switch doctor` cảnh báo trường hợp này. Codex đọc `main` là bị chuyển model và hiện cảnh báo sai "high-risk cyber activity". Xem mục "Cấu hình ưu tiên Codex".
-- **Contract lab.** Gateway gửi mỗi mẫu bằng đúng key đã mở trace của mẫu đó. intact từ chối các lần gửi của bản 1.1.5 với `HTTP 404 trace not found`.
-- **Dấu phiên bản.** Dấu phiên bản chỉ dùng commit cuối khi bản checkout không có thay đổi. Nếu có thay đổi, dấu dùng thời gian file mới nhất.
-
-### Thay đổi trong bản 1.1.5
-
-- **Bảo mật contract lab.** Việc che giờ dùng allowlist. Mọi giá trị string đều bị che, trừ các giá trị enum mà intact đọc. Bản 1.1.4 che theo danh sách key nội dung và bỏ sót 16 field (trích dẫn, tiêu đề tài liệu và trang web, câu truy vấn web search, token logprobs, tên và URI file, stop sequence, tên người tham gia, thông báo lỗi, mô tả tool).
-
-### Thay đổi trong bản 1.1.4
-
-- **Bảo mật contract lab.** Mẫu mà gateway gửi lên intact không chứa nội dung của client. Prompt, câu trả lời, tham số và kết quả của tool, file và user id bị che ngay trên máy trước khi gửi. Các field mà intact cần để phân tích được giữ nguyên.
-
-### Thay đổi trong bản 1.1.3
-
-- **Dashboard.** Khi mở mà thiếu access token, trang không còn đứng ở "Checking status...". Trang báo đang bị khoá và chỉ lệnh `switch ui`, lệnh này mở trang kèm token.
-- **Dashboard.** Tên model của Codex (session, review, subagent) nằm ở tab **Models**, cạnh các cấu hình model khác. Tab **Blindfold** chỉ còn cấu hình interceptor.
-
-### Thay đổi trong bản 1.1.2
-
-- **Gói npm.** Cài bằng `npm install -g llm-switcher` rồi chạy `switch`. Bản cài bằng npm lưu dữ liệu trong `~/.llm-switcher`, nên nâng cấp không xoá cấu hình. Bản git checkout vẫn lưu dữ liệu cạnh mã nguồn như trước.
-- **Contract lab.** Gateway có thể gửi một phần nhỏ các lượt trao đổi hoàn chỉnh lên server [intact](https://github.com/louisphamdev/intact) để tìm field mà converter làm mất. Mặc định tính năng này tắt. Xem mục "Contract lab" bên dưới.
-- **macOS.** `blindfold/make-certs.sh` giờ chạy được với LibreSSL, là `openssl` mặc định trên macOS.
-- **Nâng cấp từ 1.1.0 trở xuống.** Gateway cũ hơn 1.1.1 không chứng minh được danh tính. `switch` giờ gọi đúng tên nó và không tự dừng nó. Dừng nó bằng tay một lần, rồi chạy `switch on`.
-- **Test.** `npm test` chỉ chạy `tests/**/*.test.mjs`, kể cả trên Node.js 18 và 20.
-
-### Các thay đổi trước đó
-
-- Dashboard cho máy tính nay có bố cục gọn như một công cụ dành cho lập trình viên. Các điều khiển route rõ hơn, tab dùng được bằng bàn phím, trường model có nhãn đầy đủ và không còn emoji trang trí.
-- Profile Codex dùng ba vai trò theo tài liệu chính thức: `main`, `review` và `subagent`.
-- Shim Codex truyền các khóa cấu hình chính thức: `model`, `review_model`, `agents.default_subagent_model`, `model_context_window` và `model_auto_compact_token_limit`.
-- Profile cũ vẫn đọc được. Giá trị rỗng ở khóa mới sẽ xóa fallback từ khóa cũ.
-- Model Claude Opus được nhận diện khả năng reasoning mà không phụ thuộc số phiên bản.
-
-Shim Codex không còn dựa vào `CODEX_MODEL`, `CODEX_MAX_CONTEXT_TOKENS` hoặc `CODEX_AUTO_COMPACT_WINDOW`. Codex không tài liệu hóa các biến môi trường này. Xem [bảng tham chiếu cấu hình](https://developers.openai.com/codex/config-reference/) và [hướng dẫn cấu hình nâng cao](https://developers.openai.com/codex/config-advanced/) chính thức.
+- **Zero-Mutation Interceptor:** Định tuyến qua `HTTPS_PROXY`, tuyệt đối không can thiệp hay sửa file cấu hình của tool (`~/.claude/settings.json`, `~/.codex/config.toml`).
+- **Hỗ trợ đồng thời cả Claude Code & Codex:** Quản lý độc lập `{ claude, codex }`, chuyển đổi profile tức thì qua `POST /_control/active-tools` mà không cần restart cổng.
+- **Tự động cập nhật Model Catalog:** Tự động lấy danh sách model mới nhất của hãng; tự detect khi tool nâng cấp version để đồng bộ mapping (`switch models`).
+- **Tự sửa lỗi Schema:** Tự động chuẩn hóa schema rỗng `{}` cho Gemini/Vertex và khôi phục tham số `thinking` bị cắt.
+- **Tăng độ tin cậy trên Windows:** Định dạng chuẩn CRLF cho `.cmd` shim, sửa đường dẫn CA và loại bỏ lỗi trôi nhãn subroutine.
+- *Xem lịch sử các phiên bản cũ (v1.1.2 – v1.1.10) tại [CHANGELOG.md](CHANGELOG.md).*
 
 ---
 
@@ -304,20 +213,28 @@ Mở Bảng điều khiển Web Dashboard tại: **[http://127.0.0.1:3456/ui](ht
 
 ## Tích hợp vào các Công cụ CLI
 
-### Bộ nạp Biến Môi trường Toàn năng (`env.cmd` / `env.sh`)
+### Biến môi trường đến từ shim, không từ shell của bạn
 
-Mỗi khi bạn chuyển đổi profile, LLM Switcher sinh file nạp môi trường trong thư mục dữ liệu:
+**Đừng** thêm dòng `source env.sh` hay `call env.cmd` vào `~/.bashrc`, `~/.zshrc` hay một file
+wrapper nào. Hai file đó giờ là stub trống: một dòng chú thích và không gì khác, nên dòng rc cũ vẫn
+chạy được và không bao giờ tái tạo lại một base URL.
 
-- **Trên Windows (CMD / PowerShell wrapper):**
-  ```cmd
-  call "%USERPROFILE%\.llm-switcher\env.cmd"
-  ```
-- **Trên macOS / Linux (Bash / Zsh):**
-  ```bash
-  source ~/.llm-switcher/env.sh
-  ```
+Mỗi công cụ có file riêng, và chỉ shim tương ứng mới nạp:
 
-Với bản checkout, dùng các file này trong thư mục checkout.
+| File | Được nạp bởi |
+| --- | --- |
+| `env-claude.sh` / `env-claude.cmd` | shim `claude` |
+| `env-codex.sh` / `env-codex.cmd` | shim `codex` |
+| `env.sh` / `env.cmd` | không ai. Stub trống, giữ lại chỉ để dòng rc cũ lặng lẽ |
+
+File của công cụ rỗng nghĩa là công cụ đó đang tắt: shim để nguyên môi trường và công cụ gọi thẳng
+endpoint chính thức. Trước khi nạp bất cứ thứ gì, shim cũng quét một `ANTHROPIC_BASE_URL`,
+`OPENAI_BASE_URL` hay `ANTHROPIC_DEFAULT_<TIER>_MODEL` cũ còn sót từ bản trước hoặc từ shell của
+bạn, nên `switch off` là off thật sự.
+
+Trong thực tế bạn không bao giờ tự gọi các file này. `switch shim install` đặt `~/.llm-switcher/bin`
+vào `PATH`, và mọi lệnh `claude` hay `codex` — kể cả `claude --resume` trong một terminal hoàn toàn
+mới — đều chạy shim, vốn chỉ tiêm biến vào đúng tiến trình đó.
 
 ---
 
@@ -329,21 +246,11 @@ Với bản checkout, dùng các file này trong thư mục checkout.
    node "path\to\llm-switcher\switch.mjs" %*
    ```
 
-2. Thêm đoạn mã sau vào wrapper chính của Claude Code (`claude.cmd` trong thư mục global npm):
+2. Cài shim và đặt thư mục của nó **trước** thư mục Claude Code thật trong `PATH` User (System Properties → Environment Variables), rồi mở terminal mới:
    ```cmd
-   SETLOCAL EnableDelayedExpansion
-   IF EXIST "%USERPROFILE%\.llm-switcher\active.flag" (
-     SET "ANTHROPIC_BASE_URL=http://127.0.0.1:3456"
-     SET "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1"
-   )
-   IF EXIST "%USERPROFILE%\.llm-switcher\1m.flag" (
-     SET /P M1M=<"%USERPROFILE%\.llm-switcher\1m.flag"
-     IF "!M1M!"=="" SET "M1M=opus[1m]"
-     SET "ANTHROPIC_MODEL=!M1M!"
-     SET "CLAUDE_CODE_AUTO_COMPACT_WINDOW=900000"
-   )
+   switch shim install
    ```
-   > Cần `SETLOCAL EnableDelayedExpansion` để `!M1M!` hoạt động. npm ghi đè `claude.cmd` mỗi lần update, nên tốt hơn là tạo wrapper riêng chạy `call "%USERPROFILE%\.llm-switcher\env.cmd"` rồi `claude %*`. Với bản checkout, thay `%USERPROFILE%\.llm-switcher` bằng thư mục checkout. Chỉ `env.cmd` / `env.sh` mới có các biến `ANTHROPIC_DEFAULT_<TIER>_MODEL=<tier>[1m]` theo từng tier.
+   > **Đừng** sửa `claude.cmd` trong thư mục global npm: npm ghi đè nó mỗi lần update, và shim mới là thứ tiêm URL gateway. `settings.json` không bao giờ bị đụng tới, nên không hiện banner "custom API".
 
 ---
 
@@ -361,21 +268,7 @@ codex
 
 Trên Windows, đặt `%USERPROFILE%\.llm-switcher\bin` trước thư mục Codex thật trong `PATH`. Sau đó, mở terminal mới.
 
-Shim không sửa `~/.codex/config.toml`. Khi gateway hoạt động, shim truyền các override chính thức sau vào binary Codex thật:
-
-| Vai trò trong profile | Khóa cấu hình Codex | Tên mà CLI nhận được |
-|---|---|---|
-| `main` | `model` | `publicModels[0]` |
-| `review` | `review_model` | `publicModels[1]` |
-| `subagent` | `agents.default_subagent_model` | `publicModels[2]` |
-
-**Profile phục vụ Codex bắt buộc có `publicModels`.** Nếu thiếu khóa này, gateway không có tên chính thức nào để đưa cho Codex. Khi đó gateway không ghi model catalog và không gửi header `OpenAI-Model`, và Codex hiện hai cảnh báo sai: "Model metadata for `<model>` not found" và "Your account was flagged for potentially high-risk cyber activity". `switch codex` và `switch doctor` cảnh báo khi profile Codex không có `publicModels`.
-
-**Codex không bao giờ nhận tên nội bộ.** Alias `main`, `review`, `subagent` chỉ tồn tại bên trong gateway. CLI nhận tên model chính thức từ `publicModels`, và `mapModel` phân giải ngược từng tên về đúng slot. Đặt `codexRoles` trong profile nếu muốn ghép khác thứ tự danh sách đó.
-
-Shim còn truyền `model_catalog_json`. File này được sinh lại từ `publicModels` mỗi lần đổi profile, và màn `/model` đọc chính nó. Màn `/model` không gọi `/v1/models`. `/v1/models` trả cùng các mục đó, và context window của mỗi mục theo `model1M` của slot.
-
-Shim cũng truyền `openai_base_url` để route qua gateway cục bộ. Nếu `main` bật context 1M, shim truyền `model_context_window=1000000` và `model_auto_compact_token_limit=900000`. Override dòng lệnh có độ ưu tiên cao hơn cấu hình người dùng và dự án. Hãy chạy lại `switch shim install` sau khi nâng cấp từ bản cũ.
+Shim tuyệt đối không sửa `~/.codex/config.toml`. Codex kết nối tới gateway qua `HTTPS_PROXY` và interceptor mạng, giữ nguyên tên model và context window chính thức. Danh sách model được phục vụ động tại `/v1/models`.
 
 ### Chế độ blindfold (tùy chọn)
 
@@ -388,10 +281,23 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold xóa dòng đó. Codex giữ nguyên endpoint chính thức, switcher chặn ở tầng mạng. Không cần quyền admin, không cài chứng chỉ vào system trust store, không sửa `~/.codex/config.toml`.
 
 ```bash
-bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh" chatgpt.com   # chạy một lần; bản checkout chạy blindfold/make-certs.sh
-# rồi đặt "blindfold": true trong profile Codex
+bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh"   # chạy một lần; bản checkout chạy blindfold/make-certs.sh
+# cổng đã nằm sẵn ở cấp cao nhất của config.json: "blindfold": { "port": 3457 }
 switch codex <profile>                     # gateway khởi động interceptor
 ```
+
+Một interceptor phục vụ cả hai công cụ. Nó định tuyến theo host của request CONNECT và theo path,
+không theo thứ gì khác:
+
+| CONNECT host | Các path chuyển về gateway | Các path còn lại |
+| --- | --- | --- |
+| `api.anthropic.com` | `/v1/messages`, `/v1/messages/...` | chuyển về `api.anthropic.com`, giữ nguyên |
+| `api.openai.com` | `/v1/responses`, `/v1/responses/...`, `/v1/models`, `/v1/models/...` | chuyển về `api.openai.com`, giữ nguyên |
+| `chatgpt.com` | `/backend-api/codex/...`, đổi thành `/v1` | chuyển về `chatgpt.com`, giữ nguyên |
+
+Không còn `blindfoldHost` và `blindfoldPrefix`: bảng trên chính là luật định tuyến, và nó không phải
+setting của profile. Host CONNECT ngoài bảng được mở hầm (tunnel) nguyên vẹn; request có header
+`Host` khác host của CONNECT nhận `421` và không mở kết nối upstream. Xem [bảng đầy đủ và quy tắc chứng chỉ](docs/cross-platform.md).
 
 Gateway sở hữu interceptor: nó khởi động interceptor khi boot và sau mỗi thay đổi, còn `switch off` dừng nó. Thiếu certificate, hoặc cổng gateway/interceptor bị tiến trình khác giữ, thì `switch` từ chối kích hoạt và không ghi file nào.
 
@@ -400,6 +306,19 @@ Hãy đọc [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) trước k
 - [Request routing](docs/diagrams/blindfold-request-routing.html) — một request, từ CONNECT tới provider
 - [Model name resolution](docs/diagrams/codex-model-name-resolution.html) — CLI thấy tên nào, và tên đó phân giải ở đâu
 - [Lifecycle under switch](docs/diagrams/blindfold-switch-lifecycle.html) — kích hoạt, từ chối, và tắt
+
+### Những gì bạn đánh đổi
+
+- **Context 1M theo cửa sổ của model chính thức.** Switcher không còn ép cửa sổ 1M hay ngưỡng
+  auto-compact, cũng không ghi tên model nào vào môi trường: Claude Code tự ước lượng phiên theo
+  cửa sổ của model bạn chọn. Backend có cửa sổ nhỏ hơn model đó có thể tràn trong phiên dài.
+  `model1M` giờ chỉ quyết định `/v1/models` liệt kê gì.
+- **Codex cần chứng chỉ làm một lần.** Blindfold là thứ giữ Codex trên endpoint chính thức, và nó
+  cần một CA riêng cộng leaf nêu đúng ba host ở trên. Không bật thì Codex hiện dòng
+  `base URL is overridden` trên màn `/model`.
+- **Interceptor giải mã ba host nó phục vụ.** Nó từ chối CONNECT tới địa chỉ nội bộ hoặc riêng tư,
+  nhưng mọi tiến trình trên máy đều gọi được nó. `docs/codex-blindfold.md` mở đầu bằng phạm vi, rủi
+  ro khi giữ CA riêng, và cách quay lại.
 
 ---
 
@@ -411,8 +330,8 @@ Nếu bạn sử dụng các tool cắt tỉa prompt như **Headroom**, **Ponyta
 3. **LLM Switcher** sẽ đóng vai trò là trạm kiểm soát cuối cùng trước khi ra internet:
    - **Tự chữa lành đồ thị tin nhắn:** Cứu các lượt `tool_result` mồ côi và gộp các lượt cùng role liên tiếp do tool nén cắt xén bừa bãi gây ra.
    - **Khôi phục thinking bị xóa:** Tự động phát hiện reasoning model và khôi phục lại tham số thinking nếu bị tool ngoài xóa mất để "tiết kiệm token".
-   - **Giữ nguyên 1M Context Window:** Tự động mở khoá 1M context và ngưỡng compact `900,000` tokens.
-   - **Chuyển đổi 2 chiều:** Kết nối chuẩn sang 9Router, OpenRouter, Vertex, Anthropic.
+   - **Context window theo model:** báo cáo cửa sổ chính thức của từng model; không tiêm gì.
+   - **Chuyển đổi 2 chiều:** Bridge traffic 2 chiều chuẩn sang intact, 9Router, OpenRouter, Vertex, Anthropic.
 
 ### Báo cáo Kiểm thử & Đo lường Khả năng Tương thích
 
@@ -444,8 +363,8 @@ node tests/live-optimizer-interop.mjs
 ### 1. Agent Skill Chuyên dụng (`skills/llm-switcher/SKILL.md`)
 Một Agent Skill theo chuẩn quốc tế hướng dẫn AI model:
 - **Định tuyến bắt buộc:** Mọi lượt gọi LLM và tool nén (Headroom, RTK, Ponytail) BẮT BUỘC phải trỏ về `http://127.0.0.1:3456`.
-- **Cấm sửa `settings.json`:** Tuyệt đối cấm agent ghi đè endpoint vào `~/.claude/settings.json`.
-- **An toàn cho Sub-process:** Tự động nạp `env.cmd` hoặc `env.sh` trước khi spawn lệnh terminal con.
+- **Cấm sửa `settings.json`:** Tuyệt đối cấm agent ghi đè endpoint vào `~/.claude/settings.json` — chính switcher cũng không bao giờ đọc hay ghi file đó.
+- **An toàn cho Sub-process:** Không bao giờ khuyên sub-agent `source env.sh`; shim trong `~/.llm-switcher/bin` tự tiêm biến proxy vào chính tiến trình công cụ và quét hết biến cũ trước.
 
 Cài đặt vào thư mục skill:
 ```bash
@@ -458,7 +377,7 @@ cp -r skills/llm-switcher ~/.claude/skills/
 
 ### 2. MCP Server Chuẩn (`mcp.mjs`)
 Một server Model Context Protocol (MCP) chạy qua `stdio` cực nhẹ (Zero-dependency):
-- `switcher_status`: Đọc trạng thái live của các CLI target và cờ 1M.
+- `switcher_status`: Đọc trạng thái live của các CLI target và gateway.
 - `switcher_audit`: Quét môi trường máy xem có tool nén nào chạy bậy gọi thẳng ra ngoài không.
 - `switcher_switch_profile`: Cho phép agent tự động chuyển đổi profile theo nhu cầu bài toán.
 - `switcher_recent_logs`: Đọc log gần nhất để tự debug khi output bị cắt cụt.
@@ -484,35 +403,40 @@ Thêm server vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_co
 switch ui                      # Mở giao diện Web UI trên trình duyệt
 switch status                  # Xem trạng thái kích hoạt của tất cả các CLI
 switch doctor                  # Quét & thanh tra toàn bộ môi trường, settings và định tuyến
-switch on [profile]            # Khởi động gateway và kích hoạt profile cho mọi target tương thích
-switch <profile>               # Kích hoạt profile cho tất cả các target tương thích
+switch on [profile]            # Khởi động gateway và kích hoạt một profile
+switch <profile>               # Kích hoạt một profile cho cả hai công cụ
 switch claude <profile>        # Đặt profile kích hoạt riêng cho Claude Code
 switch codex <profile>         # Đặt profile kích hoạt riêng cho Codex
-switch openai <profile>        # Đặt profile kích hoạt riêng cho OpenAI Chat
-switch vertex <profile>        # Đặt profile kích hoạt riêng cho Vertex / Gemini
 switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
 switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy
 switch service uninstall       # Gỡ bỏ service chạy ngầm
 switch shim install            # Route phiên Claude và Codex mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
 switch shim uninstall          # Gỡ shim khỏi launcher
-switch off [target]            # Tắt gateway (toàn bộ hoặc từng CLI) và quay về gói Official
+switch off                     # Tắt tất cả và quay về endpoint chính thức
+switch off claude              # Tắt Claude Code; Codex vẫn chạy tiếp
+switch off codex               # Tắt Codex; Claude Code vẫn chạy tiếp
 switch contract-probe [--model m] # Chạy các biến thể contract-lab qua gateway
 switch contract-check          # Chuyển các findings hợp đồng còn mở thành test case
 ```
+
+Target chỉ có `claude` và `codex`, và đó là hai target duy nhất. Một profile phục vụ đúng một công
+cụ: `tool` là `"claude"` hoặc `"codex"` (hoặc `null` khi profile đang tắt), nên `switch claude` và
+`switch codex` không bao giờ chỉ nhầm vào cùng một profile. Không còn target `openai` hay `vertex` —
+các route đầu vào mà chúng đại diện đã bị gỡ.
 
 
 Service không chạy trong shell của bạn. Vì vậy `switch service install` chép `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
 ### Phiên mở lại (`--resume`) và cơ chế shim — quan trọng
 
-`switch on` ghi `env.sh` / `env.cmd` và **chủ động xoá** các biến proxy khỏi
-`~/.claude/settings.json` để Claude Code không hiện banner "custom API". Hệ quả: một CLI
-khởi chạy từ shell **chưa** source `env.sh` sẽ không có `ANTHROPIC_BASE_URL`, nên gọi
-thẳng nhà cung cấp và bỏ qua gateway (mất Healer, mất 1M, mất quota gộp). Trường hợp kinh
-điển là `claude --resume` mở lại phiên cũ trong terminal sạch.
+`switch on` ghi `env-claude.*` và `env-codex.*`, và **không ghi gì** vào
+`~/.claude/settings.json` — switcher không bao giờ đọc hay ghi file đó, đó là lý do Claude Code
+không hiện banner "custom API". Hệ quả: một CLI khởi chạy không qua shim sẽ **không có**
+`ANTHROPIC_BASE_URL`, nên gọi thẳng nhà cung cấp và bỏ qua gateway (mất Healer, mất quota gộp).
+Trường hợp kinh điển là `claude --resume` mở lại phiên cũ trong terminal sạch.
 
-Shim bịt đúng lỗ đó. Nó cài wrapper nhỏ vào `~/.llm-switcher/bin`, wrapper source `env.sh`
-rồi `exec` binary thật:
+Shim bịt đúng lỗ đó. Nó cài wrapper nhỏ vào `~/.llm-switcher/bin`, wrapper tiêm biến môi trường riêng
+của công cụ rồi `exec` binary thật:
 
 ```bash
 switch shim install
@@ -522,11 +446,14 @@ switch shim status                            # kiểm tra lại
 
 Cách hoạt động:
 
-- **Gateway BẬT** → wrapper nạp env, nên mọi lần gọi (kể cả `--resume`) đều qua gateway.
-- Với Codex, wrapper truyền các khóa vai trò model và context chính thức bằng `--config`.
-  Wrapper không phụ thuộc vào các biến `CODEX_*` không được hỗ trợ.
-- **Gateway TẮT** (không có `active.flag`) → wrapper trong suốt hoàn toàn, chạy binary thật
-  nguyên trạng, không ép định tuyến.
+- **Công cụ BẬT** → shim nạp file env riêng của công cụ đó, nên mọi lần gọi (kể cả `--resume`)
+  đều qua gateway.
+- **Công cụ TẮT** (file env rỗng) → shim trong suốt hoàn toàn, chạy binary thật nguyên trạng,
+  không ép định tuyến.
+- Trước khi nạp bất cứ thứ gì, shim quét một `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` hay
+  `ANTHROPIC_DEFAULT_<TIER>_MODEL` cũ còn sót từ bản trước hoặc từ shell của bạn, nên một biến
+  không thể sống sót qua `switch off`.
+- Không truyền tham số `--config` nào cho Codex. Shim không đổi gì trên phía Codex ngoài môi trường.
 - Wrapper tìm binary thật sau khi **loại thư mục shim khỏi `PATH`**, nên không bao giờ tự
   gọi đệ quy chính nó. Không tìm thấy binary thật thì thoát mã `127` kèm thông báo rõ ràng,
   không im lặng.
@@ -544,21 +471,19 @@ trong `PATH`.
 ```jsonc
 {
   "port": 3456,
-  "activeProfile": "9router",
   "activeProfiles": {
-    "anthropic": "9router",          // Profile active cho Claude Code (/v1/messages)
-    "responses": "codex-profile",    // Profile active cho Codex (/v1/responses)
-    "openai-chat": "9router",        // Profile active cho OpenAI Chat
-    "vertex": "gemini-profile"       // Profile active cho Vertex / Gemini
+    "claude": "claude-default",      // Profile active cho Claude Code (/v1/messages)
+    "codex": "codex-default"         // Profile active cho Codex (/v1/responses)
   },
+  "blindfold": { "port": 3457 },     // Cổng interceptor. Cấp cao nhất, không bắt buộc, mặc định 3457
   "profiles": {
-    "9router": {
-      "name": "9Router Cloud",
+    "claude-default": {
+      "name": "Intact Gateway",
       "mode": "convert",             // hybrid | convert | direct
-      "inFormat": "auto",            // auto | anthropic | openai-chat | responses | vertex
+      "tool": "claude",              // claude | codex | null (profile đang tắt)
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
       "thinkingMode": "auto",        // auto | native | off (xem Tuỳ chọn Nâng cao)
-      "baseURL": "https://api.9router.com/v1",
+      "baseURL": "https://intact.example.com/v1", // hoặc https://api.9router.com/v1
       "apiKey": "sk-...",
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
@@ -571,12 +496,20 @@ trong `PATH`.
         "sonnet": true,
         "haiku": false,
         "fable": true
-      },
-      // Khóa cho Codex. Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
+      }
+    },
+    "codex-default": {
+      "name": "Codex qua router",
+      "mode": "convert",
+      "tool": "codex",
+      "outFormat": "vertex",
+      "baseURL": "https://YOUR-GATEWAY/v1",
+      "apiKey": "sk-...",
+      // Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // tên chính thức cho main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // không bắt buộc: ghép một vai trò với tên public khác
-      "blindfold": false,            // true: Codex giữ endpoint chính thức (xem chế độ blindfold)
-      "blindfoldPort": 3457          // cổng interceptor khi blindfold là true
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
+      "model1M": { "main": false, "review": false, "subagent": false }
     }
   },
   "debug": false,
@@ -587,6 +520,17 @@ trong `PATH`.
   }
 }
 ```
+
+`tool` thay `inFormat`: nó nói profile phục vụ công cụ nào, không nói upstream nói định dạng gì.
+Không còn `activeProfile` ở cấp cao nhất, không còn `blindfold`, `blindfoldPort`, `blindfoldHost`
+hay `blindfoldPrefix` bên trong profile, và không còn khóa `openai-chat` hay `vertex` trong
+`activeProfiles`.
+
+`config.json` cũ được ghi lại một lần, khi load, qua cơ chế compare-and-swap — cơ chế này từ chối
+đụng vào file mà người khác vừa đổi trước. Khi hai profile sẽ rơi vào cùng một khóa thì quá trình
+dừng lại, nêu rõ khóa xung đột trên CLI và trên dashboard, và để nguyên file đúng như nó vốn có:
+mọi lệnh `switch` thay đổi trạng thái thoát mã khác 0, còn `switch off` và `switch doctor` vẫn chạy
+được, và sửa file xong là mọi thứ hoạt động lại.
 
 ### Contract lab
 
@@ -617,7 +561,7 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài thư mục dữ liệu (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe (ưu tiên: flag > env > `config.port`). |
 | Header `x-llm-profile: <key>` (tên khác `x-profile`) hoặc `?profile=<key>` | Định tuyến riêng 1 request qua profile chỉ định. Key không tồn tại trả HTTP 400 thay vì âm thầm dùng profile khác. |
-| `profile.thinkingMode` | `auto` (mặc định, cho gateway như 9Router): phục hồi thinking bị xoá, chèn hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
+| `profile.thinkingMode` | `auto` (mặc định, cho gateway như intact hoặc 9Router): phục hồi thinking bị xoá, inject hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
 | `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |
 | `profile.endpoints` | Ghi đè URL upstream theo từng format: `{ "openai-chat": "...", "anthropic": "...", "vertex": "https://.../models/{model}:{action}" }`. |
 | `LLM_SWITCHER_STATE_DIR` | Chuyển file launcher và log ra khỏi thư mục dữ liệu. Test dùng biến này; shim đọc thư mục đã đặt lúc cài shim. |

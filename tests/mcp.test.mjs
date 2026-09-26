@@ -19,12 +19,34 @@ async function mcpCall(t, env, calls) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-mcp-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const cfgPath = path.join(dir, 'config.json');
-  fs.writeFileSync(cfgPath, JSON.stringify({ port: await freePort(), activeProfiles: {}, profiles: {} }), { mode: 0o600 });
+  // CFG_JSON hands the server a config of its own - a colliding one, for example - and
+  // START_GATEWAY runs a gateway against that very config and state dir, so the MCP child and
+  // the gateway share one admin token. Neither option changes what the other tests see.
+  const cfgJson = env.CFG_JSON !== undefined
+    ? env.CFG_JSON
+    : JSON.stringify({ port: await freePort(), activeProfiles: {}, profiles: {} });
+  fs.writeFileSync(cfgPath, cfgJson, { mode: 0o600 });
   const claudeDir = path.join(dir, 'claude');
   fs.mkdirSync(claudeDir);
   if (env.SETTINGS !== undefined) fs.writeFileSync(path.join(claudeDir, 'settings.json'), env.SETTINGS);
+  const childEnv = { ...process.env, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: claudeDir, LLM_SWITCHER_PORT: '', ANTHROPIC_BASE_URL: '' };
+  let gateway = null;
+  if (env.START_GATEWAY) {
+    gateway = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(JSON.parse(cfgJson).port)], {
+      env: { ...childEnv, PORT: '' }, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let glog = '';
+    gateway.stderr.on('data', d => { glog += d; });
+    const port = JSON.parse(cfgJson).port;
+    let up = false;
+    for (let i = 0; i < 160 && !up; i++) {
+      try { up = (await fetch(`http://127.0.0.1:${port}/health`)).ok; } catch { /* not listening yet */ }
+      if (!up) await new Promise(r => setTimeout(r, 50));
+    }
+    if (!up) throw new Error(`gateway did not come up on ${port}: ${glog}`);
+  }
   const child = spawn(process.execPath, [path.join(ROOT, 'mcp.mjs')], {
-    env: { ...process.env, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: claudeDir, LLM_SWITCHER_PORT: '', ANTHROPIC_BASE_URL: '', ...env.vars }
+    env: { ...childEnv, ...env.vars }
   });
   let out = '';
   child.stdout.on('data', d => { out += d; });
@@ -32,6 +54,7 @@ async function mcpCall(t, env, calls) {
   child.stdin.write(requests);
   for (let i = 0; i < 100 && out.split('\n').filter(Boolean).length < calls.length; i++) await new Promise(r => setTimeout(r, 50));
   child.kill();
+  if (gateway && gateway.exitCode === null) gateway.kill('SIGKILL');
   return out.split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
 
@@ -88,4 +111,57 @@ test('routeEvidence does not take the shim --config arguments for an environment
   assert.equal(routeEvidence('codex', '/usr/local/bin/codex -c model="gpt-5.5" exec'), null);
   // The override on the command line is proof enough, with or without a readable environment.
   assert.equal(routeEvidence('codex', '/usr/local/bin/codex --config openai_base_url=http://127.0.0.1:3456/v1 exec'), true);
+});
+
+// ==================== Task 5 ====================
+
+// The gateway stands between two tools and nothing else. An agent that is offered the retired
+// names would be told they worked, then fail at the gateway.
+test('R6: switcher_switch_profile accepts claude and codex targets and rejects legacy targets', async (t) => {
+  const [list] = await mcpCall(t, {}, [{ method: 'tools/list' }]);
+  const def = list.result.tools.find(x => x.name === 'switcher_switch_profile');
+  assert.ok(def, 'the tool is advertised');
+  assert.deepEqual(def.inputSchema.properties.target.enum, ['claude', 'codex']);
+  assert.match(def.inputSchema.properties.target.description, /"claude" \(Claude Code\) or "codex" \(Codex\)/);
+  assert.match(def.description, /Claude Code \(claude\) or Codex \(codex\)/);
+  // openai and vertex are not tools a caller may name, so they are not in the schema at all.
+  assert.ok(!JSON.stringify(def).includes('openai'), 'no retired target in the schema');
+  assert.ok(!JSON.stringify(def).includes('vertex'), 'no retired target in the schema');
+
+  const [status] = await mcpCall(t, {}, [tool('switcher_status')]);
+  const s = text(status);
+  assert.match(s, /Active Profiles by tool:/);
+  assert.match(s, /Claude Code \(\/v1\/messages\)/);
+  assert.match(s, /Codex CLI\s+\(\/v1\/responses\)/);
+  assert.doesNotMatch(s, /openai-chat|Vertex|active multi-CLI targets/i);
+});
+
+// A colliding config.json is one this build refuses to rewrite. The agent must be told which two
+// pointers disagree, or its only next move is to edit the file by hand.
+test('MCP switcher_switch_profile returns HTTP 409 with clashing keys during collision', async (t) => {
+  const port = await freePort();
+  const colliding = {
+    port,
+    activeProfile: 'p',
+    profiles: {
+      p: { name: 'P', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'x', main: 'y' } },
+      'p-codex': { name: 'P codex', mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { main: 'y' } }
+    }
+  };
+  const [r] = await mcpCall(t, { CFG_JSON: JSON.stringify(colliding, null, 2), START_GATEWAY: true },
+    [tool('switcher_switch_profile', { target: 'claude', profile: 'p' })]);
+  assert.equal(r.result.isError, true, text(r));
+  assert.match(text(r), /Switch failed: Migration collision/);
+  assert.match(text(r), /Clashing keys:.*p-codex/);
+});
+
+test('MCP switcher_models returns discovered model catalog', async (t) => {
+  const [list] = await mcpCall(t, {}, [{ method: 'tools/list' }]);
+  const def = list.result.tools.find(x => x.name === 'switcher_models');
+  assert.ok(def, 'switcher_models tool is advertised');
+
+  const [models] = await mcpCall(t, {}, [tool('switcher_models', { tool: 'claude' })]);
+  const json = JSON.parse(text(models));
+  assert.ok(json.claude, 'returns claude models catalog');
+  assert.ok(json.claude.models.some(m => m.id === 'claude-opus-5-5'));
 });
