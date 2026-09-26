@@ -1018,15 +1018,6 @@ function validateProfileInput(p) {
       if (name !== '' && !isSafeModelName(name)) return `Invalid codexRoles.${slot} value "${name}"`;
     }
   }
-  if (p.blindfoldPort !== undefined && p.blindfoldPort !== '' && !parsePort(p.blindfoldPort)) {
-    return `Invalid blindfoldPort "${p.blindfoldPort}"`;
-  }
-  if (p.blindfoldHost !== undefined && p.blindfoldHost !== '' && !/^[A-Za-z0-9.-]{1,253}$/.test(p.blindfoldHost)) {
-    return `Invalid blindfoldHost "${p.blindfoldHost}"`;
-  }
-  if (p.blindfoldPrefix !== undefined && p.blindfoldPrefix !== '' && !/^\/[A-Za-z0-9._~/-]{0,200}$/.test(p.blindfoldPrefix)) {
-    return `Invalid blindfoldPrefix "${p.blindfoldPrefix}"`;
-  }
   return null;
 }
 
@@ -1118,9 +1109,30 @@ async function route(req, res) {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': req.headers.origin || `http://127.0.0.1:${PORT}`,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-llm-switcher-token'
     });
     return res.end();
+  }
+
+  // Serve static tool icons (cached, immutable, strictly image/png and image/svg+xml)
+  if (method === 'GET' && pathname.startsWith('/icons/')) {
+    const iconName = path.basename(pathname);
+    if (!/\.(png|svg)$/i.test(iconName)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('Icon not found');
+    }
+    const iconPath = path.join(__dirname, 'icons', iconName);
+    if (fs.existsSync(iconPath)) {
+      const ext = path.extname(iconName).toLowerCase();
+      const contentType = ext === '.svg' ? 'image/svg+xml' : 'image/png';
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=604800, immutable'
+      });
+      return fs.createReadStream(iconPath).pipe(res);
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    return res.end('Icon not found');
   }
 
   // Serve Web UI (no-cache: always serve the latest version after file edits)
@@ -1275,6 +1287,11 @@ async function routeApi(req, res, method, pathname) {
     return sendJson(res, 200, { logs: requestLogs.slice().reverse() });
   }
 
+  // GET /api/catalog (Dynamic Model Discovery)
+  if (method === 'GET' && pathname === '/api/catalog') {
+    return sendJson(res, 200, loadCatalogCache(STATE_DIR));
+  }
+
   if (method !== 'POST') {
     req.resume();
     return sendJson(res, 404, { error: `Not found: ${method} ${pathname}` });
@@ -1285,11 +1302,6 @@ async function routeApi(req, res, method, pathname) {
     body = await readJsonBody(req);
   } catch (err) {
     return sendJson(res, err.status || 400, { error: err.message });
-  }
-
-  // GET /api/catalog
-  if (method === 'GET' && pathname === '/api/catalog') {
-    return sendJson(res, 200, loadCatalogCache(STATE_DIR));
   }
 
   // POST /api/catalog/refresh

@@ -1,20 +1,16 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Local dashboard for the LLM Switcher gateway: route Claude Code, Codex, OpenAI and Vertex clients to a provider of your choice.">
-  <title>LLM Switcher | Edge Gateway</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%237c6cf6'/%3E%3Cpath d='M8 12h16m-4-4 4 4-4 4M24 20H8m4-4-4 4 4 4' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Switcher · Edge Gateway</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%237c6cf6'/%3E%3Cstop offset='100%25' stop-color='%235eead4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M8 12h16m-4-4 4 4-4 4M24 20H8m4-4-4 4 4 4' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <meta name="theme-color" content="#7c6cf6">
   <script>
     try {
-      const savedTheme = localStorage.getItem('lsw-theme');
+      const savedTheme = localStorage.getItem('intact-theme') || localStorage.getItem('lsw-theme');
       if (savedTheme === 'light' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)) {
         document.documentElement.dataset.theme = 'light';
-      }
-      if (localStorage.getItem('lsw-nav') === 'collapsed') {
-        document.documentElement.dataset.nav = 'collapsed';
       }
     } catch (e) {}
   </script>
@@ -43,7 +39,7 @@
       --code: #5eead4;
       --shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
 
-      /* Backward-compat aliases for existing JS logic */
+      /* Compatibility aliases */
       --surface: var(--side);
       --surface-card: var(--card);
       --surface-elevated: var(--card2);
@@ -71,7 +67,34 @@
       --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
-    [data-theme="light"] {
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg: #f3f5f9;
+        --side: #ffffff;
+        --card: #ffffff;
+        --card2: #eef1f6;
+        --line: #dfe4ec;
+        --fg: #141a25;
+        --muted: #526076;
+        --faint: #5f6b7d;
+        --accent: #5b4bdb;
+        --accent-strong: #5b4bdb;
+        --accent-soft: rgba(91, 75, 219, 0.1);
+        --mint: #0f766e;
+        --ok: #166534;
+        --ok-soft: rgba(22, 101, 52, 0.1);
+        --warn: #92400e;
+        --warn-soft: rgba(146, 64, 14, 0.08);
+        --err: #be123c;
+        --err-soft: rgba(190, 18, 60, 0.08);
+        --code: #0f766e;
+        --shadow: 0 20px 50px rgba(20, 26, 37, 0.14);
+        --border-strong: #cbd5e1;
+      }
+    }
+
+    :root[data-theme="light"] {
       color-scheme: light;
       --bg: #f3f5f9;
       --side: #ffffff;
@@ -84,51 +107,49 @@
       --accent: #5b4bdb;
       --accent-strong: #5b4bdb;
       --accent-soft: rgba(91, 75, 219, 0.1);
-      --mint: #0f9488;
-      --ok: #15803d;
-      --ok-soft: rgba(21, 128, 61, 0.1);
-      --warn: #b45309;
-      --warn-soft: rgba(180, 83, 9, 0.08);
-      --err: #e11d48;
-      --err-soft: rgba(225, 29, 72, 0.08);
+      --mint: #0f766e;
+      --ok: #166534;
+      --ok-soft: rgba(22, 101, 52, 0.1);
+      --warn: #92400e;
+      --warn-soft: rgba(146, 64, 14, 0.08);
+      --err: #be123c;
+      --err-soft: rgba(190, 18, 60, 0.08);
       --code: #0f766e;
       --shadow: 0 20px 50px rgba(20, 26, 37, 0.14);
       --border-strong: #cbd5e1;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { height: 100%; }
+    html, body { height: 100%; }
     body {
-      min-height: 100%;
       font: 14px/1.5 var(--font-sans);
       background: var(--bg);
       color: var(--fg);
       display: grid;
-      grid-template-columns: 16rem 1fr;
+      grid-template-columns: 15rem 1fr;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Aside / Sidebar */
+    /* Aside Navigation */
     aside {
       background: var(--side);
       border-right: 1px solid var(--line);
-      padding: 1.1rem 0.85rem;
+      padding: 1.1rem 0.75rem;
       display: flex;
       flex-direction: column;
-      gap: 0.35rem;
+      gap: 0.25rem;
       position: sticky;
       top: 0;
       height: 100vh;
       overflow-y: auto;
-      overflow-x: hidden;
       z-index: 10;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      padding: 0.4rem 0.6rem 1.25rem;
+      gap: 0.7rem;
+      padding: 0.35rem 0.5rem 1.25rem;
       margin-bottom: 0.5rem;
       border-bottom: 1px solid var(--line);
       text-decoration: none;
@@ -143,9 +164,9 @@
     .logo svg { width: 100%; height: 100%; display: block; }
     .brand b {
       display: block;
-      font-size: 1.2rem;
-      font-weight: 750;
-      letter-spacing: -0.02em;
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
       line-height: 1.1;
       color: var(--fg);
     }
@@ -156,59 +177,74 @@
       letter-spacing: 0.02em;
     }
 
-    aside nav { display: grid; gap: 0.3rem; }
+    aside nav { display: grid; gap: 0.25rem; }
     aside a.nav-link {
       display: flex;
       align-items: center;
-      gap: 0.7rem;
-      padding: 0.55rem 0.75rem;
+      gap: 0.65rem;
+      padding: 0.5rem 0.7rem;
       border-radius: 8px;
       color: var(--muted);
       text-decoration: none;
       font-size: 0.88rem;
       font-weight: 500;
-      transition: all 0.15s ease;
-      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
     }
     aside a.nav-link:hover { color: var(--fg); background: var(--card2); }
-    aside a.nav-link.active, aside a.nav-link[aria-current="page"] {
+    aside a.nav-link[aria-current="page"] {
       background: var(--accent-soft);
       color: var(--accent);
       font-weight: 600;
     }
     aside a.nav-link svg { width: 18px; height: 18px; flex: none; }
-    aside a.nav-link .ct { margin-left: auto; font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
-
-    aside .spacer { flex: 1; }
-
-    .navtoggle {
-      width: 100%;
-      justify-content: flex-start;
-      margin-bottom: 0.5rem;
-      color: var(--muted);
-      font-size: 0.82rem;
+    aside a.nav-link .ct {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: var(--card2);
     }
+    aside a.nav-link .ct:empty { display: none; }
+    aside a.nav-link[aria-current="page"] .ct {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      color: var(--accent);
+    }
+    aside .spacer { flex: 1; }
 
     .prefs {
       display: flex;
       flex-direction: column;
-      gap: 0.6rem;
-      padding: 0.6rem 0.3rem 0.2rem;
+      gap: 0.65rem;
+      padding: 16px 14px;
       border-top: 1px solid var(--line);
+      margin-top: 0.5rem;
     }
-
-    @media (min-width: 821px) {
-      html[data-nav="collapsed"] body { grid-template-columns: 4rem 1fr; }
-      html[data-nav="collapsed"] aside { padding: 1.1rem 0.4rem; }
-      html[data-nav="collapsed"] aside a.nav-link { justify-content: center; gap: 0; padding: 0.6rem 0; font-size: 0; }
-      html[data-nav="collapsed"] aside a.nav-link .ct { display: none; }
-      html[data-nav="collapsed"] .brand { padding: 0.4rem 0 1.25rem; justify-content: center; }
-      html[data-nav="collapsed"] .brand div { display: none; }
-      html[data-nav="collapsed"] .logo { width: 32px; height: 32px; }
-      html[data-nav="collapsed"] .prefs { display: none; }
-      html[data-nav="collapsed"] .navtoggle { justify-content: center; }
-      html[data-nav="collapsed"] .navtoggle span { display: none; }
-      html[data-nav="collapsed"] .navtoggle svg { transform: rotate(180deg); }
+    .seg {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 4px;
+      gap: 3px;
+    }
+    .seg button {
+      font: inherit;
+      min-height: 24px;
+      padding: 0.15rem 0.6rem;
+      font-size: 0.75rem;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .seg button:hover { color: var(--fg); }
+    .seg button[aria-pressed="true"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
     }
 
     /* Page Area */
@@ -218,87 +254,86 @@
       flex-direction: column;
       min-height: 100vh;
     }
-
     .ph {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      justify-content: space-between;
+      gap: 0.75rem;
       padding: 1.1rem 2rem;
       border-bottom: 1px solid var(--line);
       min-height: 4.5rem;
-      background: var(--side);
       flex-wrap: wrap;
     }
-    .ph .title-box { flex: 1; min-width: 14rem; }
-    .ph h1 { font-size: 1.25rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
-    .ph p { margin: 0; color: var(--muted); font-size: 0.82rem; }
-
+    .title-box h1 { font-size: 1.25rem; margin: 0; font-weight: 650; }
+    .title-box p { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.85rem; }
     .ph-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 
     .content {
-      padding: 1.75rem 2rem 3rem;
+      padding: 1.5rem 2rem 3rem;
       width: 100%;
       display: grid;
-      gap: 1.75rem;
+      gap: 1.5rem;
       align-content: start;
     }
     .content > * { min-width: 0; }
 
-    /* Cards */
-    .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .card.pad { padding: 1.25rem 1.4rem; }
+    /* Cards & Grids */
+    .sec { display: grid; gap: 0.85rem; }
+    .sech { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+    .card.pad { padding: 1.1rem 1.25rem; }
     .cardh {
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      padding: 0.9rem 1.35rem;
+      padding: 0.9rem 1.25rem;
       border-bottom: 1px solid var(--line);
       flex-wrap: wrap;
     }
-    .cardh h2, .cardh h3 { font-size: 0.96rem; font-weight: 600; margin: 0; }
+    .cardh .grow { min-width: min(12rem, 100%); }
+    .grow { flex: 1; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .small { font-size: 0.8rem; }
+    code, .mono { font-family: var(--font-mono); font-size: 0.82rem; }
+    code { color: var(--code); }
 
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      padding: 0.85rem 1.35rem;
-      border-bottom: 1px solid var(--line);
-    }
-    .row:last-child { border-bottom: 0; }
-    .row .who { flex: 1; min-width: 0; }
-    .row .who .l { font-weight: 600; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row .who .meta { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.15rem; font-size: 0.78rem; color: var(--muted); }
-
-    /* Provider Grid */
+    /* Provider Grid (Intact Style) */
     .pgrid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
-      gap: 0.9rem;
+      grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+      gap: 0.85rem;
     }
     .pcard {
       display: flex;
       flex-direction: column;
-      gap: 0.7rem;
-      padding: 1rem 1.2rem;
+      gap: 0.75rem;
+      padding: 1rem 1.15rem;
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      text-decoration: none;
+      border-radius: 11px;
       color: inherit;
       min-width: 0;
-      transition: all 0.15s ease;
       cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
     }
-    .pcard:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
-    .pcard.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 3%, var(--card)); }
+    .pcard:hover { border-color: var(--accent); }
+    .pcard.active { border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+    .pcard .top {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      min-width: 0;
+    }
+    .pcard .nm {
+      font-weight: 600;
+      font-size: 0.95rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
-    .pcard-top { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
-    .pcard .av {
+    .av {
       width: 36px;
       height: 36px;
       border-radius: 9px;
@@ -306,24 +341,108 @@
       place-items: center;
       font-weight: 700;
       font-size: 0.85rem;
-      color: #fff;
+      color: #ffffff;
       flex: none;
-      background: var(--accent-strong);
     }
-    .pcard .nm { font-weight: 650; font-size: 0.94rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .av.sm { width: 24px; height: 24px; border-radius: 6px; font-size: 0.65rem; }
+    .av.logo {
+      background: #ffffff;
+      padding: 5px;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+    .av.logo.sm { padding: 3px; }
+    .av.logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
 
-    .pcard-models {
-      display: flex;
-      flex-wrap: wrap;
+    .status {
+      display: inline-flex;
+      align-items: center;
       gap: 0.35rem;
-      font-size: 0.76rem;
-      color: var(--muted);
-      background: var(--card2);
-      padding: 0.5rem 0.65rem;
-      border-radius: 8px;
+      font-size: 0.74rem;
+      color: var(--faint);
+    }
+    .status.on { color: var(--ok); font-weight: 500; }
+    .status.on::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
     }
 
-    .pcard-actions { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.2rem; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.72rem;
+      font-weight: 500;
+      border-radius: 6px;
+      padding: 0.1rem 0.45rem;
+      background: var(--card2);
+      color: var(--muted);
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+    .badge.ok { background: var(--ok-soft); color: var(--ok); }
+    .badge.warn { background: var(--warn-soft); color: var(--warn); }
+    .badge.accent { background: var(--accent-soft); color: var(--accent); }
+    .badge.err { background: var(--err-soft); color: var(--err); }
+    .badge.outline { border-color: var(--line); }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .row:last-child { border-bottom: 0; }
+    .row .who { flex: 1; min-width: 0; }
+    .row .who .l { font-weight: 600; font-size: 0.92rem; }
+    .row .meta { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.2rem; color: var(--muted); font-size: 0.8rem; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: var(--card2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.15rem 0.45rem;
+      font-size: 0.75rem;
+      color: var(--fg);
+    }
+
+    .copyline {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+      min-width: 0;
+    }
+    .copyline code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      gap: 0.85rem;
+    }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+    }
+    .stat .k { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat .v { font-size: 1.5rem; font-weight: 700; margin-top: 0.2rem; }
 
     /* Buttons */
     button, .btn {
@@ -339,117 +458,68 @@
       justify-content: center;
       text-decoration: none;
       font-size: 0.84rem;
-      transition: all 0.12s ease;
+      font-weight: 500;
+      transition: filter 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
     }
-    button.primary, .btn-primary { background: var(--accent-strong); color: #fff; font-weight: 600; border: 1px solid var(--accent-strong); }
-    button.primary:hover, .btn-primary:hover { filter: brightness(1.08); }
-    button.ghost, .btn-outline { background: var(--card2); color: var(--fg); border: 1px solid var(--line); }
-    button.ghost:hover, .btn-outline:hover { border-color: var(--faint); color: var(--fg); }
-    button.danger, .btn-danger { background: transparent; color: var(--err); border: 1px solid var(--err-soft); }
-    button.danger:hover, .btn-danger:hover { background: var(--err-soft); }
-    button.success, .btn-success { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok); }
-    button.sm, .btn-sm { min-height: 28px; padding: 0.2rem 0.6rem; font-size: 0.78rem; }
-    button.icon { min-height: 30px; min-width: 30px; padding: 0.2rem; background: transparent; color: var(--muted); }
-    button.icon:hover { color: var(--fg); background: var(--card2); }
-
-    /* Segmented Controls */
-    .seg {
-      display: inline-flex;
-      background: var(--bg);
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      padding: 3px;
-      gap: 2px;
-    }
-    .seg button {
-      min-height: 26px;
-      padding: 0.15rem 0.65rem;
-      font-size: 0.76rem;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 6px;
-    }
-    .seg button[aria-pressed="true"] {
-      background: var(--accent-soft);
-      color: var(--accent);
+    button.primary, .btn.btn-primary {
+      background: var(--accent-strong);
+      color: var(--accent-fg);
       font-weight: 600;
     }
-
-    /* Badges & Pills */
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
-      font-weight: 550;
-      border-radius: 6px;
-      padding: 0.1rem 0.45rem;
+    button.primary:hover, .btn.btn-primary:hover { filter: brightness(1.1); }
+    button.ghost, .btn.btn-outline {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--line);
+    }
+    button.ghost:hover, .btn.btn-outline:hover {
       background: var(--card2);
-      color: var(--muted);
-      white-space: nowrap;
+      border-color: var(--faint);
     }
-    .badge.ok, .badge-direct { background: var(--ok-soft); color: var(--ok); }
-    .badge.warn { background: var(--warn-soft); color: var(--warn); }
-    .badge.accent, .badge-hybrid, .badge-convert { background: var(--accent-soft); color: var(--accent); }
-    .badge.err { background: var(--err-soft); color: var(--err); }
-    .badge.outline, .badge-outline { background: transparent; border: 1px solid var(--line); color: var(--faint); }
-    .badge-1m { background: var(--accent-soft); color: var(--accent); font-weight: 700; border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.68rem; }
+    button.plain { background: transparent; color: var(--muted); }
+    button.plain:hover { color: var(--fg); background: var(--card2); }
+    button.danger, .btn.btn-danger {
+      background: var(--err-soft);
+      color: var(--err);
+      border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+    }
+    button.danger:hover, .btn.btn-danger:hover {
+      background: var(--err);
+      color: #ffffff;
+    }
+    button.icon { min-height: 28px; min-width: 28px; padding: 0.2rem; background: transparent; color: var(--muted); border-radius: 6px; }
+    button.icon:hover { color: var(--fg); background: var(--card2); }
+    button:disabled, .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+    .btn-sm { min-height: 26px; padding: 0.2rem 0.6rem; font-size: 0.78rem; border-radius: 6px; }
 
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      font-size: 0.78rem;
-      color: var(--faint);
-    }
-    .status.on, .status-dot.active { color: var(--ok); }
-    .status.on::before, .status-dot.active {
-      content: "";
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 8px var(--ok);
-      display: inline-block;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--faint);
-      display: inline-block;
-    }
-
-    /* Form Inputs */
+    /* Inputs */
     input, select, textarea {
       font: inherit;
-      padding: 0.45rem 0.75rem;
+      padding: 0.45rem 0.7rem;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--bg);
       color: var(--fg);
       min-height: 36px;
       width: 100%;
+      font-size: 0.85rem;
     }
     input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px var(--accent-soft);
     }
-    label.f, div.f { display: grid; gap: 0.35rem; font-size: 0.82rem; font-weight: 500; }
+    label.f { display: grid; gap: 0.35rem; font-size: 0.82rem; font-weight: 500; }
     .hint { font-size: 0.75rem; color: var(--faint); font-weight: 400; }
+    .search { position: relative; max-width: 18rem; width: 100%; }
+    .search svg { position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%); color: var(--faint); width: 15px; height: 15px; pointer-events: none; }
+    .search input { padding-left: 2rem; min-height: 32px; }
 
-    /* Switch toggle */
-    .switch {
-      position: relative;
-      width: 38px;
-      height: 22px;
-      flex: none;
-      display: inline-block;
-    }
+    /* Switch */
+    .switch { position: relative; width: 36px; height: 20px; flex: none; display: inline-block; }
     .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; min-height: 0; }
     .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background 0.15s; pointer-events: none; }
-    .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+    .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transition: transform 0.15s; }
     .switch input:checked + span { background: var(--accent-strong); }
     .switch input:checked + span::after { transform: translateX(16px); }
 
@@ -458,10 +528,10 @@
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.65);
-      backdrop-filter: blur(4px);
+      backdrop-filter: blur(3px);
       display: grid;
       place-items: center;
-      padding: 1.5rem;
+      padding: 1rem;
       z-index: 50;
     }
     .modal {
@@ -469,7 +539,7 @@
       border: 1px solid var(--line);
       border-radius: 14px;
       box-shadow: var(--shadow);
-      width: min(42rem, 100%);
+      width: min(38rem, 100%);
       max-height: 90vh;
       display: flex;
       flex-direction: column;
@@ -479,103 +549,175 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 1.1rem 1.4rem;
+      padding: 1rem 1.25rem;
       border-bottom: 1px solid var(--line);
-      background: var(--side);
     }
-    .mh strong { font-size: 1.05rem; font-weight: 650; }
+    .mh strong { font-size: 1.05rem; }
     .mb {
-      padding: 1.25rem 1.4rem;
+      padding: 1.15rem 1.25rem;
       overflow-y: auto;
-      display: grid;
-      gap: 1.2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
     }
     .mf {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 0.9rem 1.4rem;
+      padding: 0.85rem 1.25rem;
       border-top: 1px solid var(--line);
-      background: var(--side);
+      background: var(--card2);
     }
 
-    /* Tabs */
+    /* Tabs (Intact style) */
     .tabs {
       display: flex;
-      gap: 0.35rem;
-      border-bottom: 1px solid var(--line);
-      margin-bottom: 0.8rem;
+      gap: 0.25rem;
+      box-shadow: inset 0 -1px 0 var(--line);
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
     }
-    .tab-btn {
-      padding: 0.5rem 0.85rem;
+    .tabs::-webkit-scrollbar { display: none; }
+    .tabs button.tab-btn {
+      padding: 0.55rem 0.95rem;
       color: var(--muted);
-      border-bottom: 2px solid transparent;
-      cursor: pointer;
-      font-size: 0.82rem;
-      font-weight: 550;
       background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      font-weight: 500;
+      font-size: 0.85rem;
+      cursor: pointer;
       border-radius: 0;
+      min-height: 0;
     }
-    .tab-btn:hover { color: var(--fg); }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tabs button.tab-btn:hover { color: var(--fg); }
+    .tabs button.tab-btn.active {
+      color: var(--fg);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
 
-    /* Tables */
-    table { border-collapse: collapse; width: 100%; font-size: 0.84rem; }
-    th, td { text-align: left; padding: 0.65rem 1rem; border-bottom: 1px solid var(--line); }
-    th { color: var(--muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--card2); }
-    tr:last-child td { border-bottom: 0; }
-    tr:hover td { background: var(--card2); }
+    /* Log Items */
+    .log-item {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.6rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .log-item details { margin-top: 0.2rem; }
+    .log-item details summary { cursor: pointer; color: var(--accent); font-size: 0.78rem; user-select: none; }
+    .log-item pre {
+      margin-top: 0.4rem;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.6rem 0.75rem;
+      overflow-x: auto;
+      font-size: 0.76rem;
+      line-height: 1.4;
+    }
 
+    /* Toast */
     .toast {
       position: fixed;
-      bottom: 1.5rem;
+      bottom: 1.25rem;
       left: 50%;
       transform: translateX(-50%);
       background: var(--card2);
+      color: var(--fg);
       border: 1px solid var(--line);
       box-shadow: var(--shadow);
-      padding: 0.6rem 1.2rem;
+      padding: 0.55rem 1.1rem;
       border-radius: 10px;
       font-size: 0.85rem;
-      z-index: 100;
-      color: var(--fg);
+      z-index: 60;
       display: none;
+      animation: fadeIn 0.15s ease-out;
     }
+    .toast.err { border-color: var(--err); color: var(--err); }
+    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+    /* Test Result Box in Modal */
     .test-result-box {
-      background: var(--bg);
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 0.85rem 1rem;
+      padding: 0.75rem;
+      background: var(--bg);
+      font-size: 0.8rem;
       display: none;
-      font-size: 0.82rem;
     }
+    .test-result-box.success { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+    .test-result-box.error { border-color: color-mix(in srgb, var(--err) 40%, transparent); }
 
-    /* Backward compatibility helper styles */
-    .tab-content { display: none; }
-    .tab-content.active { display: grid; gap: 1rem; }
-    .callout { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.8rem; border: 1px solid var(--line); background: var(--bg); }
-    .callout-warning { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
-    code, .mono { font-family: var(--font-mono); font-size: 0.82rem; }
-
+    /* Responsive Design (Matching Intact) */
     @media (max-width: 820px) {
-      body { grid-template-columns: 1fr; }
-      aside { position: static; height: auto; flex-direction: row; flex-wrap: wrap; }
-      .ph { padding: 1rem; }
-      .content { padding: 1rem; }
+      body { grid-template-columns: minmax(0, 1fr); }
+      aside, main, .page { min-width: 0; }
+      aside {
+        position: sticky;
+        top: 0;
+        height: auto;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 0.55rem 0.85rem 0.4rem;
+        gap: 0.4rem;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        z-index: 10;
+      }
+      aside .brand { padding: 0 0.5rem 0 0; margin: 0; border: 0; }
+      aside .brand small { display: none; }
+      aside .brand b { font-size: 1.15rem; }
+      aside .logo { width: 30px; height: 30px; }
+      aside nav {
+        order: 3;
+        flex: 1 0 100%;
+        min-width: 0;
+        display: flex;
+        gap: 0.25rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+        margin: 0 -0.25rem;
+      }
+      aside nav::-webkit-scrollbar { display: none; }
+      aside a.nav-link { padding: 0.45rem 0.65rem; white-space: nowrap; font-size: 0.82rem; }
+      aside a.nav-link svg { width: 15px; height: 15px; }
+      aside a.nav-link .ct { display: inline-block; font-size: 0.68rem; }
+      aside .spacer { flex: 1; }
+      aside .prefs {
+        width: auto;
+        padding: 0;
+        border: 0;
+        flex-direction: row;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      aside .prefs > div { width: auto !important; margin-top: 0 !important; gap: 0.4rem; }
+      aside .prefs span { display: none; }
+      .ph { padding: 1rem; flex-wrap: wrap; gap: 0.75rem; }
+      .content { padding: 1rem 1rem 2.5rem; }
+      .row { padding: 0.75rem 1rem; flex-wrap: wrap; }
+      .pgrid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <!-- Sidebar -->
   <aside>
-    <a class="brand" href="#/routes">
+    <a class="brand" href="#/routes" aria-label="LLM Switcher home">
       <span class="logo">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <defs>
             <linearGradient id="lsw-grad" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0%" stop-color="#7c6cf6"/>
-              <stop offset="100%" stop-color="#38bdf8"/>
+              <stop offset="100%" stop-color="#5eead4"/>
             </linearGradient>
           </defs>
           <rect width="32" height="32" rx="9" fill="url(#lsw-grad)"/>
@@ -589,40 +731,35 @@
     </a>
 
     <nav id="sideNav">
-      <a class="nav-link active" id="nav-routes" onclick="switchNavView('routes')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>
-        Routes & Profiles
+      <a class="nav-link" href="#/routes" data-nav="routes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>
+        Routes & Profiles<span class="ct" id="ct-routes"></span>
       </a>
-      <a class="nav-link" id="nav-models" onclick="switchNavView('models')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
-        Model Catalog
+      <a class="nav-link" href="#/models" data-nav="models">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
+        Model Catalog<span class="ct" id="ct-models"></span>
       </a>
-      <a class="nav-link" id="nav-logs" onclick="switchNavView('logs')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
-        Request Inspector
+      <a class="nav-link" href="#/logs" data-nav="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
+        Request Inspector<span class="ct" id="ct-logs"></span>
       </a>
-      <a class="nav-link" id="nav-doctor" onclick="switchNavView('doctor')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
+      <a class="nav-link" href="#/doctor" data-nav="doctor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
         System Doctor
       </a>
     </nav>
 
     <div class="spacer"></div>
 
-    <button class="plain navtoggle" type="button" id="navToggle" onclick="toggleNavCollapse()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="m15 6-6 6 6 6"/></svg>
-      <span>Collapse Sidebar</span>
-    </button>
-
-    <div class="prefs">
-      <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:var(--muted);">
-        <span>Theme</span>
+    <div class="prefs" style="padding-top: 18px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+        <span style="font-size:0.75rem; color:var(--muted);">Theme</span>
         <div class="seg sm">
           <button type="button" id="btn-theme-dark" onclick="applyThemeMode('dark')">Dark</button>
           <button type="button" id="btn-theme-light" onclick="applyThemeMode('light')">Light</button>
         </div>
       </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; margin-top:0.2rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-top:0.35rem;">
         <span class="status on" id="status-aside-indicator">Gateway Active</span>
         <button type="button" id="btn-toggle" class="btn btn-outline btn-sm" onclick="toggleProxy()">Toggle All</button>
       </div>
@@ -636,171 +773,187 @@
         <h1 id="page-title">Routes & Profiles</h1>
         <p id="status-sub">Route Claude Code, Codex, and OpenAI clients independently.</p>
       </div>
-      <div class="ph-actions">
-        <div id="status-dot" class="status-dot active" style="display:none;"></div>
-        <div id="status-title" style="display:none;">Gateway Active</div>
-        <div id="status-action" style="display:none;"></div>
-        <button id="btn-theme" style="display:none;" onclick="toggleTheme()"></button>
-        <button class="btn btn-primary" onclick="openProfileModal(true)">+ Add Profile</button>
-        <button class="btn btn-outline" onclick="loadStatus()">Refresh</button>
+      <div class="ph-actions" id="ph-actions">
+        <!-- Rendered dynamically per route -->
       </div>
     </div>
 
     <div class="content">
       <!-- VIEW 1: Routes & Profiles -->
-      <div id="view-routes" class="view-panel">
-        <!-- Target CLI Routes Card -->
-        <div class="card" style="margin-bottom: 1.5rem;">
-          <div class="cardh">
-            <h2>Active Coding CLI Targets</h2>
-            <span class="badge ok" style="margin-left:auto;">Multi-Active Invariant</span>
+      <div id="view-routes" class="view-panel" style="display:none;">
+        <div class="sec">
+          <!-- Active Coding CLI Targets -->
+          <div class="card">
+            <div class="cardh">
+              <h2 style="font-size:1.02rem; font-weight:600;">Active Coding CLI Targets</h2>
+              <span class="badge ok" style="margin-left:auto;">Multi-Active Invariant</span>
+            </div>
+
+            <!-- Claude Code Target Row -->
+            <div class="row" id="card-slot-claude">
+              <span class="av logo" title="Claude Code CLI"><img src="/icons/claude.png" alt="Claude Code"></span>
+              <div class="who">
+                <div class="l">Claude Code CLI</div>
+                <div class="meta">Native Anthropic Messages · <code>/v1/messages</code></div>
+              </div>
+              <div style="min-width:14rem;">
+                <select id="select-slot-claude" onchange="switchCliTarget('claude', this.value)">
+                  <option value="">Official endpoint</option>
+                </select>
+              </div>
+              <span id="badge-slot-claude" class="badge outline">OFF</span>
+            </div>
+
+            <!-- Codex Target Row -->
+            <div class="row" id="card-slot-codex">
+              <span class="av logo" title="OpenAI Codex CLI"><img src="/icons/codex.png" alt="OpenAI Codex"></span>
+              <div class="who">
+                <div class="l">OpenAI Codex CLI</div>
+                <div class="meta">Responses WebSocket · <code>/v1/responses</code></div>
+              </div>
+              <div style="min-width:14rem;">
+                <select id="select-slot-codex" onchange="switchCliTarget('codex', this.value)">
+                  <option value="">Official endpoint</option>
+                </select>
+              </div>
+              <span id="badge-slot-codex" class="badge outline">OFF</span>
+            </div>
           </div>
 
-          <!-- Claude Code Target Row -->
-          <div class="row" id="card-slot-claude">
-            <div class="av" style="background:#d97706;">CC</div>
-            <div class="who">
-              <div class="l">Claude Code CLI</div>
-              <div class="meta">Native Anthropic Messages · <code>/v1/messages</code></div>
-            </div>
-            <div style="min-width: 14rem;">
-              <select id="select-slot-claude" onchange="switchCliTarget('claude', this.value)">
-                <option value="">Official endpoint</option>
-              </select>
-            </div>
-            <span id="badge-slot-claude" class="badge badge-outline">OFF</span>
+          <!-- Configured Profiles Header -->
+          <div class="sech" style="margin-top:0.5rem;">
+            <h2 style="font-size:1.02rem; font-weight:600;">Configured Provider Profiles</h2>
+            <span class="hint">Click any card to edit configuration</span>
           </div>
 
-          <!-- Codex Target Row -->
-          <div class="row" id="card-slot-codex">
-            <div class="av" style="background:#10b981;">CDX</div>
-            <div class="who">
-              <div class="l">OpenAI Codex CLI</div>
-              <div class="meta">Responses WebSocket · <code>/v1/responses</code></div>
-            </div>
-            <div style="min-width: 14rem;">
-              <select id="select-slot-codex" onchange="switchCliTarget('codex', this.value)">
-                <option value="">Official endpoint</option>
-              </select>
-            </div>
-            <span id="badge-slot-codex" class="badge badge-outline">OFF</span>
-          </div>
+          <!-- Profiles Grid -->
+          <div id="profiles-grid" class="pgrid"></div>
         </div>
-
-        <!-- Configured Profiles Header -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.9rem;">
-          <h2 style="font-size: 1.05rem; font-weight: 650;">Configured Provider Profiles</h2>
-          <span style="font-size: 0.8rem; color: var(--muted);">Click any card to edit configuration</span>
-        </div>
-
-        <!-- Profiles Grid -->
-        <div id="profiles-grid" class="pgrid"></div>
       </div>
 
       <!-- VIEW 2: Discovered Models Catalog -->
-      <div id="view-models" class="view-panel" style="display: none;">
-        <div class="card pad" style="margin-bottom: 1.5rem;">
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
-            <div>
-              <h2 style="font-size:1.1rem; font-weight:650;">Dynamic Model Discovery</h2>
-              <p style="color:var(--muted); font-size:0.82rem; margin-top:0.2rem;">
-                Official model names are auto-polled on tool version bumps to prevent drift and 404 errors.
-              </p>
+      <div id="view-models" class="view-panel" style="display:none;">
+        <div class="sec">
+          <div class="card pad">
+            <div class="sech">
+              <div>
+                <h2 style="font-size:1.05rem; font-weight:600;">Dynamic Model Discovery</h2>
+                <p class="hint" style="margin-top:0.2rem;">Official model names are auto-polled on tool version bumps to prevent drift and 404 errors.</p>
+              </div>
+              <div class="search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input type="text" id="catalog-search" placeholder="Search models…" oninput="filterCatalogView(this.value)">
+              </div>
             </div>
-            <button class="btn btn-outline" onclick="refreshCatalogUpstream()">⚡ Sync Models with Upstream</button>
           </div>
-        </div>
 
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(20rem, 1fr)); gap:1.2rem;">
-          <div class="card pad">
-            <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.8rem; color:var(--accent);">Claude Code Tiers</h3>
-            <div id="catalog-claude-items" style="display:grid; gap:0.6rem;"></div>
-          </div>
-          <div class="card pad">
-            <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.8rem; color:var(--mint);">Codex Roles</h3>
-            <div id="catalog-codex-items" style="display:grid; gap:0.6rem;"></div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(20rem, 1fr)); gap:1.2rem;">
+            <div class="card pad">
+              <div class="sech" style="margin-bottom:0.8rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; color:var(--accent); display:flex; align-items:center; gap:0.5rem;"><span class="av logo sm" style="width:22px; height:22px; padding:2px;"><img src="/icons/claude.png" alt="Claude"></span> Claude Code Tiers</h3>
+                <span class="badge accent" id="badge-claude-count">0 tiers</span>
+              </div>
+              <div id="catalog-claude-items" style="display:grid; gap:0.6rem;"></div>
+            </div>
+            <div class="card pad">
+              <div class="sech" style="margin-bottom:0.8rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; color:var(--mint); display:flex; align-items:center; gap:0.5rem;"><span class="av logo sm" style="width:22px; height:22px; padding:2px;"><img src="/icons/codex.png" alt="Codex"></span> Codex Roles</h3>
+                <span class="badge ok" id="badge-codex-count">0 roles</span>
+              </div>
+              <div id="catalog-codex-items" style="display:grid; gap:0.6rem;"></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- VIEW 3: Request Inspector Logs -->
-      <div id="view-logs" class="view-panel" style="display: none;">
-        <div class="card">
-          <div class="cardh" style="justify-content: space-between;">
-            <div style="display:flex; align-items:center; gap:0.8rem;">
-              <h2>Live Request Inspector</h2>
-              <label class="hint" style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
-                <input type="checkbox" id="chk-auto-refresh-logs" onchange="toggleLogAutoRefresh()" style="width:auto; min-height:0;" checked> Auto-refresh
-              </label>
-            </div>
-            <div style="display:flex; gap:0.5rem;">
-              <button class="btn btn-outline btn-sm" onclick="loadInspectorLogs()">Refresh</button>
-              <button class="btn btn-outline btn-sm" onclick="clearInspectorLogs()">Clear</button>
+      <!-- VIEW 3: Request Inspector -->
+      <div id="view-logs" class="view-panel" style="display:none;">
+        <div class="sec">
+          <div class="card pad">
+            <div class="sech">
+              <div>
+                <h2 style="font-size:1.05rem; font-weight:600;">Live Request Inspector</h2>
+                <p class="hint" style="margin-top:0.2rem;">In-memory ring buffer capturing the most recent traffic through the edge gateway.</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <label class="hint" style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                  <input type="checkbox" id="chk-auto-refresh-logs" onchange="toggleLogAutoRefresh()" style="width:auto; min-height:0;" checked> Auto-refresh (3s)
+                </label>
+                <button type="button" class="btn btn-outline btn-sm" onclick="clearInspectorLogs()">Clear Logs</button>
+              </div>
             </div>
           </div>
 
-          <div id="inspector-logs-container" style="padding:1rem;"></div>
+          <div id="inspector-logs-container"></div>
         </div>
       </div>
 
       <!-- VIEW 4: System Doctor -->
-      <div id="view-doctor" class="view-panel" style="display: none;">
-        <div class="card pad" style="margin-bottom: 1.5rem;">
-          <h2 style="font-size:1.1rem; font-weight:650; margin-bottom:0.5rem;">System Health & Invariant Doctor</h2>
-          <p style="color:var(--muted); font-size:0.84rem;">
-            Verifies port bindings, certificate trust isolation, and zero-mutation guarantees.
-          </p>
-        </div>
+      <div id="view-doctor" class="view-panel" style="display:none;">
+        <div class="sec">
+          <div class="stats">
+            <div class="stat">
+              <div class="k">Edge Gateway Port</div>
+              <div class="v gateway-port" style="color:var(--accent);">3456</div>
+              <div class="status on" style="margin-top:0.3rem;">Bound to 127.0.0.1</div>
+            </div>
 
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(18rem, 1fr)); gap:1rem;">
-          <div class="card pad">
-            <div style="color:var(--muted); font-size:0.75rem; text-transform:uppercase;">Edge Gateway Port</div>
-            <div style="font-size:1.5rem; font-weight:700; margin:0.3rem 0;" class="gateway-port">3456</div>
-            <div style="font-size:0.78rem; color:var(--ok);">● Bound to loopback (127.0.0.1)</div>
+            <div class="stat">
+              <div class="k">Blindfold Interceptor</div>
+              <div class="v" id="blindfold-port-display" style="color:var(--mint); font-size:1.15rem;">Active</div>
+              <div class="status on" style="margin-top:0.3rem;">Zero tool mutation</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Security Invariant</div>
+              <div class="v" style="color:var(--ok);">Clean (100%)</div>
+              <div class="hint" style="margin-top:0.3rem;">No settings.json edits</div>
+            </div>
           </div>
 
           <div class="card pad">
-            <div style="color:var(--muted); font-size:0.75rem; text-transform:uppercase;">Blindfold Interceptor</div>
-            <div style="font-size:1.5rem; font-weight:700; margin:0.3rem 0;" id="blindfold-port-display">3457</div>
-            <div style="font-size:0.78rem; color:var(--ok);">● Scope: api.anthropic.com, api.openai.com, chatgpt.com</div>
-          </div>
-
-          <div class="card pad">
-            <div style="color:var(--muted); font-size:0.75rem; text-transform:uppercase;">Zero-Mutation Status</div>
-            <div style="font-size:1.2rem; font-weight:700; margin:0.4rem 0; color:var(--ok);">Clean (100%)</div>
-            <div style="font-size:0.78rem; color:var(--muted);">No settings.json or config.toml mutation</div>
+            <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.75rem;">Environment Isolation & Host Routing</h3>
+            <div class="sec">
+              <div class="copyline">
+                <code>NO_PROXY=127.0.0.1,localhost (Safe from RTK/Headroom/VPN conflicts)</code>
+              </div>
+              <div class="copyline">
+                <code>Blindfold Hosts: api.anthropic.com, api.openai.com, chatgpt.com</code>
+              </div>
+              <div class="copyline">
+                <code>Admin Token Protection: mode 0600 (admin.token) required for state mutation</code>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Profile Editor Modal Overlay -->
+  <!-- Profile Modal Editor -->
   <div id="profile-modal-overlay" class="overlay" style="display:none;" onclick="if(event.target===this) closeProfileModal()">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="form-title">
       <div class="mh">
         <div>
           <strong id="form-title">Edit Provider Profile</strong>
-          <span id="active-tag" style="font-size:0.78rem; color:var(--ok); margin-left:0.5rem;"></span>
+          <span id="active-tag" style="font-size:0.75rem; color:var(--ok); margin-left:0.5rem; font-weight:600;"></span>
         </div>
-        <button class="icon" type="button" onclick="closeProfileModal()">✕</button>
+        <button class="icon" type="button" onclick="closeProfileModal()" aria-label="Close dialog">✕</button>
       </div>
 
       <form id="profile-form" onsubmit="saveProfile(event)" style="display:flex; flex-direction:column; overflow:hidden;">
-        <!-- Modal Tabs -->
-        <div style="padding:0.75rem 1.4rem 0; background:var(--side);">
-          <div class="tabs" style="margin-bottom:0;">
+        <!-- Modal Inset Tabs -->
+        <div style="padding:0.85rem 1.25rem 0.5rem; background:var(--card2);">
+          <div class="tabs">
             <button type="button" id="tab-button-general" class="tab-btn active" onclick="switchTab('tab-general')">General</button>
             <button type="button" id="tab-button-routing" class="tab-btn" onclick="switchTab('tab-routing')">Routing & Protocol</button>
             <button type="button" id="tab-button-models" class="tab-btn" onclick="switchTab('tab-models')">Model Slots</button>
-            <button type="button" id="tab-button-codex" class="tab-btn" onclick="switchTab('tab-codex')">Codex Roles</button>
-            <button type="button" id="tab-button-inspector" style="display:none;" onclick="switchTab('tab-inspector')">Hidden</button>
           </div>
         </div>
 
         <div class="mb">
           <!-- TAB 1: General -->
-          <div id="tab-general" class="tab-content active">
+          <div id="tab-general" class="tab-content active" style="display:grid; gap:0.9rem;">
             <div style="background:var(--card2); padding:0.75rem 1rem; border-radius:8px; border:1px solid var(--line);">
               <span class="hint" style="font-weight:600; display:block; margin-bottom:0.4rem;">Template Quick-Fill:</span>
               <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
@@ -831,13 +984,13 @@
           </div>
 
           <!-- TAB 2: Routing -->
-          <div id="tab-routing" class="tab-content">
+          <div id="tab-routing" class="tab-content" style="display:none; gap:0.9rem; flex-direction:column;">
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.9rem;">
               <label class="f">Tool Target
                 <select id="p-tool" onchange="onToolChange()">
                   <option value="auto">All compatible tools (auto)</option>
-                  <option value="anthropic">Claude Code only (claude)</option>
-                  <option value="responses">Codex only (codex)</option>
+                  <option value="claude">Claude Code only (claude)</option>
+                  <option value="codex">Codex only (codex)</option>
                 </select>
               </label>
               <label class="f">Outbound Format
@@ -868,8 +1021,8 @@
           </div>
 
           <!-- TAB 3: Models & 1M -->
-          <div id="tab-models" class="tab-content">
-            <div class="callout callout-warning" id="warn-1m-callout" style="display:none;">
+          <div id="tab-models" class="tab-content" style="display:none; gap:0.9rem; flex-direction:column;">
+            <div class="badge warn" id="warn-1m-callout" style="display:none; padding:0.5rem 0.75rem; border-radius:8px;">
               <span id="warn-1m-icon">⚠️</span> <span id="warn-1m-text">1M context flag is enabled</span>
             </div>
 
@@ -889,27 +1042,11 @@
             </div>
           </div>
 
-          <!-- TAB 4: Codex Roles -->
-          <div id="tab-codex" class="tab-content">
-            <div id="codex-names" style="display:grid; gap:0.8rem;">
-              <p class="hint">Published model names that Codex CLI sees via <code>/v1/models</code>:</p>
-              <label class="f">Main Model Role
-                <input type="text" id="p-public-main" placeholder="e.g. gpt-6-sol">
-              </label>
-              <label class="f">Review Model Role
-                <input type="text" id="p-public-review" placeholder="e.g. gpt-6-terra">
-              </label>
-              <label class="f">Subagent Model Role
-                <input type="text" id="p-public-subagent" placeholder="e.g. gpt-6-luna">
-              </label>
-            </div>
-          </div>
-
           <!-- Test Connection Box -->
           <div id="test-result" class="test-result-box">
             <div style="display:flex; justify-content:space-between; align-items:center;">
               <span id="test-status-badge" class="badge"></span>
-              <span id="test-latency" class="hint"></span>
+              <span id="test-latency" class="hint mono"></span>
             </div>
             <div id="test-sample" class="mono" style="margin-top:0.4rem; font-size:0.75rem; max-height:4rem; overflow:auto;"></div>
           </div>
@@ -930,47 +1067,84 @@
   </div>
 
   <div id="toast" class="toast"></div>
-
-  <!-- Reusable Datalist -->
   <datalist id="model-options"></datalist>
 
   <script>
-    // Navigation routing
-    function switchNavView(viewName) {
-      document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-      const activeLink = document.getElementById('nav-' + viewName);
-      if (activeLink) activeLink.classList.add('active');
+    // State & Globals
+    const ADMIN_TOKEN_KEY = 'llm-switcher-admin-token';
+    const servedToken = document.querySelector('meta[name="llm-switcher-token"]')?.content;
+    const hashTokenMatch = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
+    if (servedToken || hashTokenMatch) {
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, servedToken || hashTokenMatch[1]);
+    }
+    if (hashTokenMatch) {
+      history.replaceState(null, '', location.pathname + location.search + '#/routes');
+    }
 
-      document.querySelectorAll('.view-panel').forEach(el => el.style.display = 'none');
-      const targetView = document.getElementById('view-' + viewName);
-      if (targetView) targetView.style.display = 'block';
+    let state = {
+      port: 3456,
+      config: null,
+      activeProfile: '',
+      activeProfiles: {},
+      claudeBaseURL: ''
+    };
+    let currentlyEditingKey = '';
+    let creatingNew = false;
+    let formLoadedKey = null;
+    let formDirty = false;
+    let loadedModels = [];
+    let currentProfileBuffer = null;
+    let renderedSlotFormat = 'auto';
+    let logRefreshTimer = null;
+    let cachedCatalog = null;
+    let lastLogsCount = 0;
+    const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
 
-      const titles = {
-        routes: 'Routes & Profiles',
-        models: 'Dynamic Model Catalog',
-        logs: 'Request Inspector',
-        doctor: 'System Doctor'
+    // API Helper
+    async function api(path, opts = {}) {
+      const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || document.querySelector('meta[name="llm-switcher-token"]')?.content || '';
+      const headers = {
+        ...opts.headers,
+        'x-llm-switcher-token': token
       };
-      const titleEl = document.getElementById('page-title');
-      if (titleEl) titleEl.textContent = titles[viewName] || 'Routes & Profiles';
-
-      if (viewName === 'models') renderCatalogView();
-      if (viewName === 'logs') loadInspectorLogs();
+      const res = await fetch(path, { ...opts, headers });
+      if (res.status === 401) showToast('Unauthorized: check admin.token in server directory', true);
+      if (res.status === 409) setTimeout(loadStatus, 0);
+      return res;
     }
 
-    function toggleNavCollapse() {
-      const isCollapsed = document.documentElement.dataset.nav === 'collapsed';
-      document.documentElement.dataset.nav = isCollapsed ? '' : 'collapsed';
-      localStorage.setItem('lsw-nav', isCollapsed ? '' : 'collapsed');
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
+    // Theme Mode
     function applyThemeMode(mode) {
       document.documentElement.dataset.theme = mode;
+      localStorage.setItem('intact-theme', mode);
       localStorage.setItem('lsw-theme', mode);
       document.getElementById('btn-theme-dark')?.setAttribute('aria-pressed', mode === 'dark');
       document.getElementById('btn-theme-light')?.setAttribute('aria-pressed', mode === 'light');
     }
 
+    // Toast
+    let toastTimeout = null;
+    function showToast(msg, isErr = false) {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.textContent = msg;
+      toast.className = 'toast' + (isErr ? ' err' : '');
+      toast.style.display = 'block';
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => { toast.style.display = 'none'; }, 3200);
+    }
+
+    // Modal Control
     function openProfileModal(isNew = false) {
       const modal = document.getElementById('profile-modal-overlay');
       if (modal) modal.style.display = 'grid';
@@ -984,505 +1158,450 @@
       if (modal) modal.style.display = 'none';
     }
 
-    async function refreshCatalogUpstream() {
-      showToast('Refreshing model catalog from upstream...');
-      try {
-        const res = await api('/api/catalog/refresh', { method: 'POST' });
-        if (res.ok) {
-          showToast('Model catalog refreshed successfully!');
-          renderCatalogView();
+    // Close modal on Escape
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('profile-modal-overlay');
+        if (modal && modal.style.display !== 'none') {
+          closeProfileModal();
+        }
+      }
+    });
+
+    // Hash Router
+    function handleRoute() {
+      const hash = window.location.hash || '#/routes';
+      const route = hash.replace(/^#\/?/, '').split('/')[0] || 'routes';
+      const validRoutes = ['routes', 'models', 'logs', 'doctor'];
+      const activeRoute = validRoutes.includes(route) ? route : 'routes';
+
+      // Update active nav link
+      document.querySelectorAll('#sideNav .nav-link').forEach(link => {
+        if (link.getAttribute('data-nav') === activeRoute) {
+          link.setAttribute('aria-current', 'page');
         } else {
-          showToast('Failed to refresh catalog', true);
+          link.removeAttribute('aria-current');
         }
-      } catch {
-        showToast('Network error refreshing catalog', true);
+      });
+
+      // Show matching view panel
+      document.querySelectorAll('.view-panel').forEach(panel => {
+        panel.style.display = (panel.id === 'view-' + activeRoute) ? 'block' : 'none';
+      });
+
+      // Update dynamic header
+      updateHeader(activeRoute);
+
+      // Lazy load view content
+      if (activeRoute === 'models') renderCatalogView();
+      if (activeRoute === 'logs') loadInspectorLogs();
+    }
+    window.addEventListener('hashchange', handleRoute);
+
+    function updateHeader(route) {
+      const titleEl = document.getElementById('page-title');
+      const subEl = document.getElementById('status-sub');
+      const actionsEl = document.getElementById('ph-actions');
+      if (!titleEl || !subEl || !actionsEl) return;
+
+      const activeMap = state.activeProfiles || (state.config?.activeProfiles || {});
+      const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
+
+      if (route === 'routes') {
+        titleEl.textContent = 'Routes & Profiles';
+        if (activeTargets.length > 0) {
+          const parts = [];
+          if (activeMap.claude) parts.push('Claude: ' + activeMap.claude);
+          if (activeMap.codex) parts.push('Codex: ' + activeMap.codex);
+          subEl.textContent = 'Port ' + state.port + ' · Active for ' + parts.join(' · ');
+        } else {
+          subEl.textContent = 'Gateway is idle. Clients connect directly to official endpoints.';
+        }
+        actionsEl.innerHTML = `
+          <button class="btn btn-primary" onclick="openProfileModal(true)">+ Add Profile</button>
+          <button class="btn btn-outline" id="btn-toggle" onclick="toggleProxy()">${activeTargets.length > 0 ? 'Use official endpoints' : 'Activate compatible routes'}</button>
+          <button class="btn btn-outline" onclick="loadStatus()">Refresh</button>
+        `;
+      } else if (route === 'models') {
+        titleEl.textContent = 'Dynamic Model Catalog';
+        subEl.textContent = 'Auto-polled models from upstream providers to guarantee zero 404/drift errors.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline" id="btn-sync-catalog" onclick="refreshCatalogUpstream()">⚡ Sync Models with Upstream</button>
+          <button class="btn btn-outline" onclick="renderCatalogView()">Refresh</button>
+        `;
+      } else if (route === 'logs') {
+        titleEl.textContent = 'Request Inspector';
+        subEl.textContent = 'Real-time HTTP traffic ring buffer passing through the local edge gateway.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline btn-sm" onclick="clearInspectorLogs()">Clear</button>
+          <button class="btn btn-outline btn-sm" onclick="loadInspectorLogs()">Refresh</button>
+        `;
+      } else if (route === 'doctor') {
+        titleEl.textContent = 'System Health & Doctor';
+        subEl.textContent = 'Verification of loopback bindings, interceptor certificates, and zero-mutation guarantees.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline" onclick="loadStatus()">Re-check Status</button>
+        `;
       }
     }
 
-    async function renderCatalogView() {
-      const claudeCont = document.getElementById('catalog-claude-items');
-      const codexCont = document.getElementById('catalog-codex-items');
-      if (!claudeCont || !codexCont) return;
-
-      try {
-        const res = await api('/api/catalog');
-        const data = await res.json();
-        
-        claudeCont.innerHTML = '';
-        const claudeTiers = { opus: [], sonnet: [], haiku: [], fable: [] };
-        (data.claude?.models || []).forEach(m => {
-          if (claudeTiers[m.tier]) claudeTiers[m.tier].push(m.id);
-        });
-        for (const [tier, ids] of Object.entries(claudeTiers)) {
-          claudeCont.innerHTML += `<div style="font-size:0.82rem;"><span class="badge accent" style="text-transform:uppercase;">${tier}</span> <span class="mono" style="margin-left:0.4rem;">${ids.join(', ') || '(none)'}</span></div>`;
-        }
-
-        codexCont.innerHTML = '';
-        const codexRoles = { main: [], review: [], subagent: [] };
-        (data.codex?.models || []).forEach(m => {
-          if (codexRoles[m.role]) codexRoles[m.role].push(m.id);
-        });
-        for (const [role, ids] of Object.entries(codexRoles)) {
-          codexCont.innerHTML += `<div style="font-size:0.82rem;"><span class="badge ok" style="text-transform:uppercase;">${role}</span> <span class="mono" style="margin-left:0.4rem;">${ids.join(', ') || '(none)'}</span></div>`;
-        }
-      } catch {}
-    }
-  </script>
-
-  <!-- Complete Functional State & Form Logic -->
-  <script>
-
-    // /api/* needs the admin token. The gateway puts it in this page; an older `switch ui` link still
-    // brings it in the URL fragment, which is cleared from the address bar.
-    const ADMIN_TOKEN_KEY = 'llmSwitcherAdminToken';
-    (() => {
-      localStorage.removeItem(ADMIN_TOKEN_KEY);
-      const served = document.querySelector('meta[name="llm-switcher-token"]')?.content;
-      const m = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
-      if (served || m) sessionStorage.setItem(ADMIN_TOKEN_KEY, served || m[1]);
-      if (m) history.replaceState(null, '', location.pathname + location.search);
-    })();
-
-    // A config change carries the revision this page loaded. The gateway answers 409 when another tab
-    // or the CLI saved in the meantime; the page then reloads instead of overwriting that change.
-    const CHANGE_PATHS = new Set(['/api/switch', '/api/toggle', '/api/save-profile', '/api/delete-profile']);
-
-    async function api(path, opts = {}) {
-      const headers = { ...(opts.headers || {}), 'x-llm-switcher-token': sessionStorage.getItem(ADMIN_TOKEN_KEY) || '' };
-      let body = opts.body;
-      if (CHANGE_PATHS.has(path) && typeof body === 'string' && state.revision) {
-        body = JSON.stringify({ ...JSON.parse(body), revision: state.revision });
-      }
-      const res = await fetch(path, { ...opts, headers, body });
-      if (res.status === 401) showToast('Not authorized. Open the dashboard with `switch ui`.', true);
-      if (res.status === 409) setTimeout(loadStatus, 0);
-      return res;
-    }
-
-    let state = {
-      config: null,
-      activeProfile: '',
-      activeProfiles: {},
-      claudeBaseURL: ''
-    };
-    let currentlyEditingKey = '';
-    let creatingNew = false;
-    let formLoadedKey = null;
-    let formDirty = false;
-    let loadedModels = [];
-    let currentProfileBuffer = null;
-    let renderedSlotFormat = 'auto';
-    const MASKED_KEY = '__LLM_SWITCHER_KEEP_KEY__';
-    // Order matters: publicModels is read by position when codexRoles has no entry.
-    const CODEX_ROLE_SLOTS = ['main', 'review', 'subagent'];
-
-    const LEGACY_SLOT_KEYS = {
-      main: ['opus'],
-      review: ['sonnet'],
-      subagent: ['fast', 'fallback', 'haiku', 'fable'],
-      default: ['sonnet', 'opus', 'haiku', 'fable']
-    };
-
-    const SLOT_CONFIG = {
-      anthropic: {
-        heading: 'Claude Code tier mapping',
-        slots: [
-          { id: 'opus', label: 'Opus Model', placeholder: 'e.g. ag/claude-opus-4-6-thinking', allow1M: true },
-          { id: 'sonnet', label: 'Sonnet Model', placeholder: 'e.g. ag/claude-sonnet-4-6', allow1M: true },
-          { id: 'haiku', label: 'Haiku Model', placeholder: 'e.g. ag/gemini-3.7-flash-high', allow1M: true },
-          { id: 'fable', label: 'Fable Model', placeholder: 'e.g. ag/gemini-3.8-flash-high', allow1M: true }
-        ],
-        warning: '<strong>1M context notice:</strong> The <code>1M context</code> checkbox only records that a tier may use a 1M window. The gateway unlocks the context on the request itself; it never rewrites <code>settings.json</code> or the launcher environment. A model without native 1M support still answers <code>HTTP 400 (Context Exceeded)</code>.',
-        icon: 'NOTE'
-      },
-      responses: {
-        heading: 'Codex model roles',
-        slots: [
-          { id: 'main', label: 'Main model', placeholder: 'e.g. ag/gemini-3.8-flash or gpt-4o', allow1M: true },
-          { id: 'review', label: 'Review model', placeholder: 'e.g. ag/gemini-3.7-flash-medium', allow1M: false },
-          { id: 'subagent', label: 'Subagent model', placeholder: 'e.g. ag/gemini-3.6-flash-low', allow1M: false }
-        ],
-        warning: '<strong>Context notice:</strong> The launcher applies <code>model</code>, <code>review_model</code>, and <code>agents.default_subagent_model</code> through Codex config overrides. The 1M option also sets <code>model_context_window</code> and the auto-compact limit.',
-        icon: 'NOTE'
-      },
-    };
-    SLOT_CONFIG.auto = SLOT_CONFIG.anthropic;
-
-    // Helper: Anti-XSS Sanitizer
-    function escapeHtml(str) {
-      if (str === null || str === undefined) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
-
-    function applyTheme(theme) {
-      document.documentElement.dataset.theme = theme;
-      const btn = document.getElementById('btn-theme');
-      if (btn) {
-        const nextTheme = theme === 'light' ? 'dark' : 'light';
-        btn.textContent = `${nextTheme[0].toUpperCase()}${nextTheme.slice(1)} theme`;
-        btn.setAttribute('aria-label', `Use ${nextTheme} theme`);
-      }
-      try { localStorage.setItem('lsw-theme', theme); } catch (e) {}
-    }
-
-    function toggleTheme() {
-      const current = document.documentElement.dataset.theme || 'dark';
-      applyTheme(current === 'light' ? 'dark' : 'light');
-    }
-
-    function showToast(msg, isError = false) {
-      const t = document.getElementById('toast');
-      t.innerText = msg;
-      t.style.borderColor = isError ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-strong)';
-      t.style.background = isError ? 'var(--danger-muted)' : 'var(--surface-elevated)';
-      t.style.color = isError ? 'var(--danger)' : 'var(--text)';
-      t.style.display = 'block';
-      setTimeout(() => t.style.display = 'none', 3500);
-    }
-
+    // Modal Tabs
     function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(btn => {
-        const selected = btn.getAttribute('aria-controls') === tabId;
-        btn.classList.toggle('active', selected);
-        btn.setAttribute('aria-selected', String(selected));
-        btn.tabIndex = selected ? 0 : -1;
+      document.querySelectorAll('#profile-form .tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('#profile-form .tab-content').forEach(c => {
+        c.classList.remove('active');
+        c.style.display = 'none';
       });
-      document.querySelectorAll('.tab-pane').forEach(pane => {
-        const selected = pane.id === tabId;
-        pane.classList.toggle('active', selected);
-        pane.hidden = !selected;
-      });
-    }
 
-    function getActiveSlotConfig(format) {
-      return SLOT_CONFIG[format] || SLOT_CONFIG.auto;
-    }
-
-    function valueForSlot(values, slot) {
-      const source = values || {};
-      if (Object.hasOwn(source, slot)) return source[slot] || '';
-      for (const legacyKey of LEGACY_SLOT_KEYS[slot] || []) {
-        if (source[legacyKey]) return source[legacyKey];
+      const btnId = tabId.replace('tab-', 'tab-button-');
+      document.getElementById(btnId)?.classList.add('active');
+      const target = document.getElementById(tabId);
+      if (target) {
+        target.classList.add('active');
+        target.style.display = 'grid';
       }
-      return '';
     }
 
-    function flagForSlot(values, slot) {
-      const source = values || {};
-      if (Object.hasOwn(source, slot)) return Boolean(source[slot]);
-      for (const legacyKey of LEGACY_SLOT_KEYS[slot] || []) {
-        if (Object.hasOwn(source, legacyKey)) return Boolean(source[legacyKey]);
+    // Slot Configs
+    function getToolAvatar(profileKey, profile) {
+      const k = (profileKey || '').toLowerCase();
+      const n = (profile?.name || '').toLowerCase();
+      const t = (profile?.tool || '').toLowerCase();
+      const u = (profile?.baseURL || '').toLowerCase();
+
+      let iconFile = 'openai.png';
+      let brandName = 'AI Provider';
+
+      if (k.includes('claude') || n.includes('claude') || t === 'claude' || t === 'anthropic' || u.includes('anthropic')) {
+        iconFile = 'claude.png';
+        brandName = 'Anthropic Claude';
+      } else if (k.includes('codex') || n.includes('codex') || t === 'codex' || t === 'responses') {
+        iconFile = 'codex.png';
+        brandName = 'OpenAI Codex';
+      } else if (k.includes('openai') || n.includes('openai') || u.includes('openai')) {
+        iconFile = 'openai.png';
+        brandName = 'OpenAI';
+      } else if (k.includes('intact') || n.includes('intact')) {
+        iconFile = 'intact.svg';
+        brandName = 'Intact Gateway';
+      } else if (k.includes('gemini') || n.includes('gemini') || k.includes('vertex') || n.includes('vertex') || u.includes('googleapis')) {
+        iconFile = 'gemini.png';
+        brandName = 'Google Gemini';
+      } else if (k.includes('openrouter') || n.includes('openrouter') || u.includes('openrouter')) {
+        iconFile = 'openrouter.png';
+        brandName = 'OpenRouter';
+      } else if (k.includes('local') || k.includes('ollama') || n.includes('ollama') || u.includes('11434')) {
+        iconFile = 'ollama.png';
+        brandName = 'Ollama';
+      } else if (k.includes('antigravity') || n.includes('antigravity')) {
+        iconFile = 'antigravity.png';
+        brandName = 'Antigravity';
+      } else if (k.includes('deepseek') || n.includes('deepseek')) {
+        iconFile = 'deepseek.png';
+        brandName = 'DeepSeek';
+      } else if (k.includes('groq') || n.includes('groq')) {
+        iconFile = 'groq.png';
+        brandName = 'Groq';
+      } else if (k.includes('qwen') || n.includes('qwen')) {
+        iconFile = 'qwen.png';
+        brandName = 'Qwen';
+      } else if (k.includes('github') || n.includes('github')) {
+        iconFile = 'github.png';
+        brandName = 'GitHub Copilot';
       }
-      return false;
+
+      return '<span class="av logo" title="' + escapeHtml(brandName) + '"><img src="/icons/' + iconFile + '" alt="" loading="lazy"></span>';
     }
 
-    function renderModelSlots(format) {
-      const cfg = getActiveSlotConfig(format);
-      const heading = document.getElementById('model-slot-heading');
-      const warnText = document.getElementById('warn-1m-text');
-      const warnIcon = document.getElementById('warn-1m-icon');
+    const SLOT_CONFIGS = {
+      auto: {
+        title: 'Universal Routing Slots',
+        slots: [
+          { id: 'sonnet', name: 'Claude Sonnet', placeholder: 'claude-3-7-sonnet or antigravity/gemini-3.8-flash' },
+          { id: 'opus', name: 'Claude Opus', placeholder: 'claude-3-opus or antigravity/gemini-3.8-flash' },
+          { id: 'haiku', name: 'Claude Haiku', placeholder: 'claude-3-5-haiku or antigravity/gemini-3.8-flash' },
+          { id: 'fable', name: 'Claude Fable', placeholder: 'claude-fable-5-1 or antigravity/gemini-3.8-flash' },
+          { id: 'main', name: 'Codex Main Session', placeholder: 'gpt-5.6-sol or gpt-4o' },
+          { id: 'review', name: 'Codex /review Override', placeholder: 'gpt-5.6-terra or gpt-4o' },
+          { id: 'subagent', name: 'Codex Subagent', placeholder: 'gpt-5.6-luna or o3-mini' },
+          { id: 'default', name: 'Default Fallback Model', placeholder: 'gpt-4o' }
+        ]
+      },
+      claude: {
+        title: 'Claude Code Model Tiers (Anthropic)',
+        slots: [
+          { id: 'sonnet', name: 'Sonnet Slot (Routine & Coding)', placeholder: 'claude-3-7-sonnet' },
+          { id: 'opus', name: 'Opus Slot (Deep Reasoning)', placeholder: 'claude-3-opus' },
+          { id: 'haiku', name: 'Haiku Slot (Fast & Mechanical)', placeholder: 'claude-3-5-haiku' },
+          { id: 'fable', name: 'Fable Slot (Specialized / Lightweight)', placeholder: 'claude-fable-5-1' }
+        ]
+      },
+      codex: {
+        title: 'OpenAI Codex Model Roles (Responses API)',
+        slots: [
+          { id: 'main', name: 'Main Session Model (model)', placeholder: 'gpt-5.6-sol' },
+          { id: 'review', name: 'Review Model (review_model)', placeholder: 'gpt-5.6-terra' },
+          { id: 'subagent', name: 'Subagent Model (agents.default_subagent_model)', placeholder: 'gpt-5.6-luna' }
+        ]
+      }
+    };
+
+    function getActiveSlotConfig(fmt) {
+      if (fmt === 'claude' || fmt === 'anthropic') return SLOT_CONFIGS.claude;
+      if (fmt === 'codex' || fmt === 'responses') return SLOT_CONFIGS.codex;
+      return SLOT_CONFIGS.auto;
+    }
+
+    function valueForSlot(defaultModels, slotId) {
+      if (!defaultModels) return '';
+      return defaultModels[slotId] || '';
+    }
+
+    function flagForSlot(model1M, slotId) {
+      if (!model1M) return false;
+      return Boolean(model1M[slotId]);
+    }
+
+    function renderModelSlots(slotFmt, p) {
       const container = document.getElementById('slot-fields');
-
-      if (heading) heading.textContent = cfg.heading;
-      if (warnText) warnText.innerHTML = cfg.warning;
-      if (warnIcon) warnIcon.textContent = cfg.icon;
+      const heading = document.getElementById('model-slot-heading');
       if (!container) return;
 
-      const p = currentProfileBuffer || {};
-      const defs = p.defaultModels || {};
-      const m1m = p.model1M || {};
+      const cfg = getActiveSlotConfig(slotFmt);
+      renderedSlotFormat = slotFmt;
+      if (heading) heading.textContent = cfg.title;
+      container.innerHTML = '';
 
-      container.innerHTML = cfg.slots.map(s => {
-        const val = valueForSlot(defs, s.id);
-        const checked = flagForSlot(m1m, s.id);
+      for (const s of cfg.slots) {
+        const val = currentProfileBuffer ? valueForSlot(currentProfileBuffer.defaultModels, s.id) : valueForSlot(p?.defaultModels, s.id);
+        const checked = currentProfileBuffer ? flagForSlot(currentProfileBuffer.model1M, s.id) : flagForSlot(p?.model1M, s.id);
 
-        return `
-          <div class="form-group ${cfg.slots.length === 1 ? 'full' : ''}">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
-              <label for="p-${s.id}">${escapeHtml(s.label)}</label>
-              ${s.allow1M ? `
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; color: var(--accent); text-transform: none;">
-                  <input type="checkbox" id="p-${s.id}-1m" style="width: 13px; height: 13px;" onchange="update1mWarnings()" ${checked ? 'checked' : ''}> 1M context
-                  <span id="warn-${s.id}-1m" class="badge-1m-warn" style="display: ${checked ? 'inline-block' : 'none'};" title="Risk of HTTP 400 if model does not support 1M context">Check support</span>
-                </label>
-              ` : ''}
-            </div>
-            <input type="text" id="p-${s.id}" list="model-options" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
+        const slotRow = document.createElement('div');
+        slotRow.style.cssText = 'display:flex; flex-direction:column; gap:0.25rem;';
+        slotRow.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label for="p-${s.id}" style="font-size:0.82rem; font-weight:500;">${escapeHtml(s.name)}</label>
+            <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:var(--accent); cursor:pointer;">
+              <input type="checkbox" id="p-${s.id}-1m" style="width:13px; height:13px; min-height:0;" onchange="update1mWarnings()" ${checked ? 'checked' : ''}>
+              1M context
+            </label>
           </div>
+          <input type="text" id="p-${s.id}" list="model-options" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
         `;
-      }).join('');
-
-      renderedSlotFormat = format;
+        container.appendChild(slotRow);
+      }
       update1mWarnings();
     }
 
-    function onToolChange(newFmt) {
-      collectCurrentSlotValues(renderedSlotFormat);
-      renderModelSlots(newFmt);
-      renderCodexTab(newFmt);
-      if (loadedModels.length > 0) renderModelBrowser(loadedModels);
-      formDirty = true;
+    function onToolChange() {
+      const toolVal = document.getElementById('p-tool').value;
+      renderModelSlots(toolVal, currentProfileBuffer);
     }
 
-    // The Codex tab applies to every profile that can serve the Responses protocol: `responses` and
-    // `auto`. The gateway applies these settings to both, so hiding them would hide live settings.
-    const servesCodex = (format) => format === 'responses' || !format || format === 'auto';
-
-    function renderCodexTab(format) {
-      const applies = servesCodex(format);
-      const btn = document.getElementById('tab-button-codex');
-      if (btn) btn.hidden = !applies;
-      const names = document.getElementById('codex-names');
-      if (names) names.hidden = !applies;
-      if (!applies && document.getElementById('tab-codex')?.classList.contains('active')) {
-        switchTab('tab-general');
-      }
-
-      const p = currentProfileBuffer || {};
-      const roles = p.codexRoles || {};
-      const published = Array.isArray(p.publicModels) ? p.publicModels : [];
-      CODEX_ROLE_SLOTS.forEach((slot, i) => {
-        const input = document.getElementById(`p-public-${slot}`);
-        // A saved role key wins even when blank; the position fallback is for profiles without codexRoles.
-        if (input) input.value = Object.hasOwn(roles, slot) ? (roles[slot] || '') : (published[i] || '');
-      });
-
-    }
-
-    // One set of inputs feeds both keys: codexRoles is the role mapping the gateway
-    // resolves, publicModels is the flat list /v1/models serves. Writing only one of
-    // them lets the two drift apart.
-    function collectCodexValues(profile) {
-      if (!servesCodex(document.getElementById('p-tool')?.value || 'auto')) return;
-
-      const roles = {};
-      const published = [];
-      CODEX_ROLE_SLOTS.forEach(slot => {
-        const value = document.getElementById(`p-public-${slot}`)?.value.trim() || '';
-        roles[slot] = value;
-        if (value && !published.includes(value)) published.push(value);
-      });
-      profile.codexRoles = roles;
-      profile.publicModels = published;
-
-    }
-
-    function collectCurrentSlotValues(format = renderedSlotFormat) {
+    function collectCurrentSlotValues() {
+      const cfg = getActiveSlotConfig(renderedSlotFormat);
       if (!currentProfileBuffer) currentProfileBuffer = {};
-      if (!currentProfileBuffer.defaultModels) currentProfileBuffer.defaultModels = {};
-      if (!currentProfileBuffer.model1M) currentProfileBuffer.model1M = {};
-
-      const cfg = getActiveSlotConfig(format);
-      cfg.slots.forEach(s => {
-        const inp = document.getElementById(`p-${s.id}`);
-        if (inp) currentProfileBuffer.defaultModels[s.id] = inp.value.trim();
-        const chk = document.getElementById(`p-${s.id}-1m`);
-        if (chk) currentProfileBuffer.model1M[s.id] = chk.checked;
-      });
+      const defaultModels = { ...(currentProfileBuffer.defaultModels || {}) };
+      const model1M = { ...(currentProfileBuffer.model1M || {}) };
+      for (const s of cfg.slots) {
+        const inp = document.getElementById('p-' + s.id);
+        const chk = document.getElementById('p-' + s.id + '-1m');
+        if (inp) {
+          const val = inp.value.trim();
+          if (val) defaultModels[s.id] = val;
+          else delete defaultModels[s.id];
+        }
+        if (chk) {
+          if (chk.checked) model1M[s.id] = true;
+          else delete model1M[s.id];
+        }
+      }
+      currentProfileBuffer.defaultModels = defaultModels;
+      currentProfileBuffer.model1M = model1M;
+      return { defaultModels, model1M };
     }
 
     function update1mWarnings() {
-      const currentFmt = document.getElementById('p-tool')?.value || 'auto';
-      const cfg = getActiveSlotConfig(currentFmt);
-      cfg.slots.forEach(s => {
-        const chk = document.getElementById(`p-${s.id}-1m`);
-        const badge = document.getElementById(`warn-${s.id}-1m`);
-        if (chk && badge) {
-          badge.style.display = chk.checked ? 'inline-block' : 'none';
-        }
-      });
+      const cfg = getActiveSlotConfig(renderedSlotFormat);
+      let any1m = false;
+      for (const s of cfg.slots) {
+        const chk = document.getElementById('p-' + s.id + '-1m');
+        if (chk && chk.checked) any1m = true;
+      }
+      const warnCallout = document.getElementById('warn-1m-callout');
+      if (warnCallout) warnCallout.style.display = any1m ? 'inline-flex' : 'none';
     }
 
+    // Prefetch Counts for Nav Badges
+    async function prefetchNavData() {
+      try {
+        const res = await api('/api/catalog');
+        if (res.ok) {
+          const catalog = await res.json();
+          cachedCatalog = catalog;
+          const claudeModels = Array.isArray(catalog.claude?.models) ? catalog.claude.models : [];
+          const codexModels = Array.isArray(catalog.codex?.models) ? catalog.codex.models : [];
+          const count = claudeModels.length + codexModels.length;
+          const ctModels = document.getElementById('ct-models');
+          if (ctModels && count > 0) ctModels.textContent = count;
+        }
+      } catch {}
+
+      try {
+        const res = await api('/api/logs');
+        if (res.ok) {
+          const data = await res.json();
+          const logs = Array.isArray(data.logs) ? data.logs : [];
+          lastLogsCount = logs.length;
+          const ctLogs = document.getElementById('ct-logs');
+          if (ctLogs && lastLogsCount > 0) ctLogs.textContent = lastLogsCount;
+        }
+      } catch {}
+    }
+
+    // Load Status
     async function loadStatus() {
       try {
         const res = await api('/api/status');
+        if (!res.ok) return;
         const data = await res.json();
-        if (res.status === 401) {
-          document.getElementById('status-title').textContent = 'Dashboard locked';
-          document.getElementById('status-sub').textContent = 'Run `switch ui` in a terminal. It opens this page with its access token.';
-          return;
-        }
-        if (!res.ok) {
-          showToast(data.error || `Gateway error HTTP ${res.status}`, true);
-          return;
-        }
-        state = data;
-        document.querySelectorAll('.gateway-port').forEach(el => { el.textContent = state.port; });
-        if (!creatingNew && (!currentlyEditingKey || !state.config.profiles[currentlyEditingKey])) {
-          // Pick the first profile that is actually active for any CLI target,
-          // falling back to the legacy activeProfile or the first profile key.
-          const activeMap = state.activeProfiles || {};
-          const firstActiveKey = Object.values(activeMap).find(k => k && state.config.profiles[k]);
-          currentlyEditingKey = firstActiveKey
-            || (state.config.profiles[state.activeProfile] ? state.activeProfile : null)
-            || (Object.keys(state.config.profiles)[0] || '');
-          formDirty = false;
-        }
+        state = { ...state, ...data };
         render();
+        updateHeader(window.location.hash.replace(/^#\/?/, '').split('/')[0] || 'routes');
+        prefetchNavData();
       } catch (err) {
-        showToast('Failed to connect to gateway service', true);
+        console.error('Failed to load status', err);
       }
-    }
-
-    function isAnyTargetActive() {
-      return Object.values(state.activeProfiles || {}).some(Boolean);
     }
 
     function render() {
-      const dot = document.getElementById('status-dot');
-      const title = document.getElementById('status-title');
-      const sub = document.getElementById('status-sub');
-      const toggleBtn = document.getElementById('btn-toggle');
+      document.querySelectorAll('.gateway-port').forEach(el => {
+        el.textContent = state.port || '3456';
+      });
 
-      const activeMap = state.activeProfiles || (state.config.activeProfiles || {});
+      const activeMap = state.activeProfiles || (state.config?.activeProfiles || {});
       const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
       const isAnyActive = activeTargets.length > 0;
 
-      if (isAnyActive) {
-        dot.className = 'status-dot active';
-        title.innerText = `Gateway active for ${activeTargets.length} client${activeTargets.length > 1 ? 's' : ''}`;
-        const asideIndicator = document.getElementById('status-aside-indicator');
-        if (asideIndicator) {
-          asideIndicator.className = 'status on';
-          asideIndicator.textContent = `Active (${activeTargets.length})`;
-        }
-        const parts = [];
-        if (activeMap.claude) parts.push(`Claude: ${activeMap.claude}`);
-        if (activeMap.codex) parts.push(`Codex: ${activeMap.codex}`);
-        sub.innerText = `Port ${state.port} | ${parts.join(' | ')}`;
-        toggleBtn.className = 'btn btn-danger';
-        toggleBtn.innerText = 'Use official endpoints';
-      } else {
-        dot.className = 'status-dot';
-        title.innerText = 'Official endpoints in use';
-        const asideIndicator = document.getElementById('status-aside-indicator');
-        if (asideIndicator) {
-          asideIndicator.className = 'status';
-          asideIndicator.textContent = 'Idle (Official)';
-        }
-        sub.innerText = 'Gateway is idle. Clients connect directly to official endpoints.';
-        toggleBtn.className = 'btn btn-success';
-        toggleBtn.innerText = 'Activate compatible routes';
+      // Update Aside Indicators
+      const asideIndicator = document.getElementById('status-aside-indicator');
+      if (asideIndicator) {
+        asideIndicator.className = isAnyActive ? 'status on' : 'status';
+        asideIndicator.textContent = isAnyActive ? 'Active (' + activeTargets.length + ')' : 'Idle';
       }
 
+      // Update Nav Counts
+      const profilesList = Object.entries(state.config?.profiles || {});
+      const ctRoutes = document.getElementById('ct-routes');
+      if (ctRoutes) ctRoutes.textContent = isAnyActive ? activeTargets.length + ' on' : profilesList.length;
+
+      const ctModels = document.getElementById('ct-models');
+      if (ctModels && cachedCatalog) {
+        const count = (cachedCatalog.claude?.models?.length || 0) + (cachedCatalog.codex?.models?.length || 0);
+        if (count > 0) ctModels.textContent = count;
+      }
+
+      const ctLogs = document.getElementById('ct-logs');
+      if (ctLogs && lastLogsCount > 0) ctLogs.textContent = lastLogsCount;
+
+      // Update Blindfold display
       const bfEl = document.getElementById('blindfold-port-display');
       if (bfEl) {
         const bf = state.config?.blindfold;
-        bfEl.textContent = (bf && bf.port)
-          ? `port ${bf.port} — host ${bf.host || 'api.anthropic.com, api.openai.com, chatgpt.com'}, prefix ${bf.prefix || 'default'}`
-          : 'not configured (the tools reach the provider directly)';
+        bfEl.textContent = (bf && bf.port) ? 'Port ' + bf.port : 'Not active';
       }
 
-      // Update the two tool slots
+      // Render CLI Targets Rows
       const slots = [
         { id: 'claude', name: 'Claude Code', key: 'claude' },
         { id: 'codex', name: 'Codex', key: 'codex' }
       ];
 
       for (const slot of slots) {
-        const card = document.getElementById(`card-slot-${slot.id}`);
-        const badge = document.getElementById(`badge-slot-${slot.id}`);
-        const select = document.getElementById(`select-slot-${slot.id}`);
+        const badge = document.getElementById('badge-slot-' + slot.id);
+        const select = document.getElementById('select-slot-' + slot.id);
         const currentActive = activeMap[slot.key];
 
         if (select) {
           select.innerHTML = '<option value="">Official endpoint</option>';
-          for (const [key, p] of Object.entries(state.config.profiles)) {
+          for (const [key, p] of profilesList) {
             const tool = p.tool || 'auto';
             if (tool === 'auto' || tool === slot.key) {
               const opt = document.createElement('option');
               opt.value = key;
-              opt.textContent = `${p.name} (${key})`;
+              opt.textContent = p.name + ' (' + key + ')';
               select.appendChild(opt);
             }
           }
           select.value = currentActive || '';
         }
 
-        if (currentActive) {
-          if (card) card.classList.add('active');
-          if (badge) {
-            badge.className = 'badge badge-direct';
+        if (badge) {
+          if (currentActive) {
+            badge.className = 'badge ok';
             badge.textContent = currentActive;
-          }
-        } else {
-          if (card) card.classList.remove('active');
-          if (badge) {
-            badge.className = 'badge badge-outline';
+          } else {
+            badge.className = 'badge outline';
             badge.textContent = 'OFF';
           }
         }
       }
 
-      // Render Cards Grid
+      // Render Profiles Grid (Intact Style)
       const grid = document.getElementById('profiles-grid');
+      if (!grid) return;
       grid.innerHTML = '';
 
-      for (const [key, p] of Object.entries(state.config.profiles)) {
+      for (const [key, p] of profilesList) {
         const activeCLIs = [];
         if (activeMap.claude === key) activeCLIs.push('Claude');
         if (activeMap.codex === key) activeCLIs.push('Codex');
         const isActiveAny = activeCLIs.length > 0;
         const isEditing = (key === currentlyEditingKey);
-        const shortFmt = (f) => ({ auto: 'auto', claude: 'claude', codex: 'codex' }[f] || f || 'auto');
-        const routeBadge = `${shortFmt(p.tool || 'auto')}→${shortFmt(p.outFormat || p.mode)}`;
 
         const card = document.createElement('div');
-        card.className = `profile-card ${isEditing ? 'editing' : ''} ${isActiveAny ? 'active' : ''}`;
-        card.setAttribute('aria-label', `${p.name} provider profile`);
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', (ev) => {
-          // Don't trigger if clicked on toggle switch or interactive buttons
-          if (ev.target.closest('.card-toggle') || ev.target.closest('input') || ev.target.closest('button')) return;
-          selectProfileForEdit(key);
-        });
+        card.className = 'pcard' + (isActiveAny ? ' active' : '');
+        card.setAttribute('aria-label', p.name + ' profile');
+
+        const toolAv = getToolAvatar(key, p);
+        const routeBadge = (p.tool || 'auto') + ' → ' + (p.outFormat || p.mode || 'chat');
 
         const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
         const pCfg = getActiveSlotConfig(slotFmt);
-        const modelsSummaryHtml = pCfg.slots.map(s => {
-          const val = valueForSlot(p.defaultModels, s.id) || '-';
+        const modelChips = pCfg.slots.map(s => {
+          const val = valueForSlot(p.defaultModels, s.id);
+          if (!val) return '';
           const has1m = flagForSlot(p.model1M, s.id);
-          const label = s.id.charAt(0).toUpperCase() + s.id.slice(1);
-          return `<div><strong>${label}:</strong> ${escapeHtml(val)} ${has1m ? '<span class="badge-1m">1M</span>' : ''}</div>`;
-        }).join('');
+          return '<span class="chip"><span class="faint">' + escapeHtml(s.name) + ':</span> ' + escapeHtml(val) + (has1m ? ' <b>1M</b>' : '') + '</span>';
+        }).filter(Boolean).join('');
 
         card.innerHTML = `
-          <div class="card-top">
-            <div class="card-name-group">
-              <div class="card-name">${escapeHtml(p.name)}</div>
-              <span class="badge badge-${escapeHtml(p.mode || 'hybrid')}">${escapeHtml(p.mode || 'hybrid')}</span>
-              <span class="badge badge-route" title="Client input -> Upstream output">${escapeHtml(routeBadge)}</span>
+          <div class="top">
+            ${toolAv}
+            <div style="flex:1; min-width:0;">
+              <div class="nm">${escapeHtml(p.name)}</div>
+              <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-top:0.15rem;">
+                <span class="status ${isActiveAny ? 'on' : ''}">${isActiveAny ? 'Active (' + activeCLIs.join(', ') + ')' : 'Idle'}</span>
+                <span class="badge accent">${escapeHtml(routeBadge)}</span>
+              </div>
             </div>
-            <div class="card-toggle" style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-              <span style="font-size: 11px; font-weight: 600; color: ${isActiveAny ? 'var(--success)' : 'var(--text-dim)'};">${isActiveAny ? 'ACTIVE' : 'OFF'}</span>
-              <label class="switch">
-                <input type="checkbox" aria-label="Activate ${escapeHtml(p.name)} for compatible clients" ${isActiveAny ? 'checked' : ''}>
-                <span class="slider"></span>
-              </label>
-            </div>
+            <label class="switch" onclick="event.stopPropagation()">
+              <input type="checkbox" ${isActiveAny ? 'checked' : ''} onchange="toggleProfileAllCli('${escapeHtml(key)}', this.checked)">
+              <span></span>
+            </label>
           </div>
-          <div class="card-url">${escapeHtml(p.baseURL)}</div>
-          <div class="card-models">
-            ${modelsSummaryHtml}
+          <div class="copyline" onclick="event.stopPropagation()">
+            <code>${escapeHtml(p.baseURL)}</code>
           </div>
-          <div class="card-footer">
-            <button type="button" class="btn btn-outline btn-sm profile-edit" aria-pressed="${isEditing}" onclick="selectProfileForEdit('${escapeHtml(key)}')">
-              ${isEditing ? 'Editing' : 'Edit profile'}
+          ${modelChips ? '<div class="chips">' + modelChips + '</div>' : ''}
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:auto; padding-top:0.5rem; border-top:1px solid var(--line);">
+            <button type="button" class="btn btn-outline btn-sm" onclick="selectProfileForEdit('${escapeHtml(key)}')">
+              ${isEditing ? 'Editing Profile' : 'Edit Profile'}
             </button>
-            <div>
-              ${activeCLIs.map(c => `<span class="badge badge-direct" style="font-size: 9px; margin-left: 3px;">${escapeHtml(c)}</span>`).join('')}
-            </div>
+            <span class="mono faint" style="font-size:0.75rem;">${escapeHtml(key)}</span>
           </div>
         `;
 
-        const toggleWrap = card.querySelector('.card-toggle');
-        toggleWrap.addEventListener('click', ev => ev.stopPropagation());
-        toggleWrap.querySelector('input').addEventListener('change', ev => toggleProfileAllCli(key, ev.target.checked));
         grid.appendChild(card);
       }
 
@@ -1492,7 +1611,7 @@
     }
 
     function selectProfileForEdit(key) {
-      if (formDirty && key !== formLoadedKey && !confirm('Discard unsaved changes to this provider?')) return;
+      if (formDirty && key !== formLoadedKey && !confirm('Discard unsaved changes?')) return;
       currentlyEditingKey = key;
       creatingNew = false;
       formDirty = false;
@@ -1501,7 +1620,7 @@
     }
 
     async function switchCliTarget(target, profileKey) {
-      showToast(`Setting ${target} active profile...`);
+      showToast('Setting ' + target + ' target...');
       try {
         const res = await api('/api/switch', {
           method: 'POST',
@@ -1509,423 +1628,241 @@
           body: JSON.stringify({ target, profile: profileKey || null })
         });
         const data = await res.json();
-        if (data.success) {
-          showToast(`Updated ${target} to "${profileKey || 'Official'}"!`);
-          loadStatus();
+        if (data.ok) {
+          showToast('Updated ' + target + ' routing');
+          await loadStatus();
         } else {
-          showToast(data.error || 'Failed to switch', true);
+          showToast(data.error || 'Failed to switch target', true);
         }
       } catch (err) {
-        showToast('Error switching target', true);
+        showToast('Network error switching target', true);
       }
     }
 
-    async function toggleProfileAllCli(key, isChecked) {
-      if (isChecked) {
-        showToast(`Activating provider "${key}"...`);
-        try {
-          const res = await api('/api/switch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ profile: key })
-          });
-          const data = await res.json();
-          if (data.success) {
-            showToast(`Provider "${key}" activated!`);
-            loadStatus();
-          } else {
-            showToast(data.error || 'Failed to switch', true);
-            loadStatus();
-          }
-        } catch (err) {
-          showToast('Error activating provider', true);
-          loadStatus();
+    async function toggleProfileAllCli(key, enable) {
+      showToast((enable ? 'Activating ' : 'Deactivating ') + key + '...');
+      try {
+        const res = await api('/api/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profile: key, deactivate: !enable })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast(key + (enable ? ' activated' : ' deactivated'));
+          await loadStatus();
+        } else {
+          showToast(data.error || 'Failed to toggle profile', true);
         }
-      } else {
-        showToast(`Deactivating provider "${key}"...`);
-        try {
-          const res = await api('/api/switch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deactivate: key })
-          });
-          const data = await res.json();
-          if (!data.success) throw new Error(data.error || 'Failed');
-          showToast(`Deactivated "${key}"!`);
-          loadStatus();
-        } catch (err) {
-          showToast('Error deactivating provider', true);
-          loadStatus();
-        }
+      } catch (err) {
+        showToast('Network error toggling profile', true);
       }
     }
 
     function loadProfileToForm(key) {
       const p = state.config?.profiles?.[key];
       if (!p) return;
+      formLoadedKey = key;
       currentProfileBuffer = JSON.parse(JSON.stringify(p));
 
-      document.getElementById('form-title').innerText = `Edit Provider: ${p.name}`;
+      document.getElementById('form-title').textContent = 'Edit Profile: ' + p.name;
       document.getElementById('p-key').value = key;
-      document.getElementById('p-key').disabled = true;
-      document.getElementById('p-name').value = p.name;
-      document.getElementById('p-mode').value = p.mode || 'hybrid';
-      const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
-      document.getElementById('p-tool').value = slotFmt;
+      document.getElementById('p-key').readOnly = true;
+      document.getElementById('p-name').value = p.name || '';
+      document.getElementById('p-url').value = p.baseURL || '';
+      document.getElementById('p-key-val').value = p.apiKey ? MASKED_KEY : '';
+      const toolVal = p.tool || 'auto';
+      document.getElementById('p-tool').value = toolVal;
+      document.getElementById('p-outformat').value = p.outFormat || 'openai-chat';
+      document.getElementById('p-mode').value = p.mode || 'convert';
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
-      document.getElementById('p-outformat').value = p.outFormat || '';
-      document.getElementById('p-url').value = p.baseURL;
-      document.getElementById('p-key-val').value = p.apiKey || '';
+      document.getElementById('btn-delete').style.display = 'inline-flex';
 
-      renderModelSlots(slotFmt);
-      renderCodexTab(slotFmt);
+      const activeMap = state.activeProfiles || (state.config?.activeProfiles || {});
+      const activeTargets = Object.entries(activeMap).filter(([_, v]) => v === key).map(([t]) => t);
+      const activeTag = document.getElementById('active-tag');
+      if (activeTag) {
+        activeTag.textContent = activeTargets.length ? '● Active: ' + activeTargets.join(', ') : '';
+      }
 
-      document.getElementById('btn-delete').style.display = Object.keys(state.config.profiles).length > 1 ? 'block' : 'none';
-      const usedBy = Object.entries(state.activeProfiles || {}).filter(([, v]) => v === key).map(([t]) => t);
-      document.getElementById('active-tag').innerText = usedBy.length ? `(Active: ${usedBy.join(', ')})` : '';
-      
-      document.getElementById('model-browser').style.display = 'none';
-      document.getElementById('test-result').style.display = 'none';
-      loadedModels = [];
-      formLoadedKey = key;
-      formDirty = false;
+      renderModelSlots(toolVal, p);
     }
 
     function initNewProfile() {
-      if (formDirty && !confirm('Discard unsaved changes to this provider?')) return;
-      currentlyEditingKey = '';
       creatingNew = true;
+      currentlyEditingKey = '';
       formLoadedKey = null;
-      formDirty = false;
       currentProfileBuffer = {
         name: '',
-        mode: 'hybrid',
-        tool: null,
-        outFormat: '',
+        baseURL: '',
+        tool: 'auto',
+        outFormat: 'openai-chat',
+        mode: 'convert',
         thinkingMode: 'auto',
-        baseURL: 'https://',
-        apiKey: '',
         defaultModels: {},
         model1M: {}
       };
 
-      render();
-      document.getElementById('form-title').innerText = 'Create New Provider';
+      document.getElementById('form-title').textContent = 'Add New Provider Profile';
       document.getElementById('p-key').value = '';
-      document.getElementById('p-key').disabled = false;
+      document.getElementById('p-key').readOnly = false;
       document.getElementById('p-name').value = '';
-      document.getElementById('p-mode').value = 'hybrid';
-      document.getElementById('p-tool').value = 'auto';
-      document.getElementById('p-outformat').value = '';
-      document.getElementById('p-thinking-mode').value = 'auto';
-      document.getElementById('p-url').value = 'https://';
+      document.getElementById('p-url').value = '';
       document.getElementById('p-key-val').value = '';
-
-      renderModelSlots('auto');
-      renderCodexTab('auto');
-
+      document.getElementById('p-tool').value = 'auto';
+      document.getElementById('p-outformat').value = 'openai-chat';
+      document.getElementById('p-mode').value = 'convert';
+      document.getElementById('p-thinking-mode').value = 'auto';
       document.getElementById('btn-delete').style.display = 'none';
-      document.getElementById('active-tag').innerText = '';
-      document.getElementById('model-browser').style.display = 'none';
-      document.getElementById('test-result').style.display = 'none';
-      loadedModels = [];
+      document.getElementById('active-tag').textContent = '';
+
+      renderModelSlots('auto', currentProfileBuffer);
       switchTab('tab-general');
     }
 
-    function setKeyIfNew(k) {
-      const input = document.getElementById('p-key');
-      if (!input.disabled) input.value = k;
-    }
-
-    function applyTemplate(type) {
-      if (type === 'intact') {
-        setKeyIfNew('intact-gateway');
-        document.getElementById('p-name').value = 'intact Gateway';
-        document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-tool').value = 'auto';
-        document.getElementById('p-outformat').value = 'openai-chat';
-        document.getElementById('p-url').value = 'https://intact.example.com/v1';
-        document.getElementById('p-thinking-mode').value = 'auto';
-        currentProfileBuffer = {
-          defaultModels: {
-            opus: 'antigravity/claude-opus-4-6-thinking',
-            sonnet: 'antigravity/gemini-3.8-flash',
-            haiku: 'antigravity/gemini-3.8-flash',
-            fable: 'antigravity/gemini-3.8-flash'
-          },
-          model1M: { opus: true, sonnet: true, haiku: true, fable: true }
-        };
-        renderModelSlots('auto');
-        renderCodexTab('auto');
-        formDirty = true;
-        return;
+    const TEMPLATES = {
+      intact: {
+        name: 'Intact Credential Proxy',
+        baseURL: 'http://127.0.0.1:8080/v1',
+        tool: 'auto',
+        outFormat: 'openai-chat',
+        mode: 'convert',
+        thinkingMode: 'auto',
+        defaultModels: { default: 'gpt-4o', sonnet: 'claude-3-7-sonnet', opus: 'claude-3-opus', haiku: 'claude-3-5-haiku' }
+      },
+      '9router': {
+        name: '9Router Client Proxy',
+        baseURL: 'http://127.0.0.1:20128/v1',
+        tool: 'auto',
+        outFormat: 'openai-chat',
+        mode: 'hybrid',
+        thinkingMode: 'auto',
+        defaultModels: { default: 'gpt-4o', sonnet: 'claude-3-7-sonnet' }
+      },
+      openrouter: {
+        name: 'OpenRouter Gateway',
+        baseURL: 'https://openrouter.ai/api/v1',
+        tool: 'auto',
+        outFormat: 'openai-chat',
+        mode: 'convert',
+        thinkingMode: 'auto',
+        defaultModels: { default: 'anthropic/claude-3.7-sonnet', sonnet: 'anthropic/claude-3.7-sonnet' }
+      },
+      vertex: {
+        name: 'Google Vertex AI',
+        baseURL: 'https://us-central1-aiplatform.googleapis.com/v1',
+        tool: 'anthropic',
+        outFormat: 'vertex',
+        mode: 'convert',
+        thinkingMode: 'auto',
+        defaultModels: { sonnet: 'claude-3-7-sonnet@20250219' }
+      },
+      local: {
+        name: 'Local Ollama / vLLM Server',
+        baseURL: 'http://127.0.0.1:11434/v1',
+        tool: 'auto',
+        outFormat: 'openai-chat',
+        mode: 'direct',
+        thinkingMode: 'off',
+        defaultModels: { default: 'qwen2.5-coder:32b' }
       }
-      if (type === '9router') {
-        setKeyIfNew('9router');
-        document.getElementById('p-name').value = '9Router Cloud';
-        document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-tool').value = 'auto';
-        document.getElementById('p-outformat').value = 'openai-chat';
-        document.getElementById('p-url').value = 'https://api.9router.com/v1';
-        document.getElementById('p-thinking-mode').value = 'auto';
-        currentProfileBuffer = {
-          defaultModels: {
-            opus: 'ag/claude-opus-4-6-thinking',
-            sonnet: 'ag/claude-sonnet-4-6',
-            haiku: 'ag/gemini-3.7-flash-high',
-            fable: 'ag/gemini-3.8-flash-high'
-          },
-          model1M: { opus: true, sonnet: true, haiku: false, fable: true }
-        };
-        renderModelSlots('auto');
-      } else if (type === 'openrouter') {
-        setKeyIfNew('openrouter');
-        document.getElementById('p-name').value = 'OpenRouter';
-        document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-tool').value = 'auto';
-        document.getElementById('p-outformat').value = 'openai-chat';
-        document.getElementById('p-url').value = 'https://openrouter.ai/api/v1';
-        currentProfileBuffer = {
-          defaultModels: {
-            opus: 'anthropic/claude-3.7-sonnet:thinking',
-            sonnet: 'anthropic/claude-3.7-sonnet',
-            haiku: 'google/gemini-2.0-flash-001',
-            fable: 'qwen/qwq-32b'
-          },
-          model1M: { opus: true, sonnet: true, haiku: false, fable: false }
-        };
-        renderModelSlots('auto');
-      } else if (type === 'codex-vtx') {
-        setKeyIfNew('codex-vertex');
-        document.getElementById('p-name').value = 'Codex to Vertex';
-        document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-tool').value = 'responses';
-        document.getElementById('p-outformat').value = 'vertex';
-        document.getElementById('p-url').value = 'https://api.9router.com/v1';
-        document.getElementById('p-thinking-mode').value = 'auto';
-        currentProfileBuffer = {
-          defaultModels: {
-            main: 'gemini-3.8-flash',
-            review: 'gemini-3.7-flash-medium',
-            subagent: 'gemini-3.6-flash-low'
-          },
-          model1M: { main: true, review: false, subagent: false }
-        };
-        renderModelSlots('responses');
-      } else if (type === 'momo') {
-        setKeyIfNew('selfhost');
-        document.getElementById('p-name').value = 'Selfhost Hybrid';
-        document.getElementById('p-mode').value = 'hybrid';
-        document.getElementById('p-tool').value = 'auto';
-        document.getElementById('p-outformat').value = '';
-        document.getElementById('p-url').value = 'https://llm.example.com/v1';
-        currentProfileBuffer = {
-          defaultModels: {
-            opus: 'claude-opus-4-7',
-            sonnet: 'claude-sonnet-4-6',
-            haiku: 'claude-haiku-4-5-20251001',
-            fable: 'claude-haiku-4-5-20251001'
-          },
-          model1M: { opus: true, sonnet: true, haiku: false, fable: false }
-        };
-        renderModelSlots('auto');
-      } else if (type === 'custom') {
-        setKeyIfNew('local-openai');
-        document.getElementById('p-name').value = 'Local OpenAI Server';
-        document.getElementById('p-mode').value = 'convert';
-        document.getElementById('p-tool').value = 'auto';
-        document.getElementById('p-outformat').value = 'openai-chat';
-        document.getElementById('p-url').value = 'http://127.0.0.1:8000/v1';
-        document.getElementById('p-thinking-mode').value = 'native';
-        currentProfileBuffer = {
-          defaultModels: { opus: 'gpt-4o' },
-          model1M: { opus: false }
-        };
-        renderModelSlots('auto');
+    };
+
+    function applyTemplate(tName) {
+      const t = TEMPLATES[tName];
+      if (!t) return;
+      if (creatingNew) {
+        document.getElementById('p-key').value = tName;
       }
-      formDirty = true;
-      showToast(`Applied ${type} template!`);
-    }
-
-    async function fetchModelList() {
-      const baseURL = document.getElementById('p-url').value.trim();
-      const apiKey = document.getElementById('p-key-val').value.trim();
-      if (!baseURL) {
-        showToast('Please enter Base URL first', true);
-        switchTab('tab-general');
-        return;
-      }
-
-      const btn = document.getElementById('btn-fetch-models');
-      btn.innerText = 'Loading...';
-      btn.disabled = true;
-
-      try {
-        const res = await api('/api/fetch-models', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ baseURL, apiKey, key: formLoadedKey })
-        });
-        const data = await res.json();
-        if (data.ok && Array.isArray(data.models)) {
-          loadedModels = data.models;
-          populateModelOptions(loadedModels);
-          renderModelBrowser(loadedModels);
-          showToast(`Loaded ${loadedModels.length} models from upstream!`);
-        } else {
-          showToast(`Failed to load models: ${data.error || 'Unknown error'}`, true);
-        }
-      } catch (err) {
-        showToast(`Fetch error: ${err.message}`, true);
-      } finally {
-        btn.innerText = 'Fetch models';
-        btn.disabled = false;
-      }
-    }
-
-    function populateModelOptions(models) {
-      const datalist = document.getElementById('model-options');
-      datalist.innerHTML = '';
-      for (const m of models) {
-        const opt = document.createElement('option');
-        opt.value = m;
-        datalist.appendChild(opt);
-      }
-    }
-
-    function renderModelBrowser(models) {
-      const container = document.getElementById('model-browser');
-      const items = document.getElementById('model-items');
-      const countLabel = document.getElementById('model-count-label');
-      
-      container.style.display = 'block';
-      countLabel.innerText = `Available Models (${models.length})`;
-      items.innerHTML = '';
-
-      if (models.length === 0) {
-        items.innerHTML = '<div style="color: var(--text-dim); font-size: 12px; padding: 6px;">No matching models found.</div>';
-        return;
-      }
-
-      const currentFmt = document.getElementById('p-tool')?.value || 'auto';
-      const cfg = getActiveSlotConfig(currentFmt);
-
-      for (const m of models) {
-        const row = document.createElement('div');
-        row.className = 'model-row';
-
-        const idSpan = document.createElement('span');
-        idSpan.className = 'model-id';
-        idSpan.textContent = m;
-
-        const btnGroup = document.createElement('div');
-        btnGroup.className = 'model-btn-group';
-
-        cfg.slots.forEach(s => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn btn-outline btn-sm';
-          btn.textContent = s.id.charAt(0).toUpperCase() + s.id.slice(1);
-          btn.onclick = () => selectModel(s.id, m);
-          btnGroup.appendChild(btn);
-        });
-
-        row.appendChild(idSpan);
-        row.appendChild(btnGroup);
-        items.appendChild(row);
-      }
-    }
-
-    function filterModels() {
-      const q = (document.getElementById('model-filter').value || '').toLowerCase().trim();
-      const filtered = loadedModels.filter(m => m.toLowerCase().includes(q));
-      renderModelBrowser(filtered);
-    }
-
-    function selectModel(slotId, modelId) {
-      const targetInput = document.getElementById('p-' + slotId);
-      if (targetInput) targetInput.value = modelId;
-      const is1M = /1m|gemini-3|glm-5|kimi|nemotron-3-ultra/i.test(modelId);
-      const chk1M = document.getElementById(`p-${slotId}-1m`);
-      if (chk1M && is1M) {
-        chk1M.checked = true;
-      }
-      update1mWarnings();
-      formDirty = true;
-      showToast(`Assigned "${modelId}" to ${slotId.toUpperCase()}`);
+      document.getElementById('p-name').value = t.name;
+      document.getElementById('p-url').value = t.baseURL;
+      document.getElementById('p-tool').value = t.tool;
+      document.getElementById('p-outformat').value = t.outFormat;
+      document.getElementById('p-mode').value = t.mode;
+      document.getElementById('p-thinking-mode').value = t.thinkingMode;
+      currentProfileBuffer = { ...currentProfileBuffer, ...t };
+      renderModelSlots(t.tool || 'auto', t);
+      showToast('Template "' + t.name + '" applied');
     }
 
     async function toggleProxy() {
-      const nextState = !isAnyTargetActive();
-      showToast(nextState ? 'Activating compatible routes...' : 'Restoring official endpoints...');
+      const isAnyActive = Object.values(state.activeProfiles || (state.config?.activeProfiles || {})).some(Boolean);
+      const action = isAnyActive ? 'deactivate' : 'activate';
+      showToast((isAnyActive ? 'Switching to official endpoints...' : 'Activating compatible routes...'));
       try {
         const res = await api('/api/toggle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: nextState })
+          body: JSON.stringify({ enabled: !isAnyActive })
         });
         const data = await res.json();
-        if (data.success) {
-          showToast(nextState ? 'Compatible routes are active.' : 'Official endpoints restored.');
+        if (data.ok) {
+          showToast(isAnyActive ? 'Using official endpoints' : 'Gateway activated');
+          await loadStatus();
         } else {
-          showToast(data.error || 'Failed to toggle gateway state', true);
+          showToast(data.error || 'Failed to toggle routes', true);
         }
-        loadStatus();
       } catch (err) {
-        showToast('Failed to toggle gateway state', true);
+        showToast('Network error toggling routes', true);
       }
     }
 
     async function saveProfile(e) {
       e.preventDefault();
       const key = document.getElementById('p-key').value.trim();
-      const outFormat = document.getElementById('p-outformat').value;
-      if (creatingNew && state.config?.profiles?.[key] && !confirm(`Provider "${key}" already exists. Overwrite it?`)) return;
+      if (!key) return;
 
       collectCurrentSlotValues();
       const existing = state.config?.profiles?.[key] || {};
-      const mergedModels = { ...(existing.defaultModels || {}), ...(currentProfileBuffer?.defaultModels || {}) };
-      const merged1M = { ...(existing.model1M || {}), ...(currentProfileBuffer?.model1M || {}) };
+      const keyVal = document.getElementById('p-key-val').value.trim();
 
-      const profile = {
+      const profilePayload = {
         name: document.getElementById('p-name').value.trim(),
-        mode: document.getElementById('p-mode').value,
-        tool: ({ anthropic: 'claude', responses: 'codex' }[document.getElementById('p-tool').value]) || null,
-        thinkingMode: document.getElementById('p-thinking-mode').value || 'auto',
         baseURL: document.getElementById('p-url').value.trim(),
-        apiKey: document.getElementById('p-key-val').value.trim(),
-        defaultModels: mergedModels,
-        model1M: merged1M
+        tool: document.getElementById('p-tool').value,
+        outFormat: document.getElementById('p-outformat').value,
+        mode: document.getElementById('p-mode').value,
+        thinkingMode: document.getElementById('p-thinking-mode').value,
+        defaultModels: { ...(existing.defaultModels || {}), ...(currentProfileBuffer?.defaultModels || {}) },
+        model1M: { ...(existing.model1M || {}), ...(currentProfileBuffer?.model1M || {}) }
       };
-      profile.outFormat = outFormat;
-      collectCodexValues(profile);
 
+      if (keyVal === MASKED_KEY) {
+        profilePayload.apiKey = existing.apiKey || '';
+      } else if (keyVal) {
+        profilePayload.apiKey = keyVal;
+      } else {
+        profilePayload.apiKey = '';
+      }
+
+      if (existing.codexRoles) profilePayload.codexRoles = existing.codexRoles;
+      if (existing.publicModels) profilePayload.publicModels = existing.publicModels;
+
+      showToast('Saving profile "' + key + '"...');
       try {
         const res = await api('/api/save-profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key, profile })
+          body: JSON.stringify({ key, profile: profilePayload })
         });
         const data = await res.json();
-        if (data.success) {
-          showToast('Provider profile saved.');
-          currentlyEditingKey = key;
-          creatingNew = false;
-          formDirty = false;
-          formLoadedKey = null;
-          loadStatus();
+        if (data.ok) {
+          showToast('Profile "' + key + '" saved successfully');
+          closeProfileModal();
+          await loadStatus();
         } else {
-          showToast(data.error || 'Failed to save', true);
+          showToast(data.error || 'Failed to save profile', true);
         }
       } catch (err) {
-        showToast('Error saving provider', true);
+        showToast('Network error saving profile', true);
       }
     }
 
     async function deleteProfile() {
-      const key = document.getElementById('p-key').value;
-      if (!confirm(`Are you sure you want to delete provider "${key}"?`)) return;
+      const key = document.getElementById('p-key').value.trim();
+      if (!key || !confirm('Delete provider profile "' + key + '" permanently?')) return;
 
+      showToast('Deleting profile "' + key + '"...');
       try {
         const res = await api('/api/delete-profile', {
           method: 'POST',
@@ -1933,21 +1870,18 @@
           body: JSON.stringify({ key })
         });
         const data = await res.json();
-        if (data.success) {
-          showToast('Provider deleted.'); closeProfileModal();
-          currentlyEditingKey = '';
-          creatingNew = false;
-          formDirty = false;
-          loadStatus();
+        if (data.ok) {
+          showToast('Profile "' + key + '" deleted');
+          closeProfileModal();
+          await loadStatus();
         } else {
-          showToast(data.error || 'Failed to delete', true);
+          showToast(data.error || 'Failed to delete profile', true);
         }
       } catch (err) {
-        showToast('Error deleting provider', true);
+        showToast('Network error deleting profile', true);
       }
     }
 
-    // Modern Non-blocking Connection Tester
     async function testConnection() {
       const btn = document.getElementById('btn-test-conn');
       const box = document.getElementById('test-result');
@@ -1963,7 +1897,7 @@
         const currentFmt = document.getElementById('p-tool')?.value || 'auto';
         const cfg = getActiveSlotConfig(currentFmt);
         const primarySlotId = cfg.slots[0]?.id || 'default';
-        const modelInput = document.getElementById(`p-${primarySlotId}`) || document.getElementById('p-sonnet') || document.getElementById('p-opus');
+        const modelInput = document.getElementById('p-' + primarySlotId) || document.getElementById('p-sonnet') || document.getElementById('p-opus');
         const testModel = (modelInput?.value || '').trim() || 'default';
 
         const res = await api('/api/test-upstream', {
@@ -1971,7 +1905,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             baseURL: document.getElementById('p-url').value.trim(),
-            apiKey: document.getElementById('p-key-val').value.trim(),
+            apiKey: document.getElementById('p-key-val').value.trim() === MASKED_KEY ? (state.config?.profiles?.[formLoadedKey]?.apiKey || '') : document.getElementById('p-key-val').value.trim(),
             mode: document.getElementById('p-mode').value,
             outFormat: document.getElementById('p-outformat').value,
             key: formLoadedKey,
@@ -1983,47 +1917,202 @@
 
         if (data.ok) {
           box.className = 'test-result-box success';
-          statusBadge.textContent = `✓ HTTP 200 OK (${data.outFormat || 'upstream'})`;
-          latencyBadge.textContent = `Latency: ${data.latency}ms`;
-          sampleBox.textContent = `Sample Output: ${data.sample}`;
-          showToast(`Connection successful (${data.latency}ms)`);
+          statusBadge.className = 'badge ok';
+          statusBadge.textContent = '✓ HTTP 200 OK (' + (data.outFormat || 'upstream') + ')';
+          latencyBadge.textContent = 'Latency: ' + data.latency + 'ms';
+          sampleBox.textContent = 'Sample Output: ' + data.sample;
+          showToast('Connection test passed (' + data.latency + 'ms)');
         } else {
           box.className = 'test-result-box error';
-          statusBadge.textContent = `✗ Failed (${data.status || 'Error'})`;
+          statusBadge.className = 'badge err';
+          statusBadge.textContent = '✗ Failed (' + (data.status || 'Error') + ')';
           latencyBadge.textContent = '';
-          sampleBox.textContent = `Error details: ${data.error || 'Connection failed'}`;
-          showToast('Upstream test failed', true);
+          sampleBox.textContent = 'Error: ' + (data.error || 'Upstream connection failed');
+          showToast('Upstream connection failed', true);
         }
       } catch (err) {
         box.style.display = 'block';
         box.className = 'test-result-box error';
+        statusBadge.className = 'badge err';
         statusBadge.textContent = '✗ Network Error';
         latencyBadge.textContent = '';
         sampleBox.textContent = err.message;
         showToast('Network error testing upstream', true);
       } finally {
-        btn.innerText = 'Test connection';
+        btn.innerText = 'Test Connection';
         btn.disabled = false;
       }
     }
 
-    let logRefreshInterval = null;
+    async function fetchModelList() {
+      const btn = document.getElementById('btn-fetch-models');
+      const browser = document.getElementById('model-browser');
+      const baseURL = document.getElementById('p-url').value.trim();
+      const apiKeyVal = document.getElementById('p-key-val').value.trim();
+      const apiKey = (apiKeyVal === MASKED_KEY) ? (state.config?.profiles?.[formLoadedKey]?.apiKey || '') : apiKeyVal;
 
-    function toggleLogAutoRefresh(enabled) {
-      if (logRefreshInterval) {
-        clearInterval(logRefreshInterval);
-        logRefreshInterval = null;
+      if (!baseURL) {
+        showToast('Please enter a Base URL first', true);
+        return;
       }
-      if (enabled) {
-        logRefreshInterval = setInterval(() => {
-          const tab = document.getElementById('tab-inspector');
-          if (tab && tab.classList.contains('active')) {
-            loadInspectorLogs();
-          }
-        }, 2500);
+
+      btn.disabled = true;
+      btn.innerText = 'Fetching...';
+      try {
+        const res = await api('/api/fetch-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseURL, apiKey })
+        });
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.models)) {
+          loadedModels = data.models;
+          populateModelOptions(loadedModels);
+          renderModelBrowser(loadedModels);
+          browser.style.display = 'block';
+          showToast('Loaded ' + loadedModels.length + ' models');
+        } else {
+          showToast(data.error || 'No models returned from provider', true);
+        }
+      } catch (err) {
+        showToast('Error fetching models: ' + err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Browse Models';
       }
     }
 
+    function populateModelOptions(models) {
+      const dl = document.getElementById('model-options');
+      if (!dl) return;
+      dl.innerHTML = '';
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        dl.appendChild(opt);
+      }
+    }
+
+    function renderModelBrowser(models) {
+      const container = document.getElementById('model-items');
+      const label = document.getElementById('model-count-label');
+      if (!container) return;
+      container.innerHTML = '';
+      if (label) label.textContent = models.length + ' models found';
+
+      for (const m of models) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-outline btn-sm';
+        btn.style.cssText = 'font-size:0.75rem; padding:0.15rem 0.5rem;';
+        btn.textContent = m;
+        btn.onclick = () => selectModel(m);
+        container.appendChild(btn);
+      }
+    }
+
+    function filterModels() {
+      const q = (document.getElementById('model-filter')?.value || '').toLowerCase();
+      const filtered = loadedModels.filter(m => m.toLowerCase().includes(q));
+      renderModelBrowser(filtered);
+    }
+
+    function selectModel(modelId) {
+      const activeTab = document.querySelector('.tab-content.active');
+      const focused = activeTab?.querySelector('input[type="text"]:focus');
+      if (focused && focused.id.startsWith('p-')) {
+        focused.value = modelId;
+      } else {
+        const sonnetInput = document.getElementById('p-sonnet') || document.getElementById('p-default');
+        if (sonnetInput) sonnetInput.value = modelId;
+      }
+      showToast('Selected: ' + modelId);
+    }
+
+    // Dynamic Model Catalog View
+    async function renderCatalogView() {
+      const claudeContainer = document.getElementById('catalog-claude-items');
+      const codexContainer = document.getElementById('catalog-codex-items');
+      if (!claudeContainer || !codexContainer) return;
+
+      try {
+        const res = await api('/api/catalog');
+        if (!res.ok) {
+          showToast('Failed to load model catalog', true);
+          return;
+        }
+        const catalog = await res.json();
+        cachedCatalog = catalog;
+
+        const claudeModels = Array.isArray(catalog.claude?.models) ? catalog.claude.models : [];
+        const codexModels = Array.isArray(catalog.codex?.models) ? catalog.codex.models : [];
+
+        const claudeTiers = new Set(claudeModels.map(m => m.tier));
+        const codexRoles = new Set(codexModels.map(m => m.role));
+
+        const ctModels = document.getElementById('ct-models');
+        if (ctModels) ctModels.textContent = claudeModels.length + codexModels.length;
+
+        document.getElementById('badge-claude-count').textContent = claudeModels.length + ' models · ' + claudeTiers.size + ' tiers';
+        document.getElementById('badge-codex-count').textContent = codexModels.length + ' models · ' + codexRoles.size + ' roles';
+
+        claudeContainer.innerHTML = claudeModels.map(m => `
+          <div class="row" style="padding:0.6rem 0.8rem; background:var(--card2); border-radius:8px;">
+            <div class="who">
+              <div style="display:flex; align-items:center; gap:0.45rem;">
+                <span class="badge accent" style="text-transform:uppercase; font-size:0.7rem;">${escapeHtml(m.tier)}</span>
+                <span class="l mono" style="font-size:0.85rem; font-weight:600;">${escapeHtml(m.id)}</span>
+              </div>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText('${escapeHtml(m.id)}'); showToast('Copied ${escapeHtml(m.id)}');">Copy</button>
+          </div>
+        `).join('') || '<div class="hint">No Claude tiers discovered</div>';
+
+        codexContainer.innerHTML = codexModels.map(m => `
+          <div class="row" style="padding:0.6rem 0.8rem; background:var(--card2); border-radius:8px;">
+            <div class="who">
+              <div style="display:flex; align-items:center; gap:0.45rem;">
+                <span class="badge ok" style="text-transform:capitalize; font-size:0.7rem;">${escapeHtml(m.role)}</span>
+                <span class="l mono" style="font-size:0.85rem; font-weight:600;">${escapeHtml(m.id)}</span>
+              </div>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText('${escapeHtml(m.id)}'); showToast('Copied ${escapeHtml(m.id)}');">Copy</button>
+          </div>
+        `).join('') || '<div class="hint">No Codex roles discovered</div>';
+      } catch (err) {
+        showToast('Error loading model catalog', true);
+      }
+    }
+
+    function filterCatalogView(q) {
+      const term = (q || '').toLowerCase();
+      document.querySelectorAll('#catalog-claude-items .row, #catalog-codex-items .row').forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(term) ? 'flex' : 'none';
+      });
+    }
+
+    async function refreshCatalogUpstream() {
+      const btn = document.getElementById('btn-sync-catalog');
+      if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+      showToast('Refreshing model catalog from upstream...');
+      try {
+        const res = await api('/api/catalog/refresh', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('Model catalog synchronized');
+          await renderCatalogView();
+        } else {
+          showToast(data.error || 'Failed to refresh catalog', true);
+        }
+      } catch (err) {
+        showToast('Network error syncing catalog', true);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ Sync Models with Upstream'; }
+      }
+    }
+
+    // Request Inspector Logs View
     async function loadInspectorLogs() {
       try {
         const res = await api('/api/logs');
@@ -2031,49 +2120,52 @@
         const container = document.getElementById('inspector-logs-container');
         if (!container) return;
 
+        lastLogsCount = (data.logs || []).length;
+        const ctLogs = document.getElementById('ct-logs');
+        if (ctLogs) ctLogs.textContent = lastLogsCount;
+
         if (!data.logs || data.logs.length === 0) {
-          container.innerHTML = '<div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 24px; background: var(--surface-well); border-radius: var(--radius-sm); border: 1px solid var(--border);">No requests recorded yet. Make a request via Claude Code, Codex, or curl.</div>';
+          container.innerHTML = '<div class="card pad hint" style="text-align:center; padding:2rem 1rem;">No requests recorded yet in the ring buffer. Make a request via Claude Code or Codex.</div>';
           return;
         }
 
         container.innerHTML = '';
         for (const l of data.logs) {
-          const row = document.createElement('div');
-          row.className = 'log-item';
+          const item = document.createElement('div');
+          item.className = 'log-item';
           const isErr = l.status >= 400;
-          const statusClass = isErr ? 'badge-convert' : 'badge-direct';
 
-          let details = '';
+          let detailsHtml = '';
           if (l.requestPreview) {
-            details += `<div><strong style="color: var(--accent);">Prompt:</strong> ${escapeHtml(l.requestPreview)}</div>`;
+            detailsHtml += '<div><span class="hint" style="font-weight:600; color:var(--accent);">Prompt:</span><pre>' + escapeHtml(l.requestPreview) + '</pre></div>';
           }
           if (l.thinkingChars > 0) {
-            details += `<div><strong style="color: #fbbf24;">Thinking:</strong> ${l.thinkingChars} chars extracted</div>`;
+            detailsHtml += '<div><span class="hint" style="font-weight:600; color:var(--warn);">Thinking:</span><pre>' + l.thinkingChars + ' characters extracted</pre></div>';
           }
           if (l.responsePreview) {
-            details += `<div><strong style="color: #34d399;">Output:</strong> ${escapeHtml(l.responsePreview)}</div>`;
+            detailsHtml += '<div><span class="hint" style="font-weight:600; color:var(--ok);">Response Output:</span><pre>' + escapeHtml(l.responsePreview) + '</pre></div>';
           }
           if (l.error) {
-            details += `<div><strong style="color: #f87171;">Error:</strong> ${escapeHtml(l.error)}</div>`;
+            detailsHtml += '<div><span class="hint" style="font-weight:600; color:var(--err);">Error:</span><pre>' + escapeHtml(l.error) + '</pre></div>';
           }
 
-          row.innerHTML = `
-            <div class="log-header">
-              <div class="log-badges">
-                <span class="badge ${statusClass}">${l.status}</span>
-                <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text);">${escapeHtml(l.clientFormat)} ➔ ${escapeHtml(l.outFormat)}</span>
-                <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">[${escapeHtml(l.model)}]</span>
-                <span style="font-size: 10px; color: var(--text-dim);">${escapeHtml(l.timestamp)}</span>
+          item.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                <span class="mono faint" style="font-size:0.75rem;">${escapeHtml(l.timestamp)}</span>
+                <span class="badge ${isErr ? 'err' : 'ok'}">${escapeHtml(l.status)} ${escapeHtml(l.method || 'POST')}</span>
+                <strong class="mono" style="font-size:0.85rem; color:var(--fg);">${escapeHtml(l.path || '/v1/messages')}</strong>
+                <span class="badge accent">${escapeHtml(l.client || 'Client')}</span>
               </div>
-              <div style="display: flex; gap: 8px; font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
-                <span>${l.duration} ms</span>
-                <span>in ${l.tokens?.prompt || 0} tokens</span>
-                <span>out ${l.tokens?.completion || 0} tokens</span>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                ${l.latency ? '<span class="hint mono">' + escapeHtml(l.latency) + 'ms</span>' : ''}
+                ${l.profile ? '<span class="badge">→ ' + escapeHtml(l.profile) + '</span>' : ''}
               </div>
             </div>
-            ${details ? `<div class="log-body">${details}</div>` : ''}
+            ${detailsHtml ? '<details><summary>View Payload Preview</summary>' + detailsHtml + '</details>' : ''}
           `;
-          container.appendChild(row);
+
+          container.appendChild(item);
         }
       } catch (err) {
         console.error('Failed to load logs', err);
@@ -2083,29 +2175,47 @@
     async function clearInspectorLogs() {
       try {
         const res = await api('/api/logs/clear', { method: 'POST' });
-        loadInspectorLogs();
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('Logs cleared');
+        const data = await res.json();
+        if (data.ok) {
+          showToast('Request inspector logs cleared');
+          await loadInspectorLogs();
+        }
       } catch (err) {
-        showToast('Failed to clear logs', true);
+        showToast('Error clearing logs', true);
       }
     }
 
-    // Track form edits so status refreshes don't overwrite them.
-    const markDirty = (ev) => {
-      if (ev.target.id !== 'chk-auto-refresh-logs' && ev.target.id !== 'model-filter') formDirty = true;
-    };
-    document.getElementById('profile-form').addEventListener('input', markDirty);
-    document.getElementById('profile-form').addEventListener('change', markDirty);
-
-    toggleLogAutoRefresh(true);
-    try {
-      applyTheme(localStorage.getItem('lsw-theme') || document.documentElement.dataset.theme || 'dark');
-    } catch (e) {
-      applyTheme(document.documentElement.dataset.theme || 'dark');
+    function toggleLogAutoRefresh() {
+      const chk = document.getElementById('chk-auto-refresh-logs');
+      if (chk && chk.checked) {
+        clearInterval(logRefreshTimer);
+        logRefreshTimer = setInterval(() => {
+          if (window.location.hash.startsWith('#/logs')) {
+            loadInspectorLogs();
+          }
+        }, 3000);
+      } else {
+        clearInterval(logRefreshTimer);
+        logRefreshTimer = null;
+      }
     }
-    loadStatus();
-  
+
+    // Initial Bootstrap
+    document.addEventListener('DOMContentLoaded', () => {
+      // Setup initial theme buttons state
+      const currentTheme = document.documentElement.dataset.theme || 'dark';
+      document.getElementById('btn-theme-dark')?.setAttribute('aria-pressed', currentTheme === 'dark');
+      document.getElementById('btn-theme-light')?.setAttribute('aria-pressed', currentTheme === 'light');
+
+      // Setup log auto-refresh
+      toggleLogAutoRefresh();
+
+      // Trigger initial route
+      handleRoute();
+
+      // Load initial state from edge gateway
+      loadStatus();
+    });
   </script>
 </body>
 </html>

@@ -8,6 +8,7 @@ proxy.pid
 env.cmd
 env.sh
 model-catalog.json
+catalog-cache.json
 blindfold/certs/
 node_modules/
 .DS_Store

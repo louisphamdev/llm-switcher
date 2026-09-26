@@ -1,5 +1,13 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.1
+
+- **Intact Visual Architecture & Hash Routing:** Fully restructured dashboard using Intact design system, pure CSS tokens, and hash-based client routing (`#/routes`, `#/models`, `#/logs`, `#/doctor`).
+- **Official Brand Icon Assets:** Integrated official brand icons for Anthropic Claude, OpenAI Codex, Google Gemini, Intact, OpenRouter, and Ollama, served statically under `/icons/*` with immutable caching and PNG/SVG whitelisting.
+- **Prefetched Navigation Counters:** Navigation badges prefetch model discovery and request inspector counts immediately on page load, eliminating the delay where badges showed zero until the tab was selected.
+- **Hardened Profile Slot Mapping:** Synchronized Claude model tiers (`sonnet`, `opus`, `haiku`, `fable`) and Codex model roles (`main`, `review`, `subagent`), ensuring slot persistence when editing profiles and removing redundant role tabs for Claude-targeted profiles.
+- **CORS & Endpoint Fixes:** Added `x-llm-switcher-token` to preflight `Access-Control-Allow-Headers` and resolved routing precedence for `GET /api/catalog`.
+
 ## Release 1.2.0
 
 - **Zero-Mutation Interceptor Invariant:** The gateway now operates strictly in the network path via the blindfold interceptor, never modifying user configuration files like `~/.claude/settings.json` or `~/.codex/config.toml`. Loopback base URLs (`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL`) are scrubbed by shims so traffic routes through `HTTPS_PROXY` cleanly.
