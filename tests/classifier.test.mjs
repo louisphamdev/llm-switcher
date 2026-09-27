@@ -5,6 +5,7 @@ import {
   heuristicClassify,
   findJevKey,
   classifyPrompt,
+  checkSemanticEquivalence,
   DEFAULT_JEV_URL,
   OPENROUTER_JEV_URL,
 } from '../classifier.mjs';
@@ -150,6 +151,57 @@ describe('classifier module', () => {
         assert.equal(res.tier, 'haiku');
         assert.equal(res.source, 'heuristic');
         assert.equal(res.reason, 'timeout');
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  describe('checkSemanticEquivalence', () => {
+    it('returns exact-match immediately when strings match', async () => {
+      const res = await checkSemanticEquivalence({
+        candidate: 'What is Node.js?',
+        target: 'What is Node.js?',
+      });
+      assert.equal(res.equivalent, true);
+      assert.equal(res.confidence, 1.0);
+      assert.equal(res.reason, 'exact-match');
+    });
+
+    it('bypasses immediately with false when no key is configured', async () => {
+      const res = await checkSemanticEquivalence({
+        candidate: 'Say hello',
+        target: 'Greet me',
+        env: {},
+      });
+      assert.equal(res.equivalent, false);
+      assert.equal(res.reason, 'no-key-fallback-bypass');
+    });
+
+    it('evaluates Noul probability from Jev and confirms equivalence >= 0.85', async () => {
+      const server = await createServer(async (req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            model: 'jev-latest',
+            answers: {
+              is_equivalent: 0.92,
+            },
+          }),
+        );
+      });
+
+      try {
+        const res = await checkSemanticEquivalence({
+          candidate: 'How do I read a file in Node?',
+          target: 'Read file contents in NodeJS',
+          apiKey: 'test-key',
+          url: server.url,
+        });
+
+        assert.equal(res.equivalent, true);
+        assert.equal(res.confidence, 0.92);
+        assert.equal(res.reason, 'jev-confirmed');
       } finally {
         await server.close();
       }

@@ -153,3 +153,86 @@ export async function classifyPrompt({
     };
   }
 }
+
+/**
+ * Checks semantic equivalence between candidate text and cached target using Jev Noul.
+ * Optional gate: returns false immediately if Jev is not configured or unavailable.
+ */
+export async function checkSemanticEquivalence({
+  candidate,
+  target,
+  apiKey,
+  url,
+  model,
+  timeoutMs = 3000,
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!candidate || !target) return { equivalent: false, confidence: 0, reason: 'empty-input' };
+  if (candidate.trim() === target.trim()) {
+    return { equivalent: true, confidence: 1.0, reason: 'exact-match' };
+  }
+
+  const keyInfo = apiKey ? { key: apiKey, source: 'custom' } : findJevKey(env);
+  if (!keyInfo) {
+    return { equivalent: false, confidence: 0, reason: 'no-key-fallback-bypass' };
+  }
+
+  const endpointUrl = url || (keyInfo.source === 'openrouter' ? OPENROUTER_JEV_URL : DEFAULT_JEV_URL);
+  const modelName = model || (keyInfo.source === 'openrouter' ? OPENROUTER_JEV_MODEL : DEFAULT_JEV_MODEL);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const payload = {
+      state: `REQUEST_A:\n${candidate}\n\nREQUEST_B:\n${target}`,
+      model: modelName,
+      questions: {
+        is_equivalent: {
+          type: 'noul',
+          instructions: 'Do REQUEST_A and REQUEST_B ask for the exact same semantic task or answer, such that the response to B fully satisfies A?',
+        },
+      },
+    };
+
+    const res = await fetchImpl(endpointUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${keyInfo.key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+    if (!res.ok) {
+      return { equivalent: false, confidence: 0, reason: `http-${res.status}` };
+    }
+
+    const data = await res.json();
+    const ans = data?.answers?.is_equivalent;
+    if (ans == null) {
+      return { equivalent: false, confidence: 0, reason: 'bad-response' };
+    }
+
+    // Noul returns either probability number directly or object with probability
+    const prob = typeof ans === 'number' ? ans : (typeof ans?.probability === 'number' ? ans.probability : 0);
+    const equivalent = prob >= 0.85;
+
+    return {
+      equivalent,
+      confidence: Number(prob.toFixed(3)),
+      reason: equivalent ? 'jev-confirmed' : 'below-threshold',
+      model: data.model || modelName,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      equivalent: false,
+      confidence: 0,
+      reason: err?.name === 'AbortError' ? 'timeout' : 'network-error',
+    };
+  }
+}
