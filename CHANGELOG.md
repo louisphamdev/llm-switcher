@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.2
+
+- **Structured output reaches every upstream:** A request that asks for JSON that matches a schema now keeps that schema. Before this release, the gateway did not read `output_config.format` (Claude Code) or `text.format` (Codex), so the provider got a free-text request. The schema now goes to the provider as `response_format` (OpenAI Chat), `output_config.format` (Anthropic), or `responseMimeType` with `responseSchema` (Gemini and Vertex). A request for JSON without a schema reaches Anthropic as plain text, because Anthropic has no JSON mode without a schema.
+
 ## Release 1.2.1
 
 - **Intact Visual Architecture & Hash Routing:** Fully restructured dashboard using Intact design system, pure CSS tokens, and hash-based client routing (`#/routes`, `#/models`, `#/logs`, `#/doctor`).
