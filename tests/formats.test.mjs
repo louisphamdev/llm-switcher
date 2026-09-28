@@ -802,3 +802,33 @@ test('an empty tool schema is healed, not forwarded as {}', () => {
   );
   assert.deepEqual(body.tools[0].function.parameters, { type: 'object', properties: {} });
 });
+
+// Structured output: a JSON schema the client asks the answer to follow must reach every upstream.
+const TITLE_SCHEMA = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'], additionalProperties: false };
+
+test('structured output: Anthropic output_config.format reaches chat, Anthropic and Vertex upstreams', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }], tools: [],
+    output_config: { format: { type: 'json_schema', schema: TITLE_SCHEMA } } });
+  assert.deepEqual(irToChatBody(ir, 'm').response_format,
+    { type: 'json_schema', json_schema: { name: 'response', schema: TITLE_SCHEMA } });
+  assert.deepEqual(irToAnthropicBody(ir, 'm').output_config, { format: { type: 'json_schema', schema: TITLE_SCHEMA } });
+  const gc = irToVertexBody(ir, 'm').generationConfig;
+  assert.equal(gc.responseMimeType, 'application/json');
+  assert.deepEqual(gc.responseSchema, toGeminiSchema(TITLE_SCHEMA));
+  // The deprecated top-level field still works.
+  const old = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }], output_format: { type: 'json_schema', schema: TITLE_SCHEMA } });
+  assert.equal(irToChatBody(old, 'm').response_format.json_schema.schema, TITLE_SCHEMA);
+});
+
+test('structured output: Responses text.format keeps name and strict; JSON mode and plain text', () => {
+  const resp = responsesToIR({ model: 'x', input: 'hi', text: { format: { type: 'json_schema', name: 'title', schema: TITLE_SCHEMA, strict: true } } });
+  assert.deepEqual(irToChatBody(resp, 'm').response_format,
+    { type: 'json_schema', json_schema: { name: 'title', schema: TITLE_SCHEMA, strict: true } });
+  const jm = responsesToIR({ model: 'x', input: 'hi', text: { format: { type: 'json_object' } } });
+  assert.deepEqual(irToChatBody(jm, 'm').response_format, { type: 'json_object' });
+  assert.equal(irToVertexBody(jm, 'm').generationConfig.responseMimeType, 'application/json');
+  assert.equal(irToAnthropicBody(jm, 'm').output_config, undefined);
+  const txt = responsesToIR({ model: 'x', input: 'hi', text: { format: { type: 'text' } } });
+  assert.equal(irToChatBody(txt, 'm').response_format, undefined);
+  assert.equal(irToVertexBody(txt, 'm').generationConfig, undefined);
+});

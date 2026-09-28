@@ -19,6 +19,7 @@
 //   params: { maxTokens, temperature, topP, topK, stop[],
 //             presencePenalty?, frequencyPenalty? },
 //   thinking: { type:'enabled'|'disabled'|'adaptive', budget?, effort? } | null,
+//   responseFormat: { type:'json_object' } | { type:'json_schema', name?, schema, strict? } | null,
 //   stream: bool
 // }
 // ============================================================
@@ -327,8 +328,21 @@ function baseIR() {
   return {
     model: '', system: '', messages: [], tools: [], toolChoice: null,
     params: { maxTokens: null, temperature: null, topP: null, topK: null, stop: [] },
-    thinking: null, stream: false
+    thinking: null, responseFormat: null, stream: false
   };
+}
+
+// Structured output (Anthropic output_config.format, Responses text.format) -> IR responseFormat.
+// `text` asks for nothing.
+function responseFormatIR(f) {
+  if (!f || typeof f !== 'object') return null;
+  if (f.type === 'json_object') return { type: 'json_object' };
+  if (f.type !== 'json_schema') return null;
+  if (!f.schema || typeof f.schema !== 'object') return { type: 'json_object' };
+  const out = { type: 'json_schema', schema: f.schema };
+  if (typeof f.name === 'string' && f.name) out.name = f.name;
+  if (typeof f.strict === 'boolean') out.strict = f.strict;
+  return out;
 }
 
 // Anthropic Messages API -> IR (logic ported from the old transformAnthropicToOpenAI).
@@ -423,6 +437,7 @@ function anthropicToIR(payload) {
   if (Array.isArray(payload.stop_sequences)) ir.params.stop = stopList(payload.stop_sequences);
 
   ir.thinking = thinkingFromAnthropicParam(payload.thinking, payload.output_config?.effort);
+  ir.responseFormat = responseFormatIR(payload.output_config?.format || payload.output_format);
   return ir;
 }
 
@@ -644,6 +659,7 @@ function responsesToIR(payload) {
   if (payload.reasoning && typeof payload.reasoning === 'object') {
     ir.thinking = thinkingFromReasoningParam(payload.reasoning);
   }
+  ir.responseFormat = responseFormatIR(payload.text?.format);
   return ir;
 }
 
@@ -822,6 +838,13 @@ function irToChatBody(ir, model, opts = {}) {
   if (typeof ir.params.frequencyPenalty === 'number') body.frequency_penalty = ir.params.frequencyPenalty;
   if (ir.params.stop.length) body.stop = ir.params.stop;
   if (ir.params.parallelToolCalls === false && body.tools) body.parallel_tool_calls = false;
+  if (ir.responseFormat?.type === 'json_schema') {
+    const js = { name: ir.responseFormat.name || 'response', schema: ir.responseFormat.schema };
+    if (typeof ir.responseFormat.strict === 'boolean') js.strict = ir.responseFormat.strict;
+    body.response_format = { type: 'json_schema', json_schema: js };
+  } else if (ir.responseFormat?.type === 'json_object') {
+    body.response_format = { type: 'json_object' };
+  }
 
   if (wantsThinking && mode === 'native') {
     body.reasoning_effort = ir.thinking?.effort && !['max', 'xhigh'].includes(ir.thinking.effort)
@@ -941,6 +964,8 @@ function irToAnthropicBody(ir, model) {
   if (typeof ir.params.topP === 'number') body.top_p = ir.params.topP;
   if (typeof ir.params.topK === 'number') body.top_k = ir.params.topK;
   if (ir.params.stop.length) body.stop_sequences = ir.params.stop;
+  // Anthropic has no JSON mode without a schema.
+  if (ir.responseFormat?.type === 'json_schema') body.output_config = { format: { type: 'json_schema', schema: ir.responseFormat.schema } };
   if (ir.thinking && ir.thinking.type === 'adaptive') {
     body.thinking = { type: 'adaptive' };
   } else if (ir.thinking && ir.thinking.type !== 'disabled' && body.max_tokens > 1024) {
@@ -1061,6 +1086,10 @@ function irToVertexBody(ir, model) {
     if (ir.thinking.type === 'enabled') {
       gc.thinkingConfig.thinkingBudget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 2048));
     }
+  }
+  if (ir.responseFormat) {
+    gc.responseMimeType = 'application/json';
+    if (ir.responseFormat.type === 'json_schema') gc.responseSchema = toGeminiSchema(ir.responseFormat.schema);
   }
   if (Object.keys(gc).length) body.generationConfig = gc;
   return body;
