@@ -405,18 +405,23 @@
     .row .who .l { font-weight: 600; font-size: 0.92rem; }
     .row .meta { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.2rem; color: var(--muted); font-size: 0.8rem; }
 
-    .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .chips { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
     .chip {
-      display: inline-flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.1rem 0.5rem;
+      min-width: 0;
       background: var(--card2);
       border: 1px solid var(--line);
       border-radius: 6px;
-      padding: 0.15rem 0.45rem;
+      padding: 0.35rem 0.55rem;
       font-size: 0.75rem;
       color: var(--fg);
     }
+    .chip .lbl { grid-column: 1 / -1; font-size: 0.7rem; overflow-wrap: anywhere; }
+    .chip .val { font-family: var(--font-mono); overflow-wrap: anywhere; }
+    .chip .b1m { font-weight: 600; font-size: 0.7rem; }
 
     .copyline {
       display: flex;
@@ -1330,18 +1335,18 @@
       claude: {
         title: 'Claude Code Model Tiers (Anthropic)',
         slots: [
-          { id: 'sonnet', name: 'Sonnet Slot (Routine & Coding)', placeholder: 'claude-3-7-sonnet' },
-          { id: 'opus', name: 'Opus Slot (Deep Reasoning)', placeholder: 'claude-3-opus' },
-          { id: 'haiku', name: 'Haiku Slot (Fast & Mechanical)', placeholder: 'claude-3-5-haiku' },
-          { id: 'fable', name: 'Fable Slot (Specialized / Lightweight)', placeholder: 'claude-fable-5-1' }
+          { id: 'sonnet', name: 'Sonnet Slot', placeholder: 'claude-3-7-sonnet' },
+          { id: 'opus', name: 'Opus Slot', placeholder: 'claude-3-opus' },
+          { id: 'haiku', name: 'Haiku Slot', placeholder: 'claude-3-5-haiku' },
+          { id: 'fable', name: 'Fable Slot', placeholder: 'claude-fable-5-1' }
         ]
       },
       codex: {
         title: 'OpenAI Codex Model Roles (Responses API)',
         slots: [
-          { id: 'main', name: 'Main Session Model (model)', placeholder: 'gpt-5.6-sol' },
-          { id: 'review', name: 'Review Model (review_model)', placeholder: 'gpt-5.6-terra' },
-          { id: 'subagent', name: 'Subagent Model (agents.default_subagent_model)', placeholder: 'gpt-5.6-luna' }
+          { id: 'main', name: 'Main Session Model', placeholder: 'gpt-5.6-sol' },
+          { id: 'review', name: 'Review Model', placeholder: 'gpt-5.6-terra' },
+          { id: 'subagent', name: 'Subagent Model', placeholder: 'gpt-5.6-luna' }
         ]
       }
     };
@@ -1572,7 +1577,7 @@
           const val = valueForSlot(p.defaultModels, s.id);
           if (!val) return '';
           const has1m = flagForSlot(p.model1M, s.id);
-          return '<span class="chip"><span class="faint">' + escapeHtml(s.name) + ':</span> ' + escapeHtml(val) + (has1m ? ' <b>1M</b>' : '') + '</span>';
+          return '<div class="chip"><span class="faint lbl">' + escapeHtml(s.name) + '</span><span class="val">' + escapeHtml(val) + '</span>' + (has1m ? '<b class="b1m">1M</b>' : '') + '</div>';
         }).filter(Boolean).join('');
 
         card.innerHTML = `
