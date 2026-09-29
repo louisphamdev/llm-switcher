@@ -37,3 +37,4 @@ ui-open.html
 .launch.lock
 *.log.1
 *.tmp
+version-check.json

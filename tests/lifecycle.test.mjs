@@ -210,18 +210,21 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
   let gw = await startGateway(ws, gwPort);
   const bfState = () => probe(ws, `s.probeBlindfold(${bfPort})`);
   try {
-    // 1. the dashboard turns blindfold on for the Codex target
-    const on = await api(ws, gwPort, '/api/switch', { target: 'responses', profile: 'bf' });
+    // 1. the dashboard turns Codex on
+    const on = await api(ws, gwPort, '/api/switch', { target: 'codex', profile: 'bf' });
     assert.equal(on.success, true, JSON.stringify(on));
     let st = await waitFor(async () => { const s = await bfState(); return s.state === 'ours' && s; });
     assert.equal(st.gatewayPort, gwPort);
-    assert.equal(st.prefix, '/backend-api/codex');
+    assert.equal(st.activeTools, 'codex');
 
-    // 2. the dashboard changes the prefix: the interceptor is respawned with it
-    const saved = await api(ws, gwPort, '/api/save-profile', { key: 'bf', profile: { blindfoldPrefix: '/backend-api/codex2' } });
-    assert.notEqual(saved.success, false, JSON.stringify(saved));
-    st = await waitFor(async () => { const s = await bfState(); return s.prefix === '/backend-api/codex2' && s; });
-    assert.equal(st.prefix, '/backend-api/codex2');
+    // 2. the dashboard turns Claude on as well: the running interceptor takes the new tool set in place
+    const both = await api(ws, gwPort, '/api/switch', { target: 'claude', profile: 'plain' });
+    assert.notEqual(both.success, false, JSON.stringify(both));
+    st = await waitFor(async () => { const s = await bfState(); return s.activeTools === 'claude,codex' && s; });
+    assert.equal(st.activeTools, 'claude,codex');
+    await api(ws, gwPort, '/api/switch', { target: 'claude', profile: null });
+    st = await waitFor(async () => { const s = await bfState(); return s.activeTools === 'codex' && s; });
+    assert.equal(st.activeTools, 'codex');
 
     // 3. the interceptor dies; a sync brings it back
     process.kill(st.pid, 'SIGTERM');
@@ -238,31 +241,30 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
     st = await waitFor(async () => { const s = await bfState(); return s.state === 'ours' && s; });
     assert.equal(st.gatewayPort, gwPort, 'the gateway starts the interceptor at boot');
 
-    // 5. a foreign process on the new interceptor port: the caller sees the failure
+    // 5. config.json names an interceptor port that a foreign process holds: a dashboard change fails
     const squatter = net.createServer(s => s.end());
     const squatPort = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
+    const good = fs.readFileSync(ws.cfgPath);
     try {
+      fs.writeFileSync(ws.cfgPath, JSON.stringify({ ...JSON.parse(good), blindfold: { port: squatPort } }, null, 2), { mode: 0o600 });
+      const edited = fs.readFileSync(ws.cfgPath);
       const badRes = await fetch(`http://127.0.0.1:${gwPort}/api/save-profile`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': token(ws) },
-        body: JSON.stringify({ key: 'bf', profile: { blindfoldPort: squatPort } })
+        body: JSON.stringify({ key: 'bf', profile: { name: 'Renamed' } })
       });
       assert.equal(badRes.status, 502, 'a failure is not answered with 200');
       const bad = await badRes.json();
       assert.equal(bad.success, false);
       assert.match(bad.error, /held by another process/);
-      const onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8')).profiles.bf.blindfoldPort;
-      assert.equal(onDisk, bfPort, 'a refused change is not saved, so HTTPS_PROXY never points at the squatter');
+      assert.deepEqual(fs.readFileSync(ws.cfgPath), edited, 'a refused change is not saved');
       assert.equal((await bfState()).state, 'ours', 'the working interceptor stays up');
-      const status = await fetch(`http://127.0.0.1:${gwPort}/api/status`, { headers: { 'x-llm-switcher-token': token(ws) } }).then(r => r.json());
-      assert.equal(status.config.profiles.bf.blindfoldPort, bfPort, 'the gateway does not keep the refused change in memory');
     } finally {
       squatter.close();
+      fs.writeFileSync(ws.cfgPath, good, { mode: 0o600 });
     }
 
     // 6. turning the Codex target off stops the interceptor
-    await api(ws, gwPort, '/api/save-profile', { key: 'bf', profile: { blindfoldPort: bfPort } });
-    await waitFor(async () => (await bfState()).state === 'ours');
-    await api(ws, gwPort, '/api/switch', { target: 'responses', profile: null });
+    await api(ws, gwPort, '/api/switch', { target: 'codex', profile: null });
     assert.equal(await waitFor(async () => (await bfState()).state === 'free'), true);
   } finally {
     try { const s = await bfState(); if (s.state === 'ours') process.kill(s.pid, 'SIGTERM'); } catch {}
@@ -276,32 +278,42 @@ test('the gateway owns the interceptor: dashboard changes, a lost interceptor an
 test('concurrent admin changes: a refused change never reaches disk, and no accepted change is lost', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
   const ws = makeWorkspace({ certs: true });
   const gwPort = await freePort();
-  const bfPort = await freePort();
-  writeConfig(ws, gwPort, bfPort, 'bf');
-  const launch = snapshotLaunchFiles(ws.dir);
-  const gw = await startGateway(ws, gwPort);
+  let bfPort;
   // A squatter that accepts and never answers keeps the identity probe waiting.
   const silent = net.createServer(() => {});
   const silentPort = await new Promise(r => silent.listen(0, '127.0.0.1', () => r(silent.address().port)));
+  writeConfig(ws, gwPort, silentPort);
+  const launch = snapshotLaunchFiles(ws.dir);
+  const gw = await startGateway(ws, gwPort);
   try {
-    await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
-    const post = (body) => fetch(`http://127.0.0.1:${gwPort}/api/save-profile`, {
+    const post = (p, body) => fetch(`http://127.0.0.1:${gwPort}${p}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': token(ws) }, body: JSON.stringify(body)
     });
-    const refused = post({ key: 'bf', profile: { blindfoldPort: silentPort } });
+    // Turning Codex on waits for the silent port and is refused; the rename that arrives meanwhile is kept.
+    const refused = post('/api/switch', { target: 'codex', profile: 'bf' });
     await new Promise(r => setTimeout(r, 300));
-    const other = post({ key: 'plain', profile: { name: 'Renamed' } });
+    const other = post('/api/save-profile', { key: 'plain', profile: { name: 'Renamed' } });
     const [a, b] = await Promise.all([refused, other]);
     assert.equal(a.status, 502);
     assert.equal(b.status, 200);
-    const onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
-    assert.equal(onDisk.profiles.bf.blindfoldPort, bfPort, 'the refused port is not saved by the other request');
+    let onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+    assert.equal(onDisk.activeProfiles.codex, null, 'the refused switch is not saved by the other request');
     assert.equal(onDisk.profiles.plain.name, 'Renamed');
+
+    // A usable interceptor port, and Codex on, for the second half. Chosen only now: other test files
+    // run at the same time, and a port picked seconds earlier can be taken in between.
+    bfPort = await freePort();
+    onDisk.blindfold = { port: bfPort };
+    fs.writeFileSync(ws.cfgPath, JSON.stringify(onDisk, null, 2), { mode: 0o600 });
+    const on = await post('/api/switch', { target: 'codex', profile: 'bf' });
+    assert.equal(on.status, 200, await on.text());
+    await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
+    const postProfile = (body) => post('/api/save-profile', body);
 
     // Two accepted changes to the active profile: the one that saves last keeps the other.
     const [c, d] = await Promise.all([
-      post({ key: 'bf', profile: { name: 'First' } }),
-      post({ key: 'bf', profile: { defaultModels: { main: 'm2' } } })
+      postProfile({ key: 'bf', profile: { name: 'First' } }),
+      postProfile({ key: 'bf', profile: { defaultModels: { main: 'm2' } } })
     ]);
     assert.equal(c.status, 200);
     assert.equal(d.status, 200);

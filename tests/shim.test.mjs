@@ -31,7 +31,11 @@ if (process.platform !== 'win32') {
     fs.chmodSync(path.join(RENDER_DIR, name), 0o755);
   }
 }
+// Only node, never the directory it lives in: an npm install puts the real claude and codex next to it.
+const NODE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'shimnode-'));
+if (process.platform !== 'win32') fs.symlinkSync(process.execPath, path.join(NODE_DIR, 'node'));
 test.after(() => {
+  fs.rmSync(NODE_DIR, { recursive: true, force: true });
   fs.rmSync(RENDER_DIR, { recursive: true, force: true });
   fs.rmSync(STATE, { recursive: true, force: true });
 });
@@ -47,7 +51,7 @@ function runShim(name, args, { active, fakeDir, extraPath = '', env = {}, files 
     fs.writeFileSync(path.join(STATE, `env-${name}.sh`), "export HTTPS_PROXY='http://127.0.0.1:3457'\n");
   }
   for (const [f, content] of Object.entries(files)) fs.writeFileSync(path.join(STATE, f), content);
-  const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin', path.dirname(process.execPath)]
+  const PATH_ = [RENDER_DIR, fakeDir, extraPath || '/usr/bin:/bin', NODE_DIR]
     .filter(Boolean).join(path.delimiter);
   return execFileSync(path.join(RENDER_DIR, name), args, {
     encoding: 'utf8', env: { ...process.env, ...env, PATH: PATH_ }, timeout: 15000

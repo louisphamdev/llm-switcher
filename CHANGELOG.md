@@ -1,5 +1,16 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.3
+
+- **Update notice:** The dashboard sidebar shows the running version. When npm has a newer release, a notice shows the update command with a copy button. The new command `switch version` prints the same information. The switcher asks the npm registry at most once in 12 hours. Without an answer, no notice shows.
+- **Codex daemon follows the route:** The interactive Codex TUI talks to a shared `codex app-server` daemon, and that daemon keeps the environment that it started with. As a result, the TUI bypassed the gateway after a switch. Now each change of the Codex route restarts the running daemon with the new variables. When no daemon runs, nothing starts.
+- **API keys stay with their host:** A catalog refresh sent the key of the active profile to the official Anthropic and OpenAI model lists. Now a key goes only to the host of its own profile.
+- **Real model catalog:** The catalog reads the model list that Codex and Claude Code keep on disk for the signed-in account. A failed refresh no longer marks the tool version as done, so the next request tries again.
+- **Dashboard saves:** Every write action reported a failure after it succeeded, because the page read `ok` and the server sends `success`. Enter in a field no longer saves a half-edited profile. A text selection that ends outside the dialog no longer closes it.
+- **Model slots:** Each slot is a searchable list of the provider models. The list loads when you open the Model Slots tab and sends the saved key. A profile without `outFormat` keeps it empty after a save.
+- **Other fixes:** `make-certs.sh` works when the path contains a dot. `switch doctor` warns again about a Codex profile without `publicModels`. Three dashboard controls have an accessible name.
+- **Tests:** The tests use the 1.2 configuration schema, never read the certificates of the checkout, and never reach the real Codex daemon, npm registry, or `claude` binary.
+
 ## Release 1.2.2
 
 - **Structured output reaches every upstream:** A request that asks for JSON that matches a schema now keeps that schema. Before this release, the gateway did not read `output_config.format` (Claude Code) or `text.format` (Codex), so the provider got a free-text request. The schema now goes to the provider as `response_format` (OpenAI Chat), `output_config.format` (Anthropic), or `responseMimeType` with `responseSchema` (Gemini and Vertex). A request for JSON without a schema reaches Anthropic as plain text, because Anthropic has no JSON mode without a schema.

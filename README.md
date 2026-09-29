@@ -401,6 +401,7 @@ Add the server to your MCP configuration (for example `opencode.jsonc`, `claude_
 ```bash
 switch ui                      # Open the Web UI dashboard in your browser
 switch status                  # Display status for all active CLI targets
+switch version                 # Show the version and tell you when npm has a newer one
 switch doctor                  # Audit environment, settings & routing
 switch on [profile]            # Start the gateway and activate a profile
 switch <profile>               # Activate a profile for both tools
