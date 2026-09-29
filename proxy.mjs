@@ -1399,9 +1399,14 @@ async function routeConfigApi(res, method, pathname, body) {
       }
       err = setTargetProfile(cfg, body.target, key);
     } else if (body.enabled) {
-      const key = hasProfile(cfg, cfg.activeProfile) ? cfg.activeProfile : Object.keys(cfg.profiles)[0];
-      if (!key) return sendJson(res, 400, { error: 'No profiles configured' });
-      err = activateProfile(cfg, key);
+      if (!Object.keys(cfg.profiles).length) return sendJson(res, 400, { error: 'No profiles configured' });
+      // Each tool gets the profile that the `target` form would give it. Turning everything off and on
+      // again must not leave a tool on the official endpoint when a profile can serve it.
+      const preferred = cfg.activeProfile;
+      for (const tool of TOOLS) {
+        const key = [map[tool], preferred, ...Object.keys(cfg.profiles)].find(k => hasProfile(cfg, k) && profileAcceptsTarget(cfg.profiles[k], tool));
+        if (key) err = err || setTargetProfile(cfg, tool, key);
+      }
     } else {
       deactivateAll(cfg);
     }

@@ -1,5 +1,14 @@
 # Changelog — LLM Switcher
 
+## Unreleased
+
+- **Save from the dashboard:** The dashboard sent `tool: "auto"` for a profile that serves both tools. The gateway refuses that value. As a result, a new profile with the default tool, four of the five templates, and a save of any both-tools profile all failed. Now the dashboard saves `tool: null` for such a profile. The Vertex AI template uses `claude`.
+- **New profile with a used key:** A new profile with the key of an existing profile replaced that profile and its API key without a warning. Now the dashboard refuses the save and names the key.
+- **Turn all routes on:** After you turned every route off, "Activate compatible routes" gave only one profile a route. Codex stayed on the official endpoint. Now each tool gets its own profile, the same way as the `target` form of `/api/toggle`.
+- **Failed switch:** After a failed switch, the dashboard kept the state that the person had pressed. Now it reads the state from the gateway again, so the switch, the badges, and the file agree.
+- **Element ids:** The sidebar and the page header both used the id `btn-toggle`. The header button is now `btn-toggle-routes`.
+- **Tests:** New browser tests press the real dashboard: routes, profile forms, model slots, connection test, delete, catalog, and request inspector. After each step they check that the page, the gateway, and `config.json` say the same. They need Chromium and a global `WebSocket` (Node 22 or newer). Without them, the tests skip. Set `LLM_SWITCHER_CHROMIUM` to use another browser binary.
+
 ## Release 1.2.6
 
 - **Deactivate in the dashboard:** The Deactivate button did not change the configuration, but the dashboard showed "deactivated". The dashboard sends `deactivate: true` and the profile key in `profile`. The gateway read `deactivate` as the profile key, so no target matched. Now `POST /api/switch` accepts both forms: `{"profile": "x", "deactivate": true}` and `{"deactivate": "x"}`.

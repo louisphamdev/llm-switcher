@@ -1405,7 +1405,7 @@
         }
         actionsEl.innerHTML = `
           <button class="btn btn-primary" onclick="openProfileModal(true)">+ Add Profile</button>
-          <button class="btn btn-outline" id="btn-toggle" onclick="toggleProxy()">${activeTargets.length > 0 ? 'Use official endpoints' : 'Activate compatible routes'}</button>
+          <button class="btn btn-outline" id="btn-toggle-routes" onclick="toggleProxy()">${activeTargets.length > 0 ? 'Use official endpoints' : 'Activate compatible routes'}</button>
           <button class="btn btn-outline" onclick="loadStatus()">Refresh</button>
         `;
       } else if (route === 'models') {
@@ -1856,13 +1856,13 @@
         const data = await res.json();
         if (data.success) {
           showToast('Updated ' + target + ' routing');
-          await loadStatus();
         } else {
           showToast(data.error || 'Failed to switch target', true);
         }
       } catch (err) {
         showToast('Network error switching target', true);
       }
+      await loadStatus();
     }
 
     async function toggleProfileAllCli(key, enable) {
@@ -1876,13 +1876,13 @@
         const data = await res.json();
         if (data.success) {
           showToast(key + (enable ? ' activated' : ' deactivated'));
-          await loadStatus();
         } else {
           showToast(data.error || 'Failed to toggle profile', true);
         }
       } catch (err) {
         showToast('Network error toggling profile', true);
       }
+      await loadStatus();
     }
 
     function loadProfileToForm(key) {
@@ -1977,7 +1977,7 @@
       vertex: {
         name: 'Google Vertex AI',
         baseURL: 'https://us-central1-aiplatform.googleapis.com/v1',
-        tool: 'anthropic',
+        tool: 'claude',
         outFormat: 'vertex',
         mode: 'convert',
         thinkingMode: 'auto',
@@ -2024,13 +2024,13 @@
         const data = await res.json();
         if (data.success) {
           showToast(isAnyActive ? 'Using official endpoints' : 'Gateway activated');
-          await loadStatus();
         } else {
           showToast(data.error || 'Failed to toggle routes', true);
         }
       } catch (err) {
         showToast('Network error toggling routes', true);
       }
+      await loadStatus();
     }
 
     async function saveProfile(e) {
@@ -2039,13 +2039,18 @@
       if (!key) return;
 
       collectCurrentSlotValues();
+      if (creatingNew && state.config?.profiles?.[key]) {
+        showToast('Profile "' + key + '" already exists. Use another key, or edit that profile.', true);
+        return;
+      }
       const existing = state.config?.profiles?.[key] || {};
       const keyVal = document.getElementById('p-key-val').value.trim();
 
       const profilePayload = {
         name: document.getElementById('p-name').value.trim(),
         baseURL: document.getElementById('p-url').value.trim(),
-        tool: document.getElementById('p-tool').value,
+        // "auto" in the list means a profile for both tools, which config.json stores as null.
+        tool: document.getElementById('p-tool').value === 'auto' ? null : document.getElementById('p-tool').value,
         outFormat: document.getElementById('p-outformat').value,
         mode: document.getElementById('p-mode').value,
         thinkingMode: document.getElementById('p-thinking-mode').value,
