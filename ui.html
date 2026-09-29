@@ -472,8 +472,10 @@
       text-decoration: none;
       font-size: 0.84rem;
       font-weight: 500;
-      transition: filter 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+      transition: filter 0.15s, background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
     }
+    /* Press feedback after Uiverse.io ItsEnigma143 (MIT). */
+    button:active:not(:disabled), .btn:active:not(:disabled) { transform: scale(0.97); }
     button.primary, .btn.btn-primary {
       background: var(--accent-strong);
       color: var(--accent-fg);
@@ -503,6 +505,21 @@
     button.icon { min-height: 28px; min-width: 28px; padding: 0.2rem; background: transparent; color: var(--muted); border-radius: 6px; }
     button.icon:hover { color: var(--fg); background: var(--card2); }
     button:disabled, .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+    /* A busy button keeps its full colour: the spinner, not the fade, says it works. */
+    button[aria-busy="true"]:disabled { opacity: 1; }
+    /* Spinner after Uiverse.io Cybercom682 (MIT): a ring with one open side. */
+    button[aria-busy="true"]::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      flex: none;
+      box-sizing: border-box;
+      border-radius: 50%;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(1turn); } }
     .btn-sm { min-height: 26px; padding: 0.2rem 0.6rem; font-size: 0.78rem; border-radius: 6px; }
 
     /* Inputs */
@@ -516,7 +533,9 @@
       min-height: 36px;
       width: 100%;
       font-size: 0.85rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
+    input:hover:not(:focus):not(:disabled), select:hover:not(:focus):not(:disabled), textarea:hover:not(:focus):not(:disabled) { border-color: var(--faint); }
     input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible {
       outline: none;
       border-color: var(--accent);
@@ -567,12 +586,50 @@
     @media (prefers-reduced-motion: reduce) { .combo-toggle svg { transition: none; } }
 
     /* Switch */
-    .switch { position: relative; width: 36px; height: 20px; flex: none; display: inline-block; }
+    /* Switch after Uiverse.io iSweat-exe (MIT); the knob stretches while pressed.
+       The inset ring keeps the off track visible: --line alone nearly vanishes on a card. */
+    .switch { position: relative; width: 36px; height: 20px; flex: none; display: inline-block; vertical-align: middle; }
     .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; min-height: 0; }
-    .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background 0.15s; pointer-events: none; }
-    .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #ffffff; transition: transform 0.15s; }
-    .switch input:checked + span { background: var(--accent-strong); }
+    .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); box-shadow: inset 0 0 0 1.5px var(--faint); transition: background-color 0.25s, box-shadow 0.25s; pointer-events: none; }
+    .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.25s cubic-bezier(0.3, 1.4, 0.6, 1), width 0.15s; }
+    .switch input:active + span::after { width: 20px; }
+    .switch input:checked + span { background: var(--accent-strong); box-shadow: none; }
     .switch input:checked + span::after { transform: translateX(16px); }
+    .switch input:checked:active + span::after { transform: translateX(12px); }
+    .switch input:focus-visible + span, input[type="checkbox"]:not(.switch input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* Checkbox after Uiverse.io adamgiebl (MIT): the tick scales in.
+       !important beats the inline sizes on the log and 1M boxes. */
+    input[type="checkbox"]:not(.switch input) {
+      appearance: none;
+      width: 16px !important;
+      height: 16px !important;
+      min-height: 0 !important;
+      padding: 0;
+      margin: 0;
+      flex: none;
+      border: 1.5px solid var(--faint);
+      border-radius: 4px;
+      background: var(--bg);
+      cursor: pointer;
+      display: inline-grid;
+      place-content: center;
+      vertical-align: middle;
+      transition: background-color 0.15s, border-color 0.15s;
+    }
+    input[type="checkbox"]:not(.switch input)::before {
+      content: "";
+      width: 4px;
+      height: 8px;
+      margin-top: -2px;
+      border: solid var(--accent-fg);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg) scale(0);
+      transition: transform 0.15s cubic-bezier(0.3, 1.4, 0.6, 1);
+    }
+    input[type="checkbox"]:not(.switch input):checked { background: var(--accent-strong); border-color: var(--accent-strong); }
+    input[type="checkbox"]:not(.switch input):checked::before { transform: rotate(45deg) scale(1); }
+    input[type="checkbox"]:not(.switch input):disabled { opacity: 0.45; cursor: default; }
 
     /* Modal */
     .overlay {
@@ -584,7 +641,11 @@
       place-items: center;
       padding: 1rem;
       z-index: 50;
+      opacity: 1;
+      transition: opacity 0.18s;
     }
+    .overlay .modal { transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+    @starting-style { .overlay { opacity: 0; } .overlay .modal { transform: scale(0.96) translateY(8px); } }
     .modal {
       background: var(--card);
       border: 1px solid var(--line);
@@ -675,6 +736,7 @@
     }
 
     /* Toast */
+    /* Toast after Uiverse.io alexruix (MIT): it slides in; the bar shows how long it stays. */
     .toast {
       position: fixed;
       bottom: 1.25rem;
@@ -684,15 +746,50 @@
       color: var(--fg);
       border: 1px solid var(--line);
       box-shadow: var(--shadow);
-      padding: 0.55rem 1.1rem;
+      padding: 0.6rem 1.1rem 0.6rem 0.85rem;
       border-radius: 10px;
       font-size: 0.85rem;
       z-index: 60;
       display: none;
-      animation: fadeIn 0.15s ease-out;
+      align-items: center;
+      gap: 0.6rem;
+      overflow: hidden;
+      max-width: 90vw;
+      animation: fadeIn 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2);
     }
+    .toast::before { content: ""; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+    .toast::after { content: ""; position: absolute; left: 0; bottom: 0; width: 100%; height: 2px; background: var(--accent); transform-origin: left; animation: toastbar 3.2s linear forwards; }
     .toast.err { border-color: var(--err); color: var(--err); }
-    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    .toast.err::before { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
+    .toast.err::after { background: var(--err); }
+    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    @keyframes toastbar { to { transform: scaleX(0); } }
+    /* Tooltip after Uiverse.io elijahgummer (MIT): a short fade and rise that
+       replaces the native title bubble. */
+    .tip {
+      position: fixed;
+      z-index: 70;
+      pointer-events: none;
+      background: var(--fg);
+      color: var(--bg);
+      font-size: 0.72rem;
+      font-weight: 500;
+      padding: 0.3rem 0.55rem;
+      border-radius: 6px;
+      white-space: nowrap;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+      opacity: 1;
+      translate: 0 0;
+      transition: opacity 0.15s, translate 0.2s cubic-bezier(0.3, 1.4, 0.6, 1), display 0.15s;
+      transition-behavior: allow-discrete;
+    }
+    .tip[hidden] { display: none; opacity: 0; translate: 0 4px; }
+    @starting-style { .tip { opacity: 0; translate: 0 4px; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+      button[aria-busy="true"]::before { animation-duration: 1.5s !important; }
+      .toast::after { animation-duration: 3.2s !important; }
+    }
 
     /* Test Result Box in Modal */
     .test-result-box {
@@ -1117,7 +1214,8 @@
     </div>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
 
   <script>
     // State & Globals
@@ -1190,10 +1288,39 @@
       if (!toast) return;
       toast.textContent = msg;
       toast.className = 'toast' + (isErr ? ' err' : '');
-      toast.style.display = 'block';
+      // Hiding first and reading a layout value restarts the entry animation and the timer bar.
+      toast.style.display = 'none';
+      void toast.offsetWidth;
+      toast.style.display = 'flex';
       clearTimeout(toastTimeout);
       toastTimeout = setTimeout(() => { toast.style.display = 'none'; }, 3200);
     }
+
+    // The title moves to data-tip on first hover, so the native bubble does not show as well.
+    // An input keeps its title: the browser shows it in the validation message.
+    const tip = document.getElementById('tip');
+    function showTip(e) {
+      const n = e.target.closest && e.target.closest('[title]:not(input), [data-tip]');
+      if (!n) return;
+      if (n.title) {
+        n.dataset.tip = n.title;
+        n.removeAttribute('title');
+        if (!n.hasAttribute('aria-label')) n.setAttribute(n.textContent.trim() ? 'aria-description' : 'aria-label', n.dataset.tip);
+      }
+      tip.textContent = n.dataset.tip;
+      tip.hidden = false;
+      const r = n.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+      tip.style.left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8)) + 'px';
+      tip.style.top = (r.top - h - 8 < 8 ? r.bottom + 8 : r.top - h - 8) + 'px';
+    }
+    const hideTip = () => { tip.hidden = true; };
+    document.addEventListener('pointerover', showTip);
+    document.addEventListener('focusin', showTip);
+    document.addEventListener('pointerout', e => {
+      const n = e.target.closest && e.target.closest('[data-tip]');
+      if (n && !n.contains(e.relatedTarget)) hideTip();
+    });
+    for (const ev of ['focusout', 'click', 'scroll']) addEventListener(ev, hideTip, true);
 
     // Modal Control
     function openProfileModal(isNew = false) {
@@ -1990,6 +2117,7 @@
 
       btn.innerText = 'Testing...';
       btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
       box.style.display = 'none';
 
       try {
@@ -2040,6 +2168,7 @@
       } finally {
         btn.innerText = 'Test Connection';
         btn.disabled = false;
+        btn.removeAttribute('aria-busy');
       }
     }
 
@@ -2324,7 +2453,7 @@
 
     async function refreshCatalogUpstream() {
       const btn = document.getElementById('btn-sync-catalog');
-      if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+      if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); btn.textContent = 'Syncing...'; }
       showToast('Refreshing model catalog from upstream...');
       try {
         const res = await api('/api/catalog/refresh', { method: 'POST' });
@@ -2338,7 +2467,7 @@
       } catch (err) {
         showToast('Network error syncing catalog', true);
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '⚡ Sync Models with Upstream'; }
+        if (btn) { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = '⚡ Sync Models with Upstream'; }
       }
     }
 
