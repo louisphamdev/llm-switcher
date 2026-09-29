@@ -402,6 +402,7 @@ Thêm server vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_co
 ```bash
 switch ui                      # Mở giao diện Web UI trên trình duyệt
 switch status                  # Xem trạng thái kích hoạt của tất cả các CLI
+switch version                 # Xem version đang chạy và báo khi npm có bản mới
 switch doctor                  # Quét & thanh tra toàn bộ môi trường, settings và định tuyến
 switch on [profile]            # Khởi động gateway và kích hoạt một profile
 switch <profile>               # Kích hoạt một profile cho cả hai công cụ
