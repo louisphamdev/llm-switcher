@@ -8,7 +8,7 @@ import {
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
-  probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher,
+  probeGateway, probeBlindfold, ensureBlindfoldCerts, stopRecordedBlindfold, writeDashboardLauncher,
   contractLabSettings, codexPublicModelsWarning,
   getMigrationError, getMigrationCollision, getLastLoadError,
   casClearToolPointers, emptyToolEnvFiles, syncInterceptorTools
@@ -362,10 +362,11 @@ function planSwitch(base, key, cliTarget) {
 
 function refuseBlindfoldProblem(planned, port) {
   const bf = computeLaunchState(planned, port).blindfold;
-  const problem = bf && blindfoldPreflight(bf);
+  // A missing or outdated certificate is built here; only a set that cannot be built stops the switch.
+  const problem = bf && ensureBlindfoldCerts(bf);
   if (!problem) return bf;
   console.error(`[Error] ${problem}`);
-  console.error('        Fix the certificate with: bash blindfold/make-certs.sh - it names all three hosts this switcher routes. Nothing was changed.');
+  console.error('        Nothing was changed.');
   process.exit(1);
 }
 
@@ -959,14 +960,14 @@ async function runDoctor() {
   const leafPath = path.join(path.dirname(paths.blindfoldCA), 'leaf.pem');
   if (!fs.existsSync(leafPath)) {
     warn(`[WARN] No interceptor certificate at ${leafPath}: neither tool can be intercepted.`);
-    console.log('        Fix: bash blindfold/make-certs.sh');
+    console.log('        Fix: switch a tool on; the switcher builds the certificate. Or run bash blindfold/make-certs.sh');
   } else {
     try {
       const pem = fs.readFileSync(leafPath, 'utf8');
       const missing = ['api.anthropic.com', 'api.openai.com', 'chatgpt.com'].filter(h => !certCoversHost(pem, h));
       if (missing.length) {
         warn(`[WARN] The interceptor certificate does not cover ${missing.join(', ')}.`);
-        console.log('        Fix: bash blindfold/make-certs.sh   (it names all three hosts this switcher routes)');
+        console.log('        Fix: switch a tool on; the switcher rebuilds the certificate on the same CA. Or run bash blindfold/make-certs.sh');
       } else {
         console.log('[PASS] Interceptor certificate covers api.anthropic.com, api.openai.com and chatgpt.com.');
       }

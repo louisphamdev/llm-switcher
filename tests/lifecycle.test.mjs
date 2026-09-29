@@ -167,37 +167,50 @@ test('switch on refuses a foreign gateway port and changes nothing', { skip: !PO
   }
 });
 
-test('switch codex <blindfold profile> refuses missing certificates, a missing leaf.key and a foreign interceptor port, changing nothing', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
+// A missing or outdated certificate set is built before anything else is checked, so turning a
+// Codex profile on never stops at the certificates. A squatter on the interceptor port keeps the
+// switch refused here, which shows the build ran first and that nothing else changed.
+test('switch codex <blindfold profile> builds missing certificates and a missing leaf.key, and refuses a foreign interceptor port, changing nothing else', { skip: !HAS_OPENSSL && 'posix + openssl' }, async () => {
   const cases = [];
+  const squatter = net.createServer(s => s.end('HTTP/1.1 200 OK\r\n\r\nnot the switcher'));
+  const bfPort = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
   try {
     // 1. no certificates at all
     const a = makeWorkspace(); cases.push(a);
-    writeConfig(a, await freePort(), await freePort());
     // 2. leaf.key missing
     const b = makeWorkspace({ certs: true }); cases.push(b);
     fs.rmSync(path.join(b.certDir, 'leaf.key'));
-    writeConfig(b, await freePort(), await freePort());
-    // 3. valid certificates, but another process holds the interceptor port
+    const caBefore = fs.readFileSync(path.join(b.certDir, 'ca.pem'), 'utf8');
+    // 3. valid certificates
     const c = makeWorkspace({ certs: true }); cases.push(c);
-    const squatter = net.createServer(s => s.end('HTTP/1.1 200 OK\r\n\r\nnot the switcher'));
-    const bfPort = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
-    writeConfig(c, await freePort(), bfPort);
-    try {
-      for (const [ws, why] of [[a, /missing/], [b, /leaf\.key is missing/], [c, /held by another process/]]) {
-        const before = fs.readFileSync(ws.cfgPath);
-        const launch = snapshotLaunchFiles(ws.dir);
-        const r = await runSwitch(ws, ['codex', 'bf']);
-        assert.notEqual(r.status, 0, r.stdout);
-        assert.match(r.stderr, why);
-        assert.deepEqual(fs.readFileSync(ws.cfgPath), before, 'config.json is byte-identical');
-        assert.ok(!fs.existsSync(path.join(ws.dir, 'blindfold.json')));
-        assert.deepEqual(snapshotLaunchFiles(ws.dir), launch, 'no launcher file changed');
-      }
-    } finally {
-      squatter.close();
+    for (const ws of cases) writeConfig(ws, await freePort(), bfPort);
+    for (const ws of cases) {
+      const before = fs.readFileSync(ws.cfgPath);
+      const launch = snapshotLaunchFiles(ws.dir);
+      const r = await runSwitch(ws, ['codex', 'bf']);
+      assert.notEqual(r.status, 0, r.stdout);
+      assert.match(r.stderr, /held by another process/);
+      assert.doesNotMatch(r.stderr, /missing/);
+      assert.equal(await probe(ws, `s.blindfoldPreflight({ ca: ${JSON.stringify(path.join(ws.certDir, 'ca.pem'))} })`), null, 'the certificates are usable now');
+      assert.deepEqual(fs.readFileSync(ws.cfgPath), before, 'config.json is byte-identical');
+      assert.ok(!fs.existsSync(path.join(ws.dir, 'blindfold.json')));
+      assert.deepEqual(snapshotLaunchFiles(ws.dir), launch, 'no launcher file changed');
     }
+    assert.equal(fs.readFileSync(path.join(b.certDir, 'ca.pem'), 'utf8'), caBefore, 'a working CA is kept: Codex already trusts it');
   } finally {
+    squatter.close();
     for (const ws of cases) fs.rmSync(ws.dir, { recursive: true, force: true });
+  }
+});
+
+test('the gateway check builds a missing certificate set instead of refusing the change', { skip: !POSIX && 'posix' }, async () => {
+  const ws = makeWorkspace();
+  try {
+    writeConfig(ws, await freePort(), await freePort(), 'bf');
+    assert.equal(await probe(ws, `s.checkBlindfoldTarget(s.loadConfig(), s.loadConfig().port)`), null);
+    for (const f of ['ca.pem', 'ca.key', 'leaf.pem', 'leaf.key']) assert.ok(fs.existsSync(path.join(ws.certDir, f)), f);
+  } finally {
+    fs.rmSync(ws.dir, { recursive: true, force: true });
   }
 });
 

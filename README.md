@@ -120,7 +120,7 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
 
 > #### 🔒 CA Security & Origin: Where does the CA come from and how safe is it?
 >
-> - **100% Locally Minted:** The CA certificate (`ca.pem`) and private key (`ca.key`) are generated entirely on your own machine using your local OpenSSL (`blindfold/make-certs.sh`). No keys are downloaded from the internet, and the private key is stored locally with strict `0600` permissions.
+> - **100% Locally Minted:** The CA certificate (`ca.pem`) and private key (`ca.key`) are generated entirely on your own machine. The switcher builds them itself with Node's crypto the first time a tool is switched on, and again when the leaf is missing or out of date. It keeps a CA that still works, because Codex already trusts it. `blindfold/make-certs.sh` builds the same set with OpenSSL. No keys are downloaded from the internet, and the private key is stored locally with strict `0600` permissions.
 > - **Zero OS Trust Store Tampering:** Unlike tools like Charles or Fiddler, LLM Switcher **NEVER installs anything into your system or OS root certificate store** (no Windows Certificate Store, no macOS Keychain, no Linux `/etc/ssl/certs`). It requires **zero Administrator or sudo privileges**.
 > - **Process-Scoped Trust Only:** The certificate is loaded ephemerally into the memory of `claude` (via `NODE_EXTRA_CA_CERTS`) and `codex` (via `CODEX_CA_CERTIFICATE`). Your browsers, banking apps, git, and other terminal sessions never trust this CA.
 > - **Cryptographic Name Constraints:** The CA is minted with explicit X.509 `nameConstraints` strictly permitting only three domains: `api.anthropic.com`, `api.openai.com`, and `chatgpt.com`. Even if the local private key were compromised, standard TLS verifiers will reject it for any other domain (Google, GitHub, your bank).
@@ -279,9 +279,8 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold mode removes that line. Codex keeps its official endpoint, and the switcher intercepts the network hop instead. It needs no administrator rights, no certificate in a system trust store, and no change to `~/.codex/config.toml`.
 
 ```bash
-bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh"   # once; a checkout runs blindfold/make-certs.sh
 # the port is already top-level in config.json: "blindfold": { "port": 3457 }
-switch codex <profile>                     # the gateway starts the interceptor
+switch codex <profile>   # builds the certificates when they are missing, then the gateway starts the interceptor
 ```
 
 One interceptor serves both tools. It routes by the host of the CONNECT request and by the path,

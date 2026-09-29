@@ -120,7 +120,7 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
 
 > #### 🔒 Độ An Toàn & Nguồn Gốc Chứng Chỉ CA: CA từ đâu ra và an toàn thế nào?
 >
-> - **Tự sinh 100% tại máy cục bộ:** File chứng chỉ (`ca.pem`) và private key (`ca.key`) được sinh trực tiếp trên chính máy tính của bạn bằng OpenSSL nội bộ (`blindfold/make-certs.sh`). Tuyệt đối không tải bất kỳ chứng chỉ nào từ internet về, private key được lưu với quyền bảo mật nghiêm ngặt `0600`.
+> - **Tự sinh 100% tại máy cục bộ:** File chứng chỉ (`ca.pem`) và private key (`ca.key`) được sinh trực tiếp trên chính máy tính của bạn. Switcher tự tạo chúng bằng crypto của Node ở lần đầu bật một công cụ, và tạo lại khi leaf bị thiếu hoặc đã cũ. CA còn dùng được thì được giữ nguyên, vì Codex đã tin nó. `blindfold/make-certs.sh` tạo đúng bộ đó bằng OpenSSL. Tuyệt đối không tải bất kỳ chứng chỉ nào từ internet về, private key được lưu với quyền bảo mật nghiêm ngặt `0600`.
 > - **Không can thiệp vào System Trust Store của hệ điều hành:** Khác với các công cụ bắt proxy như Charles hay Fiddler, LLM Switcher **tuyệt đối KHÔNG cài đặt chứng chỉ vào OS Root Store** (không đụng vào Windows Certificate Manager, macOS Keychain hay Linux `/etc/ssl/certs`). Bạn **không cần quyền Administrator hay sudo**.
 > - **Chỉ tin cậy trong phạm vi tiến trình (Process-Scoped):** Chứng chỉ CA chỉ được nạp tạm thời vào bộ nhớ của `claude` (qua `NODE_EXTRA_CA_CERTS`) và `codex` (qua `CODEX_CA_CERTIFICATE`). Trình duyệt web (Chrome, Edge), ứng dụng ngân hàng, git và các app khác trên máy hoàn toàn không biết và không tin cậy chứng chỉ này.
 > - **Giới hạn tên miền bằng mật mã học (Name Constraints):** Chứng chỉ CA được cấu hình thuộc tính X.509 `nameConstraints` bắt buộc, chỉ cho phép ký duy nhất cho 3 domain: `api.anthropic.com`, `api.openai.com`, và `chatgpt.com`. Dù có ai đánh cắp được private key, các trình xác thực TLS chuẩn sẽ lập tức từ chối chứng chỉ này đối với mọi trang web khác (Google, GitHub, ngân hàng...).
@@ -281,9 +281,8 @@ base URL is overridden to http://127.0.0.1:3456/v1. Selecting models may not be 
 Blindfold xóa dòng đó. Codex giữ nguyên endpoint chính thức, switcher chặn ở tầng mạng. Không cần quyền admin, không cài chứng chỉ vào system trust store, không sửa `~/.codex/config.toml`.
 
 ```bash
-bash "$(npm root -g)/llm-switcher/blindfold/make-certs.sh"   # chạy một lần; bản checkout chạy blindfold/make-certs.sh
 # cổng đã nằm sẵn ở cấp cao nhất của config.json: "blindfold": { "port": 3457 }
-switch codex <profile>                     # gateway khởi động interceptor
+switch codex <profile>   # tự tạo chứng chỉ khi còn thiếu, rồi gateway khởi động interceptor
 ```
 
 Một interceptor phục vụ cả hai công cụ. Nó định tuyến theo host của request CONNECT và theo path,

@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { buildCerts, writeLeaf } from './blindfold/certs.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1743,6 +1744,32 @@ export async function stopRecordedBlindfold() {
   return { ok: stopped, ...(stopped ? {} : { error: `the interceptor on port ${prev.port} did not stop` }) };
 }
 
+// A CA that still works is kept when the leaf is rebuilt: Codex already trusts it.
+function caUsable(dir) {
+  try {
+    const ca = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca.pem')));
+    return ca.ca && Date.parse(ca.validTo) > Date.now() + 86400000
+      && ca.checkPrivateKey(crypto.createPrivateKey(fs.readFileSync(path.join(dir, 'ca.key'))));
+  } catch {
+    return false;
+  }
+}
+
+/** Builds the certificates when they are missing or unusable, then returns what the preflight
+ * says of them: null when the interceptor can start. */
+export function ensureBlindfoldCerts(desired) {
+  const problem = blindfoldPreflight(desired);
+  if (!problem) return null;
+  const dir = path.dirname(desired.ca);
+  try {
+    if (caUsable(dir)) writeLeaf(dir, INTERCEPT_HOSTS);
+    else buildCerts(dir, INTERCEPT_HOSTS);
+  } catch (err) {
+    return `${problem} Building them failed: ${err.message}`;
+  }
+  return blindfoldPreflight(desired);
+}
+
 /** null when the interceptor can start, otherwise the reason and the command that fixes it. */
 export function blindfoldPreflight(desired) {
   const certDir = path.dirname(desired.ca);
@@ -1810,11 +1837,12 @@ function spawnBlindfold(desired, gatewayPort) {
   return child.pid;
 }
 
-/** null when the interceptor that cfg asks for can run, otherwise the reason. No side effects. */
+/** null when the interceptor that cfg asks for can run, otherwise the reason. Builds missing or
+ * outdated certificates on the way; changes nothing else. */
 export async function checkBlindfoldTarget(cfg, gatewayPort) {
   const desired = computeLaunchState(cfg, gatewayPort).blindfold;
   if (!desired) return null;
-  const problem = blindfoldPreflight(desired);
+  const problem = ensureBlindfoldCerts(desired);
   if (problem) return problem;
   const held = (await probeBlindfold(desired.port)).state;
   if (held === 'foreign') return `Port ${desired.port} is held by another process, not by this switcher's interceptor.`;

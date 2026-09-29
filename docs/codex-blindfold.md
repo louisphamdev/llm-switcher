@@ -72,12 +72,14 @@ You need:
 
 ## Procedure
 
-### 1. Build the certificates
+### 1. The certificates
 
-Run this command in the repository root:
+You do not have to build them. When a tool is switched on and the certificates are missing, the switcher builds them with Node's crypto. It builds a new leaf when the leaf is missing, does not cover the three hosts, or does not match its key. It keeps a CA that still works, because Codex already trusts that CA. The set is the one that `make-certs.sh` builds: an EC P-256 CA with name constraints, and a leaf with `serverAuth` for `api.anthropic.com`, `api.openai.com` and `chatgpt.com`.
+
+To build the set yourself with OpenSSL, run this command in the repository root:
 
 ```bash
-bash blindfold/make-certs.sh chatgpt.com
+bash blindfold/make-certs.sh
 ```
 
 The script writes `blindfold/certs/ca.pem` and `blindfold/certs/leaf.pem`. It prints the extended key usage and the subject alternative name of the leaf. Make sure that the output contains `TLS Web Server Authentication`.
@@ -212,7 +214,7 @@ The switcher writes `LLM_SWITCHER_CODEX_BASE_URL` again, the gateway stops the i
 
 Read this section before you turn blindfold mode on.
 
-**The CA is trusted for every host that Codex contacts.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. A CA that `make-certs.sh` builds now carries name constraints: it can sign only for `api.anthropic.com`, `api.openai.com` and `chatgpt.com`. A client that obeys name constraints refuses any other certificate from this CA. OpenSSL, rustls and the macOS and Windows verifiers obey them. A CA that an older version built has no constraint. Anybody who can read its `ca.key` can forge a certificate for any host. Run `make-certs.sh` again to replace it, and keep `blindfold/certs/` private in both cases.
+**The CA is trusted for every host that Codex contacts.** `CODEX_CA_CERTIFICATE` adds this authority to the trust store that Codex uses for all of its HTTPS calls. A CA that the switcher or `make-certs.sh` builds carries name constraints: it can sign only for `api.anthropic.com`, `api.openai.com` and `chatgpt.com`. A client that obeys name constraints refuses any other certificate from this CA. OpenSSL, rustls and the macOS and Windows verifiers obey them. A CA that an older version built has no constraint. Anybody who can read its `ca.key` can forge a certificate for any host. Run `make-certs.sh` again to replace it, and keep `blindfold/certs/` private in both cases.
 
 **All traffic to the intercepted host is decrypted by this process.** That includes sign-in and token refresh, because the CONNECT for the whole host is terminated locally. Requests outside the Codex API path are re-originated to the real host over a new TLS session; they are forwarded, not tunneled. The `--verbose` flag prints the method and path of every such request.
 
