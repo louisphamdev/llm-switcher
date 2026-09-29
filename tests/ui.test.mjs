@@ -88,3 +88,23 @@ test('a profile without outFormat keeps auto routing through a save', () => {
   assert.match(html, /<select id="p-outformat">\s*<option value="">/);
   assert.match(html, /getElementById\('p-outformat'\)\.value = p\.outFormat \|\| '';/);
 });
+
+// The 1M box is locked only when the model's window is known and under 1M. An unknown window
+// only warns: many gateways list no limits at all.
+test('contextVerdict locks only a window known to be under 1M', () => {
+  const verdict = new Function(functionBody('contextVerdict') + '\n    }\n    return contextVerdict;')();
+  assert.equal(verdict(undefined).kind, 'unknown');
+  assert.equal(verdict({ output: 32000 }).kind, 'unknown');
+  assert.equal(verdict({ context: 200000 }).kind, 'small');
+  assert.equal(verdict({ context: 200000 }).window, 200000);
+  assert.equal(verdict({ input: 1000000 }).kind, 'ok');
+  assert.equal(verdict({ context: 1048576 }).kind, 'ok');
+});
+
+test('each 1M box names its slot and points at its note', () => {
+  const slots = functionBody('renderModelSlots');
+  assert.match(slots, /aria-label="1M context for \$\{escapeHtml\(s\.name\)\}"/);
+  assert.match(slots, /aria-describedby="p-\$\{s\.id\}-1m-note"/);
+  assert.match(slots, /class="slot-1m-note" id="p-\$\{s\.id\}-1m-note" role="status"/);
+  assert.doesNotMatch(html, /\.slot-1m-note:empty \{ display: none/);
+});

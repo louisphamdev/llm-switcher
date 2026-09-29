@@ -312,6 +312,10 @@ Read [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) before you turn i
   or an auto-compact limit, and it writes no model name into your environment. Claude Code sizes
   its own session from the window of the model you pick. A backend whose window is smaller than
   that model can overflow in a long session. `model1M` now only decides what `/v1/models` reports.
+  The dashboard reads each model's window from the gateway's model list (`context_length` or
+  `max_input_tokens`, as intact and OpenRouter give them). When the window is known to be under
+  1M, the slot's **1M context** box is cleared and locked. When the list gives no window, the box
+  stays free and shows a warning when it is ticked.
 - **Codex needs certificates once.** Blindfold mode is what keeps Codex on its official endpoint,
   and it needs a private CA plus a leaf naming the three hosts above. Skip it and Codex shows the
   `base URL is overridden` line on its `/model` screen instead.

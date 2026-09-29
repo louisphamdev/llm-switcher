@@ -659,6 +659,36 @@ test('Security: the admin API refuses a caller without the token and changes not
   }
 });
 
+// The model list carries each model's token limits, as intact and OpenRouter give them, so the
+// 1M context box can be locked for a model known to be smaller.
+test('Browse Models returns the token limits the gateway lists', async () => {
+  const sink = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [
+      { id: 'big', context_length: 1048576, max_output_tokens: 65536 },
+      { id: 'small', context_length: 200000 },
+      { id: 'or', top_provider: { context_length: 262144, max_completion_tokens: 32768 } },
+      { id: 'in', max_input_tokens: 1000000 },
+      { id: 'bare' }
+    ] }));
+  });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  try {
+    const r = await post('/api/fetch-models', { baseURL: `http://127.0.0.1:${sink.address().port}` });
+    const data = await r.json();
+    assert.equal(data.ok, true);
+    assert.deepEqual(data.models, ['bare', 'big', 'in', 'or', 'small']);
+    assert.deepEqual(data.limits, {
+      big: { context: 1048576, output: 65536 },
+      small: { context: 200000 },
+      or: { context: 262144, output: 32768 },
+      in: { input: 1000000 }
+    });
+  } finally {
+    sink.close();
+  }
+});
+
 test('Admin API: keys are redacted and invalid switch input is rejected', async () => {
   const status = await (await fetch(url('/api/status'), { headers: withToken('/api/status', {}) })).json();
   assert.ok(!JSON.stringify(status).includes('sk-secret'));

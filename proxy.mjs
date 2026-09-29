@@ -1078,12 +1078,30 @@ async function fetchModels(body, cfg) {
   const r = await fetch(`${baseURL}/models`, { headers, signal: upstreamTimeout(15000) });
   if (!r.ok) return { status: 200, json: { ok: false, status: r.status, error: (await r.text()).slice(0, 2000) } };
   const data = await r.json();
-  let list = [];
-  if (Array.isArray(data.data)) list = data.data.map(m => (typeof m === 'string' ? m : m.id));
-  else if (Array.isArray(data)) list = data.map(m => (typeof m === 'string' ? m : m.id));
-  else if (Array.isArray(data.models)) list = data.models.map(m => (typeof m === 'string' ? m : (m.id || m.name)));
-  list = [...new Set(list.filter(Boolean).map(id => String(id).replace(/^models\//, '')))].sort();
-  return { status: 200, json: { ok: true, models: list } };
+  const entries = Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : Array.isArray(data.models) ? data.models : [];
+  const idOf = m => String(typeof m === 'string' ? m : (m?.id || m?.name || '')).replace(/^models\//, '');
+  const list = [...new Set(entries.map(idOf).filter(Boolean))].sort();
+  const limits = {};
+  for (const m of entries) {
+    const l = modelLimits(m);
+    if (l) limits[idOf(m)] = l;
+  }
+  return { status: 200, json: { ok: true, models: list, limits } };
+}
+
+// A listed model's token limits, as intact and OpenRouter write them. Null when the list gives none.
+function modelLimits(m) {
+  if (!m || typeof m !== 'object') return null;
+  const n = v => (Number.isFinite(v) && v > 0 ? v : 0);
+  const top = m.top_provider && typeof m.top_provider === 'object' ? m.top_provider : {};
+  const out = {};
+  const context = n(m.context_length) || n(top.context_length) || n(m.context_window);
+  const input = n(m.max_input_tokens);
+  const output = n(m.max_output_tokens) || n(top.max_completion_tokens);
+  if (context) out.context = context;
+  if (input) out.input = input;
+  if (output) out.output = output;
+  return Object.keys(out).length ? out : null;
 }
 
 // Vertex/Gemini: /v1beta/models/{m}:{action} (Gemini API) and
