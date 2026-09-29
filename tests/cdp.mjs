@@ -82,6 +82,7 @@ export class Page {
     this.dialogs = [];       // { type, message } for every alert, confirm and prompt
     this.dialogPolicy = 'accept';
     this.inflight = new Map();   // requestId -> url, so a stuck request can be named
+    this.requests = [];      // { method, url } for every request, so a double submit is countable
     this.ws.addEventListener('message', (ev) => this.#onMessage(JSON.parse(ev.data)));
   }
 
@@ -93,7 +94,10 @@ export class Page {
     });
     this.on('Runtime.exceptionThrown', (e) => this.problems.push(`exception: ${e.exceptionDetails.exception?.description || e.exceptionDetails.text}`));
     this.on('Log.entryAdded', (e) => { if (e.entry.level === 'error') this.problems.push(`log: ${e.entry.text} ${e.entry.url || ''}`.trim()); });
-    this.on('Network.requestWillBeSent', (e) => this.inflight.set(e.requestId, e.request.url));
+    this.on('Network.requestWillBeSent', (e) => {
+      this.inflight.set(e.requestId, e.request.url);
+      this.requests.push({ method: e.request.method, url: e.request.url });
+    });
     // A new document ends every request of the old one, and no event says so for some of them.
     this.on('Page.frameNavigated', (e) => { if (!e.frame.parentId) this.inflight.clear(); });
     this.on('Network.loadingFinished', (e) => this.inflight.delete(e.requestId));
@@ -132,7 +136,22 @@ export class Page {
   close() { try { this.ws.close(); } catch { /* already closed */ } }
 
   // Forget what happened so far, so a test asserts only on the action it just made.
-  clearProblems() { this.problems.length = 0; this.badResponses.length = 0; this.dialogs.length = 0; }
+  clearProblems() {
+    this.problems.length = 0;
+    this.badResponses.length = 0;
+    this.dialogs.length = 0;
+    this.requests.length = 0;
+  }
+
+  // Every request of one method whose URL holds `part`. A double submit is two entries here.
+  sent(method, part) { return this.requests.filter(r => r.method === method && r.url.includes(part)); }
+
+  // A real viewport change, the way a narrow window is, so a media query takes effect.
+  async resize(width, height) {
+    await this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    // A layout pass runs on the next frame, so a measurement taken at once reads the old box.
+    await this.evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))');
+  }
 
   // Wait until no request is in flight for `quiet` ms. A click starts a request, and the page then
   // starts a second one to read the state back, so one quiet moment is not enough.

@@ -667,4 +667,120 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       await expectScreenMatchesDisk('after outside edit');
     });
   });
+  // Found by a human-behaviour pass over the running dashboard on 2026-09-29: a real browser, real
+  // clicks and real keys, never a value set through the page's own JavaScript. Each test here is the
+  // reproduction of one finding from that pass.
+  describe('what a person notices when pressing the dashboard hard', () => {
+    const editButtons = () => page.evaluate(
+      `[...document.querySelectorAll('#profiles-grid .pcard button')].map(b => b.textContent.trim()).filter(t => /Edit/.test(t))`
+    );
+
+    it('gives a card back its normal Edit button after a close that saved nothing', async () => {
+      await editProfile('intact-claude');
+      await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+      await page.key('Escape');
+      await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "none"', 'the dialog to close');
+      assert.deepEqual((await editButtons()).filter(t => /Editing/.test(t)), [],
+        'a dialog closed without saving left the card in the editing state');
+    });
+
+    it('moves the keyboard into the dialog when it opens', async () => {
+      await editProfile('intact-claude');
+      await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+      const inside = await page.evaluate(
+        `document.getElementById('profile-modal-overlay').contains(document.activeElement)`
+      );
+      assert.equal(inside, true, 'the focus stayed behind the overlay, so the first Tab leaves the dialog');
+    });
+
+    it('never shows the connection result of the profile opened before', async () => {
+      await editProfile('intact-claude');
+      await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+      await act(() => page.clickText('#profile-modal-overlay button', 'Test Connection'));
+      await page.waitFor(`document.getElementById('test-result').textContent.trim().length > 0`, 'a result');
+      await page.key('Escape');
+      await act(() => page.clickText('button', '+ Add Profile'));
+      assert.equal(await page.text('#test-result'), '',
+        'an untested new profile showed the connection result of the profile opened before it');
+    });
+
+    it('sends one save for one double-click on Save Profile', async () => {
+      await act(() => page.clickText('button', '+ Add Profile'));
+      await page.type('#p-key', 'dbl');
+      await page.type('#p-name', 'Double click');
+      await page.type('#p-url', 'https://dbl.example.io/v1');
+      await page.type('#p-key-val', 'sk-dbl');
+      page.clearProblems();
+      const save = '#profile-modal-overlay button[type="submit"]';
+      await page.click(save);
+      await page.click(save);
+      await page.idle();
+      assert.equal(page.sent('POST', '/api/save-profile').length, 1,
+        'a double-click sent the save twice, because the button is not disabled while it runs');
+    });
+
+    it('says so when a model search matches nothing', async () => {
+      await open('#/models');
+      await page.waitFor(`document.querySelectorAll('#catalog-claude-items .row').length > 0`, 'the catalog rows');
+      await page.type('#catalog-search', 'zzz-nothing-matches-this-zzz');
+      await page.waitFor(
+        `[...document.querySelectorAll('#catalog-claude-items .row, #catalog-codex-items .row')].every(r => r.offsetParent === null)`,
+        'every row hidden'
+      );
+      const shown = await page.evaluate(`(() => {
+        const visible = (e) => e.offsetParent !== null;
+        const message = [...document.querySelectorAll('#view-models *')]
+          .some(e => visible(e) && /no match|nothing matches|no model/i.test(e.textContent));
+        const badge = document.getElementById('badge-claude-count');
+        return { message, badge: badge && visible(badge) ? badge.textContent.trim() : '' };
+      })()`);
+      assert.equal(shown.message, true, 'an empty result looked like a broken page: no message at all');
+      assert.doesNotMatch(shown.badge, /^[1-9]/, `the header kept the unfiltered count: "${shown.badge}"`);
+    });
+
+    it('keeps the navigation reachable on a narrow window', async () => {
+      await page.resize(400, 900);
+      try {
+        const box = await page.evaluate(`(() => {
+          const aside = document.querySelector('aside'), nav = document.querySelector('aside nav');
+          const a = aside.getBoundingClientRect(), n = nav.getBoundingClientRect();
+          return { navHeight: n.height, navBottom: n.bottom, asideBottom: a.bottom, asideHeight: a.height };
+        })()`);
+        assert.ok(box.navHeight > 0, 'the navigation has no height at 400 px');
+        assert.ok(box.navBottom <= box.asideBottom + 1,
+          `the navigation is drawn outside the sidebar (nav bottom ${box.navBottom}, sidebar bottom ${box.asideBottom}, sidebar height ${box.asideHeight})`);
+        assert.equal(await page.visible('aside nav a'), true, 'no navigation link is visible at 400 px');
+      } finally {
+        await page.resize(1280, 900);
+      }
+    });
+
+    it('does not let a long profile name break the dialog header', async () => {
+      const cfg = fx.config();
+      cfg.profiles['intact-claude'].name = 'N'.repeat(300);
+      fx.writeConfig(cfg);
+      await open('#/routes');
+      await editProfile('intact-claude');
+      await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+      const t = await page.evaluate(`(() => {
+        const e = document.getElementById('form-title');
+        return { scroll: e.scrollWidth, client: e.clientWidth };
+      })()`);
+      assert.ok(t.scroll <= t.client + 1,
+        `the header text is wider than its box (${t.scroll} > ${t.client}), so it clips mid-character`);
+    });
+
+    it('opens the payload preview while auto-refresh is on', async () => {
+      const sent = await fx.messages();
+      assert.equal(sent.status, 200, sent.text);
+      await open('#/logs');
+      await page.waitFor(`document.querySelectorAll('#inspector-logs-container details').length >= 1`, 'at least one log row with a preview');
+      assert.equal(await page.evaluate(`document.getElementById('chk-auto-refresh-logs').checked`), true,
+        'this test needs the default, which is auto-refresh on');
+      // One click, the way a person clicks. A control that the poll detaches fails right here.
+      await page.click('#inspector-logs-container details summary');
+      const opened = await page.evaluate(`Boolean(document.querySelector('#inspector-logs-container details[open]'))`);
+      assert.equal(opened, true, 'the poll replaces the row, so the preview cannot be opened while it runs');
+    });
+  });
 });

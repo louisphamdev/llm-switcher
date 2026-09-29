@@ -811,6 +811,10 @@
         position: sticky;
         top: 0;
         height: auto;
+        /* The base rule makes this a scroll container, and a grid item that scrolls has an automatic
+           minimum size of zero. The row then collapsed to the padding (16 px measured) and the nav
+           was drawn outside it, so no link could be pressed. Reset it, or the height is ignored. */
+        overflow: visible;
         flex-direction: row;
         flex-wrap: wrap;
         align-items: center;
@@ -1323,18 +1327,44 @@
     for (const ev of ['focusout', 'click', 'scroll']) addEventListener(ev, hideTip, true);
 
     // Modal Control
+
+    // A result belongs to the profile it was measured on. Cleared on every open, because a dialog
+    // that opens showing "HTTP 200 OK" from the profile before it says the wrong thing about this one.
+    // Empties the three fields, never the box: they are static markup, and innerHTML would delete
+    // them for the rest of the session.
+    function clearTestResult() {
+      const box = document.getElementById('test-result');
+      if (!box) return;
+      for (const id of ['test-status-badge', 'test-latency', 'test-sample']) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '';
+      }
+      document.getElementById('test-status-badge')?.setAttribute('class', 'badge');
+      box.className = 'test-result-box';
+    }
+
     function openProfileModal(isNew = false) {
       const modal = document.getElementById('profile-modal-overlay');
       if (modal) modal.style.display = 'grid';
+      clearTestResult();
       if (isNew) {
         initNewProfile();
       }
+      // Without this the focus stays on the button behind the overlay, so the first Tab walks into
+      // the page under the dialog instead of through the dialog.
+      const first = modal?.querySelector('input:not([readonly]):not([disabled]), select, textarea, button');
+      first?.focus();
     }
 
     function closeProfileModal() {
       const modal = document.getElementById('profile-modal-overlay');
       if (modal) modal.style.display = 'none';
       formDirty = false;
+      // render() reads this to draw the ring and the "Editing Profile" label. Left set, a card stayed
+      // marked as being edited after Escape, Cancel or a press on the dark area.
+      currentlyEditingKey = '';
+      formLoadedKey = null;
+      render();
     }
 
     // The close button, Cancel, the dark area and Escape. A save or a delete calls closeProfileModal
@@ -2086,6 +2116,15 @@
       if (existing.publicModels) profilePayload.publicModels = existing.publicModels;
 
       showToast('Saving profile "' + key + '"...');
+      // A double-click sent the save twice. The same pattern as the catalog sync button: disabled
+      // while the request runs, re-enabled in `finally` so a failed save can be tried again.
+      const submit = e.target?.querySelector?.('button[type="submit"]')
+        || document.querySelector('#profile-modal-overlay button[type="submit"]');
+      if (submit) {
+        if (submit.disabled) return;
+        submit.disabled = true;
+        submit.setAttribute('aria-busy', 'true');
+      }
       try {
         const res = await api('/api/save-profile', {
           method: 'POST',
@@ -2102,6 +2141,11 @@
         }
       } catch (err) {
         showToast('Network error saving profile', true);
+      } finally {
+        if (submit) {
+          submit.disabled = false;
+          submit.removeAttribute('aria-busy');
+        }
       }
     }
 
@@ -2434,8 +2478,15 @@
         const ctModels = document.getElementById('ct-models');
         if (ctModels) ctModels.textContent = claudeModels.length + codexModels.length;
 
-        document.getElementById('badge-claude-count').textContent = claudeModels.length + ' models · ' + claudeTiers.size + ' tiers';
-        document.getElementById('badge-codex-count').textContent = codexModels.length + ' models · ' + codexRoles.size + ' roles';
+        // `data-full` is what the search box restores when it is emptied again.
+        for (const [id, text] of [
+          ['badge-claude-count', claudeModels.length + ' models · ' + claudeTiers.size + ' tiers'],
+          ['badge-codex-count', codexModels.length + ' models · ' + codexRoles.size + ' roles']
+        ]) {
+          const el = document.getElementById(id);
+          el.textContent = text;
+          el.dataset.full = text;
+        }
 
         claudeContainer.innerHTML = claudeModels.map(m => `
           <div class="row" style="padding:0.6rem 0.8rem; background:var(--card2); border-radius:8px;">
@@ -2465,12 +2516,40 @@
       }
     }
 
+    // A filter that hides every row but keeps the header count reads as a broken page: the header
+    // still promised 11 models over an empty list. So the count follows the filter, and an empty
+    // result says so in words.
     function filterCatalogView(q) {
       const term = (q || '').toLowerCase();
-      document.querySelectorAll('#catalog-claude-items .row, #catalog-codex-items .row').forEach(row => {
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(term) ? 'flex' : 'none';
-      });
+      for (const [list, badge, unit] of [
+        ['#catalog-claude-items', 'badge-claude-count', 'models'],
+        ['#catalog-codex-items', 'badge-codex-count', 'models']
+      ]) {
+        const container = document.querySelector(list);
+        if (!container) continue;
+        let shown = 0;
+        container.querySelectorAll('.row').forEach(row => {
+          const hit = row.textContent.toLowerCase().includes(term);
+          row.style.display = hit ? 'flex' : 'none';
+          if (hit) shown++;
+        });
+        let empty = container.querySelector('.catalog-empty');
+        if (!shown) {
+          if (!empty) {
+            empty = document.createElement('div');
+            empty.className = 'catalog-empty hint';
+            empty.style.padding = '0.8rem';
+            container.appendChild(empty);
+          }
+          empty.textContent = term ? 'No model matches "' + term + '".' : 'No model in this list.';
+          empty.style.display = 'block';
+        } else if (empty) {
+          empty.style.display = 'none';
+        }
+        const el = document.getElementById(badge);
+        // `data-full` is the unfiltered text that the render wrote. An empty box restores it.
+        if (el) el.textContent = term ? shown + ' ' + unit + ' shown' : (el.dataset.full || el.textContent);
+      }
     }
 
     async function refreshCatalogUpstream() {

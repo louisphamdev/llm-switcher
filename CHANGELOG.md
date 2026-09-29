@@ -10,6 +10,19 @@
 - **No configuration file is opened:** Claude Code loads `~/.claude/skills/llm-switcher-status/` as a plugin on the next session, with no marketplace and no install step. Codex reads `~/.codex/hooks.json` by itself. `settings.json` and `config.toml` stay closed. An existing `~/.codex/hooks.json` is merged, and a file that does not parse is refused.
 - **The notice is optional:** `switch plugin install` is a choice. Install nothing and the gateway still routes every request.
 
+### Found by pressing the dashboard like a person
+
+A pass over the running dashboard in a real browser, with real clicks and real keys, never a value
+set through the page's own JavaScript. Each item below has a browser test that reproduces it.
+
+- **A narrow window hid the navigation:** At 400 px the sidebar collapsed to its padding, 16 px, and the navigation was drawn outside it. No link could be pressed. The `@media` rule set `height: auto` but kept `overflow-y: auto` from the base rule, and a grid item that scrolls has an automatic minimum size of zero. The rule now resets `overflow`.
+- **A card stayed in the editing state:** After Escape, Cancel or a press on the dark area, the card kept its ring and its button still read "Editing Profile". `closeProfileModal` never cleared the key that the render reads.
+- **The keyboard stayed outside the dialog:** Opening a profile dialog left the focus on the button behind the overlay, so the first Tab walked into the page under the dialog. The dialog now takes the focus when it opens.
+- **A connection result from the profile before:** A new profile opened showing the "HTTP 200 OK" and the latency of the profile opened before it. The three result fields are emptied on every open.
+- **A double-click on Save sent two saves:** One double-click sent two `POST /api/save-profile`. The button is disabled while the request runs, the same way the catalog sync button already was.
+- **A model search with no match looked broken:** Every row was hidden while the headers kept the counts of the full list, and nothing said why the list was empty. The count follows the filter now, and an empty result says so in words.
+- **Tests:** Eight new browser tests, one for each finding. Two more findings from that pass did not reproduce under a real click and are kept as guards rather than reported as bugs.
+
 ## Release 1.2.7
 
 - **Save from the dashboard:** The dashboard sent `tool: "auto"` for a profile that serves both tools. The gateway refuses that value. As a result, a new profile with the default tool, four of the five templates, and a save of any both-tools profile all failed. Now the dashboard saves `tool: null` for such a profile. The Vertex AI template uses `claude`.
