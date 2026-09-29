@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.4
+
+- **Codex blindfold starts on a new machine:** A switch to a Codex profile stopped with "ca.pem is missing" on every new data directory. The certificates came only from `make-certs.sh`, which needs bash and OpenSSL. Now the switcher builds the same set with Node's crypto before it does any other check. It builds a new leaf when the leaf is missing, does not cover the three hosts, or does not match its key. It keeps a CA that still works, because Codex already trusts it.
+- **1M context follows the real window:** The model list in the dashboard now reads the token limits that the gateway gives (`context_length`, `max_input_tokens`, `max_output_tokens`). When a model has a known window of less than 1M, the **1M context** box of its slot is cleared and locked. The reason shows under the field. When the gateway gives no window, the box stays free and shows a warning when it is ticked.
+- **Tests:** A suite run no longer leaves an interceptor process running. Two tests that failed only on a loaded machine now pass: one waited for a lock that was already gone, and one lost its port to a test file that ran at the same time.
+
 ## Release 1.2.3
 
 - **Update notice:** The dashboard sidebar shows the running version. When npm has a newer release, a notice shows the update command with a copy button. The new command `switch version` prints the same information. The switcher asks the npm registry at most once in 12 hours. Without an answer, no notice shows.
