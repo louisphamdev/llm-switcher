@@ -14,6 +14,7 @@ import {
   casClearToolPointers, emptyToolEnvFiles, syncInterceptorTools
 } from './state.mjs';
 import { runProbe, runCheck } from './contract.mjs';
+import { installPlugin, uninstallPlugin, pluginStatus, PLUGIN_NAME } from './plugin.mjs';
 import {
   SHIM_DIR, installShims, uninstallShims, shimStatus, pathExportLine, pathOrderHint,
   suggestedRcFiles, auditRunningProcesses
@@ -777,6 +778,47 @@ async function manageService(action) {
   console.log('Usage: switch service [install|uninstall]');
 }
 
+// The launch notice, as a hook inside each tool. Opt-in: the routing does not depend on it, and a
+// person who installs nothing still gets the toast from the shim.
+async function managePlugin(action = 'status') {
+  const act = (action || 'status').toLowerCase();
+
+  if (act === 'install' || act === 'on') {
+    const { CURRENT_VERSION } = await import('./version.mjs');
+    const { installed, failed, paths } = installPlugin({}, CURRENT_VERSION);
+    for (const tool of installed) console.log(`[OK] ${tool}: ${paths[tool]}`);
+    for (const f of failed) console.error(`[Error] ${f.tool}: ${f.reason}`);
+    if (installed.length) {
+      console.log('\nNeither settings.json nor config.toml was opened. Each tool reads a file of its own.');
+      console.log(`Claude Code loads it on the next session as ${PLUGIN_NAME}@skills-dir.`);
+      console.log('Codex asks you once to trust a new hook. Accept it, or the hook stays off.');
+      console.log('\nTo remove it:  switch plugin uninstall');
+    }
+    if (failed.length) process.exit(1);
+    return;
+  }
+
+  if (act === 'uninstall' || act === 'off' || act === 'remove') {
+    const { installed, failed, paths } = uninstallPlugin();
+    for (const tool of installed) console.log(`[OK] ${tool}: removed from ${paths[tool]}`);
+    for (const f of failed) console.error(`[Error] ${f.tool}: ${f.reason}`);
+    if (failed.length) process.exit(1);
+    return;
+  }
+
+  const st = pluginStatus();
+  console.log('=== Launch notice (hook inside each coding tool) ===\n');
+  console.log(`Claude Code: ${st.claude.installed ? `INSTALLED as ${st.claude.id}` : 'not installed'}`);
+  console.log(`             ${st.claude.path}`);
+  console.log(`Codex      : ${st.codex.installed ? 'INSTALLED' : 'not installed'}`);
+  console.log(`             ${st.codex.path}`);
+  if (!st.claude.installed || !st.codex.installed) {
+    console.log(`\nThe notice is optional. Without it the gateway still routes every request,`);
+    console.log(`and the shim still raises its own notice at launch.`);
+    console.log(`To add it:  switch plugin install`);
+  }
+}
+
 async function manageShim(action = 'status') {
   const act = (action || 'status').toLowerCase();
 
@@ -1109,6 +1151,8 @@ if (cmd === 'off' || cmd === 'stop') {
   await manageService(subArg.toLowerCase() || 'status');
 } else if (cmd === 'shim' || cmd === 'shims') {
   await manageShim(subArg.toLowerCase() || 'status');
+} else if (cmd === 'plugin' || cmd === 'plugins') {
+  await managePlugin(subArg.toLowerCase() || 'status');
 } else if (Object.hasOwn(TARGET_ALIASES, cmd)) {
   await turnOn(subArg, TARGET_ALIASES[cmd]);
 } else if (cmd === 'ui' || cmd === 'web' || cmd === 'gui') {
@@ -1141,6 +1185,9 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch shim install            # Auto-inject env into resumed sessions (claude --resume)');
   console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');
   console.log('  switch shim uninstall          # Remove launcher shims');
+  console.log('  switch plugin install          # Optional launch notice inside Claude Code & Codex');
+  console.log('  switch plugin status           # Is that notice installed');
+  console.log('  switch plugin uninstall        # Remove that notice');
   console.log('  switch off [target]            # Restore official endpoints (all, or one target)');
   console.log('  switch models [--refresh]      # Show discovered models catalog for Claude Code & Codex');
   console.log('  switch contract-probe [--model m] # Drive the contract-lab variants through the gateway');

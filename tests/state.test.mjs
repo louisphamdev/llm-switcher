@@ -1496,3 +1496,52 @@ test('A5: config.example.json loads and passes validation without requiring migr
     }
   }
 });
+
+// ---- Route lines: what the launcher shows when it routes a tool -------------------------------
+
+// A person opens `claude` and cannot see that the switcher took over the traffic. The launcher
+// therefore reads one line per tool, written beside that tool's env file. The line exists exactly
+// when that tool is routed, so a tool whose profile is off stays silent with no extra condition.
+test('each routed tool gets a route line; a tool that is off gets an empty one', (t) => {
+  const { dir, env } = tmpDirs(t);
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+    port: 4000,
+    activeProfiles: { claude: 'cl', codex: 'cx' },
+    profiles: {
+      cl: {
+        name: 'Intact Claude', baseURL: 'https://intact.example.io/v1', apiKey: 'sk-secret-claude',
+        defaultModels: { opus: 'gemini-3.8-flash' }, model1M: { opus: true }
+      },
+      cx: {
+        inFormat: 'responses', baseURL: 'https://other.example.io/v1', apiKey: 'sk-secret-codex',
+        defaultModels: { main: 'gpt-5.6-sol' }
+      }
+    }
+  }), { mode: 0o600 });
+
+  const r = runState(env, `
+    const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+    s.applyLaunchState(s.loadConfig(), 4000);
+    const on = { claude: read(s.paths.routeClaude), codex: read(s.paths.routeCodex) };
+    s.emptyToolEnvFiles('claude');
+    const oneOff = { claude: read(s.paths.routeClaude), codex: read(s.paths.routeCodex) };
+    s.applyLaunchState(s.loadConfig(), 4000);
+    s.clearLaunchState(4000);
+    const allOff = { claude: read(s.paths.routeClaude), codex: read(s.paths.routeCodex) };
+    return { on, oneOff, allOff };
+  `);
+
+  assert.match(r.on.claude, /\bcl\b/, 'the line names the profile that serves claude');
+  assert.match(r.on.claude, /intact\.example\.io/, 'and the host the traffic goes to');
+  assert.match(r.on.claude, /gemini-3\.8-flash/, 'and the model it maps to');
+  assert.match(r.on.claude, /1M/, 'and the 1M window, because that changes what the session costs');
+  assert.match(r.on.codex, /\bcx\b/);
+  assert.match(r.on.codex, /other\.example\.io/);
+  assert.doesNotMatch(r.on.codex, /intact\.example\.io/, 'one tool never shows the other tool route');
+  assert.doesNotMatch(`${r.on.claude}${r.on.codex}`, /sk-secret/, 'a route line never carries the API key');
+
+  assert.equal(r.oneOff.claude.trim(), '', 'the tool switched off has no route line');
+  assert.notEqual(r.oneOff.codex.trim(), '', 'the other tool keeps its own');
+  assert.equal(r.allOff.claude.trim(), '', 'switch off leaves no route line for either tool');
+  assert.equal(r.allOff.codex.trim(), '');
+});

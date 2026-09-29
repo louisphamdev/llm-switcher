@@ -416,6 +416,9 @@ switch service uninstall       # Remove background autostart service
 switch shim install            # Route new Claude and Codex sessions through the gateway
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
 switch shim uninstall          # Remove the launcher shims
+switch plugin install          # Optional: a launch notice inside Claude Code and Codex
+switch plugin status           # Report whether that notice is installed
+switch plugin uninstall        # Remove that notice
 switch off                     # Stop everything and restore the official endpoints
 switch off claude              # Turn Claude Code off; Codex keeps running
 switch off codex               # Turn Codex off; Claude Code keeps running
@@ -469,6 +472,66 @@ Behaviour:
 line. `switch doctor` and `switch shim status` additionally scan running `claude`/`codex`
 processes and flag any that lack `ANTHROPIC_BASE_URL` — those sessions must be quit and
 re-opened from a shell where the shim is on `PATH`.
+
+---
+
+### Knowing that the switcher is on
+
+Transparency has a price. The switcher opens neither `settings.json` nor `config.toml`, so no banner
+appears, and you can forget that another provider answers every request. Two notices correct that.
+The first is always on. The second is your choice, and you lose nothing if you skip it.
+
+**1. The notice from the shim — always on**
+
+When the shim starts a routed tool, it reports where the traffic goes:
+
+```
+claude -> intact-claude | intact.louispham.qzz.io | antigravity/gemini-3.8-flash | 1M
+```
+
+On Windows this is a desktop toast. Both tools can claim the whole screen, so a printed line
+disappears behind the interface. On Linux and macOS it is one line on stderr. A tool that is off says
+nothing at all, because the notice is read from `route-<tool>.txt`, which is written with that tool's
+env file and is empty exactly when the tool is not routed.
+
+This notice needs the shim, so it needs `~/.llm-switcher/bin` first on `PATH`. If you keep your own
+`claude` or `codex` wrapper, the shim never runs and the notice never appears. The second notice
+covers that case.
+
+**2. The notice inside the tool — optional**
+
+```bash
+switch plugin install     # add it
+switch plugin status      # report whether it is there
+switch plugin uninstall   # remove it
+```
+
+This writes one file for each tool, and it opens no configuration file of either tool:
+
+| Tool | What is written | Why the tool loads it |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/llm-switcher-status/` | A folder with `.claude-plugin/plugin.json` under a skills directory loads as a plugin on the next session. There is no marketplace and no install step. |
+| Codex | `~/.codex/hooks.json` | Codex reads this file by itself. `config.toml` stays closed. |
+
+An existing `~/.codex/hooks.json` is merged. Your own hooks stay, and `switch plugin uninstall` takes
+only ours away. If the file does not parse, the install refuses it and changes nothing, because that
+file can hold work that no backup returns.
+
+The hook runs inside the tool, so it reports whatever launched the tool. It reports three states:
+
+- **Routed, and the gateway answers** — it names the profile, the host, the model and the 1M window.
+- **Routed, and the gateway does not answer** — it warns that the tool cannot reach the provider, it
+  names the port, and it names `switch on`. Before this notice, that state appeared only as a
+  connection error with no cause.
+- **Not routed** — nothing. A tool on its official endpoint stays silent.
+
+Codex asks you once to trust a new hook. If you decline, the hook stays off and nothing else changes.
+
+**If you want neither notice**
+
+Install no plugin, and keep the shim off `PATH`. The gateway still routes every request, the healer
+still runs, and `switch status` still reports the state. A notice is a reminder. It is never a part
+of the routing.
 
 ---
 

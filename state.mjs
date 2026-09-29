@@ -134,6 +134,10 @@ export const paths = {
   envClaudeSh: path.join(STATE_DIR, 'env-claude.sh'),
   envCodexCmd: path.join(STATE_DIR, 'env-codex.cmd'),
   envCodexSh: path.join(STATE_DIR, 'env-codex.sh'),
+  // One line per tool, written with that tool's env file: what the launcher shows the person at
+  // launch. Empty exactly when the tool is not routed, so the launcher needs no second condition.
+  routeClaude: path.join(STATE_DIR, 'route-claude.txt'),
+  routeCodex: path.join(STATE_DIR, 'route-codex.txt'),
   // The gateway port of the last switch on. The shim scrubs a stale loopback base URL
   // against it, so a shell opened before a port change still reaches the right gateway.
   gatewayPort: path.join(STATE_DIR, 'gateway.port'),
@@ -1300,6 +1304,16 @@ export function primaryModel(profile) {
   return '';
 }
 
+// What a person needs at launch: which profile took the traffic, the host it goes to, the model it
+// maps to, and whether the 1M window is on, because that changes what the session costs. Never the
+// API key: a desktop notification reads this line, and so can any shell.
+function routeLine(tool, key, profile) {
+  let host = '';
+  try { host = new URL(profile.baseURL).host; } catch { /* a profile may carry no address yet */ }
+  return [`${tool} -> ${key}`, host, primaryModel(profile), anyTier1M(profile) ? '1M' : '']
+    .filter(Boolean).join(' | ');
+}
+
 // Derive launcher state from activeProfiles (single source of truth).
 export function computeLaunchState(cfg, port) {
   const map = getActiveMap(cfg);
@@ -1339,7 +1353,10 @@ export function computeLaunchState(cfg, port) {
     // no --config (F1, F3, F4). The shim of the tool may therefore never capture the traffic
     // of the other tool, and a restart cannot leave a stale override behind.
     envClaude: [],
-    envCodex: []
+    envCodex: [],
+    // The launcher notice, one line per tool. Empty for a tool that is not routed (A1).
+    routeClaude: claude ? routeLine('claude', map.claude, claude) : '',
+    routeCodex: codex ? routeLine('codex', map.codex, codex) : ''
   };
 
   // NODE_EXTRA_CA_CERTS is deliberately absent from env-claude: the shim decides it at launch,
@@ -1446,6 +1463,7 @@ export function emptyToolEnvFiles(tool) {
     const before = codex ? readOrEmpty(paths.envCodexSh) : '';
     writeAtomic(codex ? paths.envCodexCmd : paths.envClaudeCmd, '');
     writeAtomic(codex ? paths.envCodexSh : paths.envClaudeSh, '');
+    writeAtomic(codex ? paths.routeCodex : paths.routeClaude, '');
     return before !== '';
   });
   return { codexRouteChanged, codexDaemon: codexRouteChanged ? restartCodexDaemon([]) : undefined };
@@ -1513,6 +1531,10 @@ function writeLaunchState(cfg, port) {
   try {
     writeToolFiles(st.envClaude, paths.envClaudeSh, paths.envClaudeCmd);
     writeToolFiles(st.envCodex, paths.envCodexSh, paths.envCodexCmd);
+    writeAtomic(paths.routeClaude, st.routeClaude ? `${st.routeClaude}
+` : '');
+    writeAtomic(paths.routeCodex, st.routeCodex ? `${st.routeCodex}
+` : '');
     st.codexRouteChanged = readOrEmpty(paths.envCodexSh) !== codexBefore;
     // Recorded on switch on so a shell opened while the gateway ran can still recognize its own
     // stale loopback URL later, after the port changed (R8).
@@ -1537,7 +1559,8 @@ export function clearLaunchState(port) {
     // leave env.sh present and containing no export and no unset.
     writeAtomic(paths.envCmd, STUB_CMD);
     writeAtomic(paths.envSh, STUB_SH);
-    for (const f of [paths.envClaudeCmd, paths.envClaudeSh, paths.envCodexCmd, paths.envCodexSh]) {
+    for (const f of [paths.envClaudeCmd, paths.envClaudeSh, paths.envCodexCmd, paths.envCodexSh,
+      paths.routeClaude, paths.routeCodex]) {
       writeAtomic(f, '');
     }
     return codexBefore !== '';

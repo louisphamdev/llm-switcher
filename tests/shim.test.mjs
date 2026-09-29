@@ -340,3 +340,99 @@ test('A8: the Windows shim scrubs a loopback base URL and resolves every subrout
   assert.match(child.stdout || '', /HTTPS=\[http:\/\/127\.0\.0\.1:3457\]/,
     'R2: the proxy comes from the env file of this tool');
 });
+
+// ---- The route notice: the launcher tells the person the switcher took the traffic -------------
+
+// A person opens `claude`, the switcher routes it to another provider, and nothing on screen says
+// so. The shim therefore raises a notice at launch. It is guarded by TOOL_ACTIVE, so a tool whose
+// profile is off stays silent: the guard is the same one that decides whether to source the env.
+test('the route notice is guarded by TOOL_ACTIVE and names only this tool route file', () => {
+  for (const platform of ['win32', 'linux']) {
+    const claude = renderShim('claude', platform);
+    const codex = renderShim('codex', platform);
+    assert.match(claude, /route-claude\.txt/, `${platform}: the claude shim reads its own route file`);
+    assert.doesNotMatch(claude, /route-codex/, `${platform}: and never the other tool file`);
+    assert.match(codex, /route-codex\.txt/);
+    assert.doesNotMatch(codex, /route-claude/);
+    // Everything that raises the notice sits after the TOOL_ACTIVE decision, never before it.
+    const guard = platform === 'win32' ? claude.indexOf('set "TOOL_ACTIVE=1"') : claude.indexOf('TOOL_ACTIVE=1');
+    assert.ok(guard > 0, `${platform}: the guard exists`);
+    assert.ok(claude.indexOf('route-claude.txt') > guard, `${platform}: the notice comes after the guard`);
+  }
+});
+
+test('the POSIX shim prints the route line for an active tool and nothing for one that is off', (t) => {
+  if (process.platform === 'win32') return t.skip('posix only');
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimfake-'));
+  t.after(() => fs.rmSync(fakeDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(fakeDir, 'claude'), '#!/bin/sh\necho ran\n');
+  fs.chmodSync(path.join(fakeDir, 'claude'), 0o755);
+
+  const run = ({ active, route }) => {
+    for (const f of fs.readdirSync(STATE)) fs.rmSync(path.join(STATE, f), { force: true });
+    if (active) {
+      fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+      fs.writeFileSync(path.join(STATE, 'env-claude.sh'), "export HTTPS_PROXY='http://127.0.0.1:3457'\n");
+    }
+    fs.writeFileSync(path.join(STATE, 'route-claude.txt'), route);
+    return spawnSync(path.join(RENDER_DIR, 'claude'), [], {
+      encoding: 'utf8', timeout: 15000,
+      env: { ...process.env, PATH: [RENDER_DIR, fakeDir, '/usr/bin:/bin', NODE_DIR].join(path.delimiter) }
+    });
+  };
+
+  const on = run({ active: true, route: 'claude -> cl | intact.example.io | gemini | 1M\n' });
+  assert.match(on.stderr, /intact\.example\.io/, 'an active tool shows where its traffic goes');
+  assert.match(on.stdout, /ran/, 'and the real binary still runs');
+
+  const off = run({ active: false, route: 'claude -> cl | intact.example.io | gemini | 1M\n' });
+  assert.doesNotMatch(off.stderr, /intact\.example\.io/, 'a tool that is off says nothing, even with a stale route file');
+  assert.match(off.stdout, /ran/);
+});
+
+// The Windows notice is a detached toast, so the only way to prove it fires is to put a fake
+// `powershell` on PATH and read what the shim asked it to do.
+test('the Windows shim raises the toast only while this tool is routed', (t) => {
+  if (process.platform !== 'win32') return t.skip('cmd.exe only');
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimwintoast-'));
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimfaketoast-'));
+  t.after(() => {
+    fs.rmSync(shimDir, { recursive: true, force: true });
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  });
+  const log = path.join(fakeDir, 'toast.log');
+  fs.writeFileSync(path.join(fakeDir, 'claude.cmd'), '@echo off\r\necho ran\r\n');
+  fs.writeFileSync(path.join(fakeDir, 'powershell.cmd'), `@echo off\r\necho %*>>"${log}"\r\n`);
+  const shim = path.join(shimDir, 'shim.cmd');
+  fs.writeFileSync(shim, renderShim('claude', 'win32'), 'utf8');
+
+  const run = ({ active }) => {
+    for (const f of fs.readdirSync(STATE)) fs.rmSync(path.join(STATE, f), { force: true });
+    fs.rmSync(log, { force: true });
+    if (active) {
+      fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+      fs.writeFileSync(path.join(STATE, 'env-claude.cmd'), 'SET "HTTPS_PROXY=http://127.0.0.1:3457"\r\n');
+    }
+    fs.writeFileSync(path.join(STATE, 'route-claude.txt'), 'claude -> cl | intact.example.io | gemini | 1M\r\n');
+    const child = spawnSync('cmd.exe', ['/d', '/c', shim, '--version'], {
+      encoding: 'utf8', timeout: 30000,
+      env: {
+        ...process.env,
+        PATH: [fakeDir, shimDir, path.join(process.env.SystemRoot, 'System32'), path.dirname(process.execPath)]
+          .join(path.delimiter)
+      }
+    });
+    // `start /b` detaches, so the fake may still be writing when the shim has already exited.
+    for (let i = 0; i < 60 && !fs.existsSync(log); i++) execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},50)']);
+    return { out: child.stdout || '', asked: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+  };
+
+  const on = run({ active: true });
+  assert.match(on.out, /ran/, 'the real binary still runs');
+  assert.match(on.asked, /route-claude\.txt/, 'the toast is asked for, with this tool route file');
+  assert.match(on.asked, /notify-route\.ps1/, 'through the notifier that ships with the switcher');
+
+  const off = run({ active: false });
+  assert.match(off.out, /ran/);
+  assert.equal(off.asked, '', 'a tool that is off raises no toast');
+});

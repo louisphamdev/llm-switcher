@@ -1,5 +1,15 @@
 # Changelog — LLM Switcher
 
+## Unreleased
+
+- **Launch notice:** A person opened `claude` or `codex`, and nothing on screen said that the switcher took the traffic. The shim now raises a notice at launch. On Windows it is a desktop toast, because both tools can claim the whole screen and hide a printed line. On Linux and macOS it is one line on stderr. The notice names the profile, the host, the model, and the 1M window.
+- **Only a routed tool:** The notice appears only while that tool has a profile. A tool on its official endpoint stays silent. `switch off codex` empties `route-codex.txt`, and the codex shim then says nothing.
+- **New files:** `route-claude.txt` and `route-codex.txt` hold the notice text. The switcher writes each one with the env file of the same tool. `notify-route.ps1` raises the toast, and it needs no PowerShell module.
+- **Tests:** New tests prove the state files and the notice. One test runs the real `.cmd` shim through cmd.exe with a fake `powershell` on PATH. It reads what the shim asked for.
+- **A second notice, inside the tool:** The shim notice needs the shim directory first on `PATH`. A person who keeps their own `claude` wrapper never sees it. `switch plugin install` adds a hook that runs inside each tool instead. It reports three states: routed and the gateway answers, routed and the gateway does not answer, and not routed. The second state used to appear only as a connection error with no cause.
+- **No configuration file is opened:** Claude Code loads `~/.claude/skills/llm-switcher-status/` as a plugin on the next session, with no marketplace and no install step. Codex reads `~/.codex/hooks.json` by itself. `settings.json` and `config.toml` stay closed. An existing `~/.codex/hooks.json` is merged, and a file that does not parse is refused.
+- **The notice is optional:** `switch plugin install` is a choice. Install nothing and the gateway still routes every request.
+
 ## Release 1.2.7
 
 - **Save from the dashboard:** The dashboard sent `tool: "auto"` for a profile that serves both tools. The gateway refuses that value. As a result, a new profile with the default tool, four of the five templates, and a save of any both-tools profile all failed. Now the dashboard saves `tool: null` for such a profile. The Vertex AI template uses `claude`.

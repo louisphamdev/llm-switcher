@@ -413,6 +413,9 @@ switch service uninstall       # Gỡ bỏ service chạy ngầm
 switch shim install            # Route phiên Claude và Codex mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
 switch shim uninstall          # Gỡ shim khỏi launcher
+switch plugin install          # Tuỳ chọn: nhắc nhở ngay trong Claude Code và Codex
+switch plugin status           # Xem nhắc nhở đó đã cài chưa
+switch plugin uninstall        # Gỡ nhắc nhở đó
 switch off                     # Tắt tất cả và quay về endpoint chính thức
 switch off claude              # Tắt Claude Code; Codex vẫn chạy tiếp
 switch off codex               # Tắt Codex; Claude Code vẫn chạy tiếp
@@ -463,6 +466,67 @@ Cách hoạt động:
 và `switch shim status` còn quét các tiến trình `claude`/`codex` đang chạy và cảnh báo
 tiến trình nào thiếu `ANTHROPIC_BASE_URL` — phiên đó phải thoát và mở lại từ shell có shim
 trong `PATH`.
+
+---
+
+### Biết được switcher đang bật
+
+Vô hình cũng có giá của nó. Switcher không mở `settings.json` cũng không mở `config.toml`, nên không
+có banner nào hiện lên, và bạn dễ quên rằng mọi request đang do một provider khác trả lời. Có hai lớp
+nhắc nhở để bù chỗ đó. Lớp thứ nhất luôn bật. Lớp thứ hai là tuỳ bạn, không cài cũng không mất gì.
+
+**1. Nhắc nhở từ shim — luôn bật**
+
+Khi shim mở một tool đang được route, nó cho biết traffic đi đâu:
+
+```
+claude -> intact-claude | intact.louispham.qzz.io | antigravity/gemini-3.8-flash | 1M
+```
+
+Trên Windows đây là một toast của hệ điều hành. Cả hai tool đều có thể chiếm trọn màn hình, nên một
+dòng chữ in ra sẽ bị giao diện che mất. Trên Linux và macOS thì là một dòng trên stderr. Tool nào
+đang tắt thì im lặng hoàn toàn, vì nội dung nhắc nhở đọc từ `route-<tool>.txt`, file này được ghi
+cùng lượt với file env của chính tool đó và rỗng đúng khi tool đó không được route.
+
+Nhắc nhở này cần shim, nên cần `~/.llm-switcher/bin` đứng trước trong `PATH`. Nếu bạn dùng wrapper
+`claude` hoặc `codex` tự viết thì shim không chạy và nhắc nhở này không xuất hiện. Lớp thứ hai lo
+đúng trường hợp đó.
+
+**2. Nhắc nhở ngay trong tool — tuỳ chọn**
+
+```bash
+switch plugin install     # cài
+switch plugin status      # xem đã cài chưa
+switch plugin uninstall   # gỡ
+```
+
+Lệnh này ghi một file cho mỗi tool, và không mở file cấu hình nào của hai tool đó:
+
+| Tool | Ghi gì | Vì sao tool tự nạp |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/llm-switcher-status/` | Một thư mục có `.claude-plugin/plugin.json` nằm dưới skills directory sẽ được nạp như một plugin ở phiên kế tiếp. Không cần marketplace, không cần bước install. |
+| Codex | `~/.codex/hooks.json` | Codex tự đọc file này. `config.toml` không bị mở. |
+
+Nếu `~/.codex/hooks.json` đã có sẵn thì lệnh sẽ **merge**. Hook của bạn được giữ nguyên, và
+`switch plugin uninstall` chỉ lấy đi phần của switcher. Nếu file không parse được thì lệnh từ chối và
+không đổi gì, vì file đó có thể đang giữ công việc mà không bản backup nào lấy lại được.
+
+Hook chạy bên trong tool, nên nó báo được bất kể cái gì đã mở tool. Nó báo ba trạng thái:
+
+- **Đang route, gateway trả lời** — nêu profile, host, model và cửa sổ 1M.
+- **Đang route, gateway không trả lời** — cảnh báo tool không tới được provider, nêu số cổng, và nêu
+  lệnh `switch on`. Trước khi có nhắc nhở này, trạng thái đó chỉ hiện ra dưới dạng một lỗi kết nối
+  không rõ nguyên nhân.
+- **Không route** — im lặng. Tool đang dùng endpoint chính thức thì không nói gì.
+
+Codex sẽ hỏi bạn một lần để tin cậy hook mới. Nếu bạn từ chối thì hook không chạy và mọi thứ khác
+giữ nguyên.
+
+**Nếu bạn không muốn lớp nhắc nhở nào**
+
+Đừng cài plugin, và để shim ngoài `PATH`. Gateway vẫn route mọi request, healer vẫn chạy, và
+`switch status` vẫn báo trạng thái. Nhắc nhở chỉ là nhắc nhở. Nó không bao giờ là một phần của việc
+route.
 
 ---
 

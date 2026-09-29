@@ -36,15 +36,18 @@ export const SHIM_DIR = path.join(os.homedir(), '.llm-switcher', 'bin');
 // `node -e`, so neither cmd.exe quoting nor URL encoding can corrupt it: pathToFileURL turns a
 // space in the checkout into %20, which cmd.exe then reads as the (undefined) argument %2.
 const STATE_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ensure-ca-bundle.mjs');
+const ROUTE_NOTIFIER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'notify-route.ps1');
 
 // CLIs to wrap. `claude` is the most important case (--resume), codex included for completeness.
 export const SHIMMED = ['claude', 'codex'];
 
 // One tool, one env file. Sourcing the shared one is how one tool used to capture the other.
 const envFileOf = (name) => (name === 'codex' ? 'env-codex.sh' : 'env-claude.sh');
+const routeFileOf = (name) => (name === 'codex' ? 'route-codex.txt' : 'route-claude.txt');
 
 const POSIX_TEMPLATE = (name) => {
   const envFile = envFileOf(name);
+  const routeFile = routeFileOf(name);
   const caBlock = name === 'codex' ? '' : `
 # R2: one bundle holds the user's own CA and the switcher CA, so trusting the interceptor never
 # costs a certificate the user already had. Decided here, at launch, because only now is it known
@@ -83,6 +86,13 @@ if [ -O "$SWITCHER_DIR" ] && [ -O "$SWITCHER_DIR/${envFile}" ] && [ -f "$SWITCHE
   TOOL_ACTIVE=1
 else
   TOOL_ACTIVE=0
+fi
+
+# Nothing on screen tells the person that the switcher took this tool's traffic, so say it once,
+# here. Only while THIS tool is routed: an empty route file means the tool is off, so the tool
+# reaches its official endpoint and there is nothing to warn about.
+if [ "$TOOL_ACTIVE" = "1" ] && [ -s "$SWITCHER_DIR/${routeFile}" ]; then
+  printf '[llm-switcher] %s\\n' "$(cat "$SWITCHER_DIR/${routeFile}")" >&2
 fi
 
 # R8: a variable is removed ONLY when its value is one an older switcher wrote. The user's own
@@ -167,6 +177,7 @@ exec "$REAL" "$@"
 
 const WINDOWS_TEMPLATE = (name) => {
   const envFile = envFileOf(name).replace(/\.sh$/, '.cmd');
+  const routeFile = routeFileOf(name);
   const caBlock = name === 'codex' ? '' : `
 REM R2: one bundle holds the user's own CA and the switcher CA, so trusting the interceptor
 REM never costs a certificate the user already had. Decided here, at launch, because only now
@@ -201,6 +212,11 @@ if exist "%SWITCHER_DIR%\\active.flag" if exist "%SWITCHER_DIR%\\${envFile}" (
   for %%A in ("%SWITCHER_DIR%\\${envFile}") do if %%~zA GTR 0 set "TOOL_ACTIVE=1"
 )
 if "%TOOL_ACTIVE%"=="1" call "%SWITCHER_DIR%\\${envFile}"
+
+REM Nothing on screen tells the person that the switcher took this tool's traffic, and both TUIs
+REM can claim the whole screen, so a printed line would be hidden. A toast is not. It is detached:
+REM the tool never waits for it. Only while THIS tool is routed (%TOOL_ACTIVE%).
+if "%TOOL_ACTIVE%"=="1" if exist "%SWITCHER_DIR%\\${routeFile}" start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "${ROUTE_NOTIFIER}" "%SWITCHER_DIR%\\${routeFile}" >nul 2>&1
 
 REM R8: a variable is removed ONLY when its value is one an older switcher wrote. The user's own
 REM proxy, base URL, model or LLM_SWITCHER_* setting is theirs and is kept.
