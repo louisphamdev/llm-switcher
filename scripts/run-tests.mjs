@@ -15,5 +15,7 @@ const files = [];
   }
 })(path.join(root, 'tests'));
 
-const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: root, stdio: 'inherit' });
+// A test that switches Codex on must never restart the Codex app-server daemon of this machine.
+const env = { ...process.env, LLM_SWITCHER_CODEX_BIN: path.join(root, 'tests', 'no-codex-here') };
+const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: root, stdio: 'inherit', env });
 process.exit(r.status ?? 1);

@@ -19,7 +19,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
+  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget, restartCodexDaemonOnSwitch,
   codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
   contractLabSettings, STATE_DIR
 } from './state.mjs';
@@ -946,6 +946,14 @@ function reconcile(cfg) {
   });
 }
 
+// The route changes only after the interceptor is in line, so the daemon restarts last.
+async function restartCodexDaemon(before, after) {
+  const r = await restartCodexDaemonOnSwitch(before, after, PORT);
+  if (r?.ok) console.log('[llm-switcher] codex app-server daemon restarted');
+  else if (r) console.error(`[llm-switcher] ${r.error}`);
+  return r;
+}
+
 // Returns what the caller must show: removed settings.json values, and a blindfold failure.
 // `base` is the revision the change started from.
 async function commit(cfg, base) {
@@ -964,10 +972,12 @@ async function commit(cfg, base) {
   const removed = st.settings?.removed || [];
   if (removed.length) console.log(`[llm-switcher] settings.json: removed switcher-written values: ${removed.join(', ')}`);
   const bf = await reconcile(cfg);
+  const daemon = bf.ok ? await restartCodexDaemon(current, cfg) : null;
   return {
     revision,
     settingsRemoved: removed,
     ...(st.envWriteError ? { envWriteError: st.envWriteError } : {}),
+    ...(daemon && !daemon.ok ? { codexDaemonError: daemon.error } : {}),
     ...(bf.ok ? {} : { success: false, error: `Saved, but the blindfold interceptor is not in line: ${bf.error}` })
   };
 }

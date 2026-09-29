@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import {
   ROOT_DIR, STATE_DIR, TOOLS, configPath, claudeSettingsPath, paths, certCoversHost, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
-  applyLaunchState, clearLaunchState, computeLaunchState,
+  applyLaunchState, clearLaunchState, computeLaunchState, restartCodexDaemonOnSwitch,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
   probeGateway, probeBlindfold, blindfoldPreflight, stopRecordedBlindfold, writeDashboardLauncher,
   contractLabSettings, codexPublicModelsWarning,
@@ -432,6 +432,9 @@ async function turnOn(profileName, cliTarget) {
     if (!back.ok) console.error(`        The previous interceptor did not come back: ${back.error}`);
     process.exit(1);
   }
+  const daemon = await restartCodexDaemonOnSwitch(current, planned, port);
+  if (daemon?.ok) console.log('Restarted the Codex app-server daemon.');
+  else if (daemon) console.warn(`[WARN] ${daemon.error}. Run \`codex app-server daemon restart\` yourself.`);
 
   // Self-install shims: with them, `claude --resume` sessions launched from a shell that never sourced env.sh
   // still route through the gateway. settings.json stays untouched so Claude Code shows no banner.
