@@ -265,6 +265,12 @@ after(() => {
   fakeInterceptor?.kill();
   proxy?.kill();
   upstream?.close();
+  // A test that changes the tool set makes the gateway start a real interceptor. It is detached on
+  // purpose, so it outlives the gateway; stop the one the gateway recorded before its state goes.
+  try {
+    const { pid } = JSON.parse(fs.readFileSync(path.join(tmpDir, 'blindfold.json'), 'utf8'));
+    if (Number.isInteger(pid) && pid !== fakeInterceptor?.pid) process.kill(pid);
+  } catch {}
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
