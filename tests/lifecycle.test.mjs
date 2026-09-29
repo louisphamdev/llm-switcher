@@ -300,12 +300,20 @@ test('concurrent admin changes: a refused change never reaches disk, and no acce
     assert.equal(onDisk.activeProfiles.codex, null, 'the refused switch is not saved by the other request');
     assert.equal(onDisk.profiles.plain.name, 'Renamed');
 
-    // A usable interceptor port, and Codex on, for the second half. Chosen only now: other test files
-    // run at the same time, and a port picked seconds earlier can be taken in between.
-    bfPort = await freePort();
-    onDisk.blindfold = { port: bfPort };
-    fs.writeFileSync(ws.cfgPath, JSON.stringify(onDisk, null, 2), { mode: 0o600 });
-    const on = await post('/api/switch', { target: 'codex', profile: 'bf' });
+    // A usable interceptor port, and Codex on, for the second half. Other test files run at the
+    // same time and can bind a port between freePort() and the gateway's check; the gateway then
+    // rightly refuses it, so a refusal for a taken port picks another one.
+    let on;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      bfPort = await freePort();
+      onDisk.blindfold = { port: bfPort };
+      fs.writeFileSync(ws.cfgPath, JSON.stringify(onDisk, null, 2), { mode: 0o600 });
+      on = await post('/api/switch', { target: 'codex', profile: 'bf' });
+      if (on.status === 200) break;
+      const why = await on.clone().text();
+      if (!/held by another process|does not answer/.test(why)) break;
+      onDisk = JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
+    }
     assert.equal(on.status, 200, await on.text());
     await waitFor(async () => (await probe(ws, `s.probeBlindfold(${bfPort})`)).state === 'ours');
     const postProfile = (body) => post('/api/save-profile', body);
