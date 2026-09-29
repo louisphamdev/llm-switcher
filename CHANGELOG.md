@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.6
+
+- **Deactivate in the dashboard:** The Deactivate button did not change the configuration, but the dashboard showed "deactivated". The dashboard sends `deactivate: true` and the profile key in `profile`. The gateway read `deactivate` as the profile key, so no target matched. Now `POST /api/switch` accepts both forms: `{"profile": "x", "deactivate": true}` and `{"deactivate": "x"}`.
+- **No silent success:** If the profile is not active, `POST /api/switch` now answers `404` with the error `Profile "x" is not active`. If `deactivate` is `true` and no profile is named, it answers `400`. Before, both requests answered `200` with `success: true`.
+
 ## Release 1.2.5
 
 - **Dashboard controls:** The dashboard controls use MIT elements from Uiverse.io galaxy as a base. The CSS gives the name of each author.

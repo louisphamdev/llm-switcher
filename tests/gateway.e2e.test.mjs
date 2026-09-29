@@ -1208,3 +1208,30 @@ test('Admin test-upstream reports latency and a sample from the upstream', async
   assert.match(json.sample, /Final answer/);
   assert.equal(typeof json.latency, 'number');
 });
+
+// Runs last: turning `codex` off and on stops and restarts the shared interceptor, which the
+// Codex WebSocket tests above depend on.
+test('/api/switch deactivate: the dashboard payload works, the CLI payload works, a no-op is an error', async () => {
+  try {
+    // What the dashboard sends: the profile in `profile`, a boolean in `deactivate`.
+    const dash = await post('/api/switch', { profile: 'chat', deactivate: true });
+    assert.equal(dash.status, 200);
+    assert.deepEqual((await dash.json()).activeProfiles, { claude: null, codex: null });
+
+    // The same profile is now inactive, so asking again must not report success.
+    const again = await post('/api/switch', { profile: 'chat', deactivate: true });
+    assert.equal(again.status, 404);
+    assert.match((await again.json()).error, /not active/);
+
+    // What the CLI sends: the profile key in `deactivate`.
+    assert.equal((await post('/api/switch', { profile: 'chat' })).status, 200);
+    const cli = await post('/api/switch', { deactivate: 'chat' });
+    assert.equal(cli.status, 200);
+    assert.deepEqual((await cli.json()).activeProfiles, { claude: null, codex: null });
+
+    // `deactivate: true` with no profile names nothing.
+    assert.equal((await post('/api/switch', { deactivate: true })).status, 400);
+  } finally {
+    await post('/api/switch', { profile: 'chat' });
+  }
+});

@@ -1367,7 +1367,12 @@ async function routeConfigApi(res, method, pathname, body) {
   if (pathname === '/api/switch') {
     let err = null;
     if (body.deactivate) {
-      deactivateProfile(cfg, body.deactivate);
+      // The dashboard sends `deactivate: true` with the key in `profile`; the CLI sends the key itself.
+      const key = body.deactivate === true ? body.profile : body.deactivate;
+      if (typeof key !== 'string' || !key) return sendJson(res, 400, { error: 'deactivate needs a profile key' });
+      // A no-op must not answer success: the dashboard trusts `success` alone.
+      if (!isProfileActive(cfg, key)) return sendJson(res, 404, { error: `Profile "${key}" is not active` });
+      deactivateProfile(cfg, key);
     } else if (body.target) {
       err = setTargetProfile(cfg, body.target, body.profile || null);
     } else if (body.profile) {
