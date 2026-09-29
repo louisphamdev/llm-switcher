@@ -653,13 +653,18 @@ test('isSafeModelName refuses TOML date-times with T and Z', () => {
 test('an empty launch lock is held, not taken over', async (t) => {
   const { dir, env } = tmpDirs(t);
   const lock = path.join(dir, '.launch.lock');
+  const started = path.join(dir, 'writer.started');
   fs.writeFileSync(lock, '');
-  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
-  const waited = await new Promise((resolve, reject) => {
+  const done = new Promise((resolve, reject) => {
     execFileCb(process.execPath, ['--input-type=module', '-e',
-      `const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT_DIR, 'state.mjs')).href)}); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
+      `const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT_DIR, 'state.mjs')).href)}); (await import('node:fs')).writeFileSync(${JSON.stringify(started)}, ''); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
     { env: { ...process.env, LLM_SWITCHER_PORT: '', ...env }, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(Number(out.trim()))));
   });
+  // The 400 ms count from the writer's start: a slow start under a loaded suite must not find the
+  // lock already gone.
+  for (let i = 0; i < 1000 && !fs.existsSync(started); i++) await new Promise(r => setTimeout(r, 10));
+  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
+  const waited = await done;
   // Taken over at once, the write would take a few ms.
   assert.ok(waited >= 100 && waited < 4000, `the writer waited ${waited} ms`);
   assert.equal(fs.existsSync(lock), false);
