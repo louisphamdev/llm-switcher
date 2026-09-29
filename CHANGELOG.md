@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.5
+
+- **Dashboard controls:** The dashboard controls use MIT elements from Uiverse.io galaxy as a base. The CSS gives the name of each author.
+- **Switch and checkbox:** The switch knob moves with a short spring and stretches while you press it. When a switch is off, a ring keeps its track visible. A checkbox shows a tick that grows when you select it.
+- **Feedback:** A toast shows a status dot and a bar for the time until it closes. A styled tooltip replaces the browser tooltip for each item that has a title. Test Connection and Sync Models show a spinner while they run. The dialog fades in.
+- **Accessibility:** A switch and a checkbox show a 2px outline when they have keyboard focus. When the system asks for reduced motion, only the spinner moves.
+
 ## Release 1.2.4
 
 - **Codex blindfold starts on a new machine:** A switch to a Codex profile stopped with "ca.pem is missing" on every new data directory. The certificates came only from `make-certs.sh`, which needs bash and OpenSSL. Now the switcher builds the same set with Node's crypto before it does any other check. It builds a new leaf when the leaf is missing, does not cover the three hosts, or does not match its key. It keeps a CA that still works, because Codex already trusts it.
