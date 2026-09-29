@@ -150,7 +150,7 @@ async function startInterceptor({ port, gatewayPort, config, upstreamPort }) {
   child.stdout.on('data', (d) => output.push(String(d)));
   child.stderr.on('data', (d) => output.push(String(d)));
   const stop = async () => {
-    if (child.exitCode !== null) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
     child.kill();
     await once(child, 'exit').catch(() => {});
   };
@@ -181,7 +181,7 @@ async function startGateway(t, port, cfgPath) {
   child.stdout.on('data', (d) => { log += d; });
   child.stderr.on('data', (d) => { log += d; });
   const stop = async () => {
-    if (child.exitCode !== null) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
     child.kill();
     await once(child, 'exit').catch(() => {});
   };

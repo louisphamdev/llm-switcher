@@ -54,16 +54,16 @@ function envFor(ws) {
   return { ...process.env, HOME: path.join(ws.dir, 'home'), USERPROFILE: path.join(ws.dir, 'home'), LLM_SWITCHER_CONFIG: ws.cfgPath, LLM_SWITCHER_STATE_DIR: ws.dir, LLM_SWITCHER_BLINDFOLD_CERTS: ws.certDir, CLAUDE_CONFIG_DIR: ws.claudeDir, LLM_SWITCHER_PORT: '', PORT: '' };
 }
 
-function writeConfig(ws, gwPort, bfPort, activeResponses = null) {
+// The 1.2 schema: one pointer per tool and one interceptor port for the whole config. A file in the
+// older schema is migrated on load, which rewrites it and breaks every "changes nothing" assertion.
+function writeConfig(ws, gwPort, bfPort, activeCodex = null) {
   fs.writeFileSync(ws.cfgPath, JSON.stringify({
     port: gwPort,
-    activeProfiles: { anthropic: null, responses: activeResponses, 'openai-chat': null, vertex: null },
+    blindfold: { port: bfPort },
+    activeProfiles: { claude: null, codex: activeCodex },
     profiles: {
-      plain: { name: 'Plain', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } },
-      bf: {
-        name: 'Blindfold', mode: 'convert', inFormat: 'responses', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k',
-        defaultModels: { main: 'm' }, blindfold: true, blindfoldPort: bfPort
-      }
+      plain: { name: 'Plain', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } },
+      bf: { name: 'Blindfold', mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { main: 'm' } }
     }
   }, null, 2), { mode: 0o600 });
 }
@@ -121,7 +121,7 @@ test('the gateway proves its identity to a fresh challenge; a replayed /health i
     const body = await (await fetch(`http://127.0.0.1:${gwPort}/health?challenge=abc`)).json();
     // The proof binds the role, the port it answers on and its pid, so it cannot be relayed or edited.
     assert.equal(body.port, gwPort);
-    assert.equal(body.proof, crypto.createHmac('sha256', token(ws)).update(['gateway', gwPort, body.pid, '', '', '', 'abc'].join('|')).digest('hex'));
+    assert.equal(body.proof, crypto.createHmac('sha256', token(ws)).update(['gateway', gwPort, body.pid, '', '', 'abc'].join('|')).digest('hex'));
     assert.equal(await probe(ws, `s.probeGateway(${gwPort})`), 'ours');
     assert.equal(await probe(ws, `s.probeGateway(${replayPort})`), 'foreign');
     assert.equal(await probe(ws, `s.probeGateway(${await freePort()})`), 'free');

@@ -1,16 +1,21 @@
 // CLI tests: switch.mjs runs as a child with its own config, launch files and Claude dir
 // (audit F06, BR-02, F27, F30, F46).
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POSIX = process.platform !== 'win32';
+
+// Blindfold mode needs a CA. Without its own directory the CLI reads the certificates of the checkout.
+const CERTS = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cli-certs-'));
+if (POSIX) execFileSync('bash', [path.join(ROOT, 'blindfold', 'make-certs.sh'), CERTS], { stdio: 'ignore' });
+after(() => fs.rmSync(CERTS, { recursive: true, force: true }));
 
 const freePort = () => new Promise(r => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); });
@@ -25,7 +30,7 @@ function workspace(t, port, profiles) {
   }, null, 2), { mode: 0o600 });
   // HOME too: `switch on` installs shims under the home directory, and a test must never rewrite the real ones.
   const home = path.join(dir, 'home');
-  const ws = { dir, cfgPath, home, env: { ...process.env, HOME: home, USERPROFILE: home, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, CLAUDE_CONFIG_DIR: path.join(dir, 'claude'), LLM_SWITCHER_PORT: '', PORT: '' } };
+  const ws = { dir, cfgPath, home, env: { ...process.env, HOME: home, USERPROFILE: home, LLM_SWITCHER_CONFIG: cfgPath, LLM_SWITCHER_STATE_DIR: dir, LLM_SWITCHER_BLINDFOLD_CERTS: CERTS, CLAUDE_CONFIG_DIR: path.join(dir, 'claude'), LLM_SWITCHER_PORT: '', PORT: '' } };
   t.after(async () => {
     await run(ws, ['off']).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
@@ -158,7 +163,7 @@ test('switch port stops the new gateway it started when it rolls back', { skip: 
 // Without publicModels the gateway has no official name to give Codex: no model catalog, no OpenAI-Model
 // header, and Codex prints false "metadata not found" and "high-risk cyber activity" warnings.
 test('switch codex and switch doctor warn when the Codex profile has no publicModels', { skip: !POSIX && 'posix' }, async (t) => {
-  const base = { mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } };
+  const base = { mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } };
   const ws = workspace(t, await freePort(), { bare: { name: 'Bare', ...base }, named: { name: 'Named', ...base, publicModels: ['gpt-5.6-sol'] } });
   const on = await run(ws, ['codex', 'bare']);
   assert.equal(on.status, 0, on.stderr);

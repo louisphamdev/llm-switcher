@@ -130,6 +130,8 @@ before(async () => {
   proxyPort = await freePort();
   blindfoldPort = await freePort();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-sim-'));
+  // Blindfold mode needs a CA. Without its own directory the gateway reads the certificates of the checkout.
+  execFileSync('bash', [path.join(ROOT, 'blindfold', 'make-certs.sh'), path.join(tmpDir, 'certs')], { stdio: 'ignore' });
 
   const base = `http://127.0.0.1:${upstreamPort}`;
   const models = { opus: 'up-opus', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' };
@@ -150,6 +152,7 @@ before(async () => {
       ...process.env,
       LLM_SWITCHER_CONFIG: path.join(tmpDir, 'config.json'),
       LLM_SWITCHER_STATE_DIR: tmpDir,
+      LLM_SWITCHER_BLINDFOLD_CERTS: path.join(tmpDir, 'certs'),
       CLAUDE_CONFIG_DIR: path.join(tmpDir, 'claude'),
       LLM_SWITCHER_PORT: ''
     },

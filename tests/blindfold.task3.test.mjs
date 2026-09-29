@@ -126,7 +126,7 @@ async function startInterceptor({ port, gatewayPort, config, activeTools = 'clau
   child.stderr.on('data', (d) => output.push(String(d)));
 
   const stop = async () => {
-    if (child.exitCode !== null) return;   // already gone: waiting for 'exit' would never resolve
+    if (child.exitCode !== null || child.signalCode !== null) return;   // already gone: waiting for 'exit' would never resolve
     child.kill();
     await once(child, 'exit').catch(() => {});
   };
@@ -650,7 +650,7 @@ test('R3b: an interceptor from 1.1.11 proves the old way and is replaced, not tr
   `;
   const legacy = spawn(process.execPath, ['--input-type=module', '-e', legacySrc], { stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => {
-    if (legacy.exitCode !== null) return;
+    if (legacy.exitCode !== null || legacy.signalCode !== null) return;
     legacy.kill();
     await once(legacy, 'exit').catch(() => {});
   });

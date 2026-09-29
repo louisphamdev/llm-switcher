@@ -23,7 +23,7 @@ import {
   codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
   contractLabSettings, STATE_DIR
 } from './state.mjs';
-import { classifyCodexRole, classifyClaudeTier, loadCatalogCache, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
+import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1289,7 +1289,7 @@ async function routeApi(req, res, method, pathname) {
 
   // GET /api/catalog (Dynamic Model Discovery)
   if (method === 'GET' && pathname === '/api/catalog') {
-    return sendJson(res, 200, loadCatalogCache(STATE_DIR));
+    return sendJson(res, 200, syncLocalCatalog(STATE_DIR));
   }
 
   if (method !== 'POST') {
@@ -1310,10 +1310,7 @@ async function routeApi(req, res, method, pathname) {
     const cfg = requireConfig(res) || {};
     const claudeProfile = active.claude ? cfg.profiles?.[active.claude] : null;
     const codexProfile = active.codex ? cfg.profiles?.[active.codex] : null;
-    const updated = await refreshCatalog(STATE_DIR, {
-      claudeKey: claudeProfile?.apiKey,
-      codexKey: codexProfile?.apiKey
-    });
+    const updated = await refreshCatalog(STATE_DIR, { claudeProfile, codexProfile });
     return sendJson(res, 200, { success: true, catalog: updated });
   }
 

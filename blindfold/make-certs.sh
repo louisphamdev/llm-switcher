@@ -103,8 +103,10 @@ openssl req -x509 -new -key "$WORK/ca.key" -sha256 -days "$CA_DAYS" \
 
 openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/leaf.key"
 openssl req -new -key "$WORK/leaf.key" -config "$WORK/leaf.cnf" -out "$WORK/leaf.csr"
+# An explicit -CAserial: LibreSSL derives the default name by cutting the CA path at its first dot,
+# so a home directory such as /Users/first.last sent the serial file to /Users/first.srl.
 openssl x509 -req -in "$WORK/leaf.csr" \
-  -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial \
+  -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial -CAserial "$WORK/ca.srl" \
   -days "$LEAF_DAYS" -sha256 -extfile "$WORK/leaf.ext" \
   -out "$WORK/leaf.pem"
 

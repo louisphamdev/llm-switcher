@@ -848,7 +848,7 @@ async function runDoctor() {
     const p = config.profiles[key];
     if (!p) warn(`[WARN] Target ${t} points to missing profile "${show(key)}".`);
     else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${show(key)}" (${t}) still has placeholder baseURL/apiKey.`);
-    if (p && t === 'responses') {
+    if (p && t === 'codex') {
       const codexWarning = codexPublicModelsWarning(show(key), p);
       if (codexWarning) warn(`[WARN] ${codexWarning}`);
     }
@@ -1037,12 +1037,12 @@ async function runContractCheck() {
 }
 
 async function showModels(target) {
-  const { loadCatalogCache, refreshCatalog } = await import('./catalog.mjs');
+  const { syncLocalCatalog, refreshCatalog } = await import('./catalog.mjs');
   if (optionValue('--refresh') || process.argv.includes('--refresh')) {
     console.log('Refreshing models catalog from official endpoints...');
     await refreshCatalog(STATE_DIR);
   }
-  const cache = loadCatalogCache(STATE_DIR);
+  const cache = syncLocalCatalog(STATE_DIR);
   console.log('=== LLM Switcher Discovered Models Catalog ===\n');
   const t = target ? target.toLowerCase() : '';
   if (!t || t === 'claude') {

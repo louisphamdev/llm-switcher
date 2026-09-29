@@ -7,6 +7,7 @@
 // ============================================================
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const OFFICIAL_MODEL_URLS = {
@@ -67,6 +68,70 @@ export function loadCatalogCache(stateDir) {
       models: Object.entries(BASELINE_MODELS.codex).flatMap(([role, ids]) => ids.map(id => ({ id, role })))
     }
   };
+}
+
+function defaultSources() {
+  return {
+    codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+    claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+  };
+}
+
+/**
+ * Reads the model list that the tool itself keeps on disk for the signed-in account, so no key and
+ * no network call is needed. Codex writes models_cache.json; Claude Code writes cache/model-catalog.
+ * Returns null when the tool has no list.
+ */
+export function readLocalToolModels(tool, sources = defaultSources()) {
+  try {
+    if (tool === 'codex') {
+      const d = JSON.parse(fs.readFileSync(path.join(sources.codexHome, 'models_cache.json'), 'utf8'));
+      const models = (Array.isArray(d?.models) ? d.models : [])
+        .filter(m => m && typeof m.slug === 'string' && m.slug)
+        .map(m => ({ id: m.slug, role: classifyCodexRole(m.slug), ...(Number.isInteger(m.context_window) ? { contextWindow: m.context_window } : {}) }));
+      return models.length ? { models, version: String(d.client_version || '') } : null;
+    }
+    if (tool === 'claude') {
+      // One file per account or surface; the newest fetch wins.
+      const dir = path.join(sources.claudeDir, 'cache', 'model-catalog');
+      let newest = null;
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith('.json')) continue;
+        try {
+          const d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+          const list = d?.catalog?.config?.models;
+          if (Array.isArray(list) && list.length && (!newest || (d.fetchedAt || 0) > newest.fetchedAt)) newest = { fetchedAt: d.fetchedAt || 0, list };
+        } catch {}
+      }
+      const models = (newest?.list || [])
+        .filter(m => m && typeof m.id === 'string' && m.id)
+        .map(m => ({ id: m.id, display_name: m.name || m.id, tier: classifyClaudeTier(m.id) }));
+      return models.length ? { models, version: '' } : null;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Copies the tools' own lists into the catalog when they changed. A tool can update and rewrite its
+ * list without any request through the gateway, so readers of the catalog call this first.
+ */
+export function syncLocalCatalog(stateDir, sources = defaultSources()) {
+  const cache = loadCatalogCache(stateDir);
+  let changed = false;
+  for (const tool of ['claude', 'codex']) {
+    const local = readLocalToolModels(tool, sources);
+    if (!local) continue;
+    const ids = (cache[tool]?.models || []).map(m => m.id).join('\n');
+    if (ids === local.models.map(m => m.id).join('\n') && cache[tool]?.source === 'local') continue;
+    cache[tool] = { ...cache[tool], models: local.models, source: 'local' };
+    changed = true;
+  }
+  if (changed) {
+    cache.updatedAt = Date.now();
+    saveCatalogCache(stateDir, cache);
+  }
+  return cache;
 }
 
 /** Atomically writes the model catalog cache to disk */
@@ -141,19 +206,33 @@ export async function fetchToolModels(tool, { url, apiKey, timeout = 3000 } = {}
   }
 }
 
+// A profile key is a credential for that profile's baseURL. Send it to the official model list only
+// when the profile itself points at the official host, never to a third party.
+function officialKey(profile, tool) {
+  try {
+    if (profile?.apiKey && new URL(profile.baseURL).host === new URL(OFFICIAL_MODEL_URLS[tool]).host) return profile.apiKey;
+  } catch {}
+  return undefined;
+}
+
 /**
  * Refreshes the local catalog cache with models from both official endpoints
  * and saves to the state directory.
  */
-export async function refreshCatalog(stateDir, { claudeKey, codexKey } = {}) {
+export async function refreshCatalog(stateDir, { claudeProfile, codexProfile, sources = defaultSources() } = {}) {
   const cache = loadCatalogCache(stateDir);
+  const local = { claude: readLocalToolModels('claude', sources), codex: readLocalToolModels('codex', sources) };
 
+  // A local list is the list of the account itself; the built-in names are guesses and are not added.
   const [claudeRes, codexRes] = await Promise.all([
-    fetchToolModels('claude', { apiKey: claudeKey }),
-    fetchToolModels('codex', { apiKey: codexKey })
+    local.claude || fetchToolModels('claude', { apiKey: officialKey(claudeProfile, 'claude') }),
+    local.codex || fetchToolModels('codex', { apiKey: officialKey(codexProfile, 'codex') })
   ]);
+  for (const tool of ['claude', 'codex']) {
+    if (local[tool]) cache[tool] = { ...cache[tool], models: local[tool].models, source: 'local' };
+  }
 
-  if (claudeRes.ok && claudeRes.models.length > 0) {
+  if (!local.claude && claudeRes.ok && claudeRes.models.length > 0) {
     const existing = new Set(claudeRes.models.map(m => m.id));
     // Keep any baseline models that might be absent from the API
     for (const [tier, ids] of Object.entries(BASELINE_MODELS.claude)) {
@@ -161,17 +240,17 @@ export async function refreshCatalog(stateDir, { claudeKey, codexKey } = {}) {
         if (!existing.has(id)) claudeRes.models.push({ id, tier });
       }
     }
-    cache.claude = { models: claudeRes.models };
+    cache.claude = { ...cache.claude, models: claudeRes.models, source: 'official' };
   }
 
-  if (codexRes.ok && codexRes.models.length > 0) {
+  if (!local.codex && codexRes.ok && codexRes.models.length > 0) {
     const existing = new Set(codexRes.models.map(m => m.id));
     for (const [role, ids] of Object.entries(BASELINE_MODELS.codex)) {
       for (const id of ids) {
         if (!existing.has(id)) codexRes.models.push({ id, role });
       }
     }
-    cache.codex = { models: codexRes.models };
+    cache.codex = { ...cache.codex, models: codexRes.models, source: 'official' };
   }
 
   cache.updatedAt = Date.now();
@@ -199,48 +278,59 @@ const refreshingTools = new Set();
 
 /**
  * Version-triggered auto-poll:
- * When a request arrives with a new tool version not yet seen in cache,
- * immediately records the new version and kicks off an asynchronous background refresh.
- * Subsequent requests with the same version do zero network calls.
+ * When a request arrives with a tool version that has no refreshed catalog yet, the catalog is
+ * refreshed from the tool's own list on disk, or else from the official list in the background.
+ * The version is recorded only after a refresh succeeds, so a failed refresh is tried again.
  */
-export function checkVersionAndRefresh(tool, headers, stateDir, apiKey) {
+const RETRY_AFTER_MS = 10 * 60 * 1000;
+const failedAttempts = new Map();
+
+export function checkVersionAndRefresh(tool, headers, stateDir, apiKey, sources = defaultSources()) {
   const version = detectToolVersion(headers, tool);
   if (!version) return;
 
   const cache = loadCatalogCache(stateDir);
-  const toolEntry = cache[tool] || {};
-  const lastVersion = toolEntry.lastSeenVersion || '';
+  if (version === (cache[tool]?.lastSeenVersion || '')) return;
 
-  if (version !== lastVersion) {
-    toolEntry.lastSeenVersion = version;
-    cache[tool] = toolEntry;
+  const local = readLocalToolModels(tool, sources);
+  if (local) {
+    cache[tool] = { ...cache[tool], lastSeenVersion: version, models: local.models, source: 'local' };
+    cache.updatedAt = Date.now();
     saveCatalogCache(stateDir, cache);
-
-    if (!refreshingTools.has(tool)) {
-      refreshingTools.add(tool);
-      fetchToolModels(tool, { apiKey })
-        .then(res => {
-          if (res.ok && res.models.length > 0) {
-            const fresh = loadCatalogCache(stateDir);
-            const existing = new Set(res.models.map(m => m.id));
-            const baseline = BASELINE_MODELS[tool] || {};
-            for (const [, ids] of Object.entries(baseline)) {
-              for (const id of ids) {
-                if (!existing.has(id)) {
-                  res.models.push({ id, ...(tool === 'claude' ? { tier: classifyClaudeTier(id) } : { role: classifyCodexRole(id) }) });
-                }
-              }
-            }
-            fresh[tool] = { lastSeenVersion: version, models: res.models };
-            fresh.updatedAt = Date.now();
-            saveCatalogCache(stateDir, fresh);
-            console.log(`[llm-switcher:catalog] Detected ${tool} version update to ${version} -> refreshed model catalog (${res.models.length} models)`);
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          refreshingTools.delete(tool);
-        });
-    }
+    console.log(`[llm-switcher:catalog] Detected ${tool} ${version} -> model catalog read from the tool (${local.models.length} models)`);
+    return;
   }
+
+  // Without a local list every request would call the network again; wait between failed attempts.
+  const failed = failedAttempts.get(tool);
+  if (failed && failed.version === version && Date.now() - failed.at < RETRY_AFTER_MS) return;
+  if (refreshingTools.has(tool)) return;
+
+  refreshingTools.add(tool);
+  fetchToolModels(tool, { apiKey })
+    .then(res => {
+      if (!res.ok || res.models.length === 0) {
+        failedAttempts.set(tool, { version, at: Date.now() });
+        console.log(`[llm-switcher:catalog] ${tool} ${version}: no local model list, official list failed (${res.error || 'empty'})`);
+        return;
+      }
+      const fresh = loadCatalogCache(stateDir);
+      const existing = new Set(res.models.map(m => m.id));
+      const baseline = BASELINE_MODELS[tool] || {};
+      for (const [, ids] of Object.entries(baseline)) {
+        for (const id of ids) {
+          if (!existing.has(id)) {
+            res.models.push({ id, ...(tool === 'claude' ? { tier: classifyClaudeTier(id) } : { role: classifyCodexRole(id) }) });
+          }
+        }
+      }
+      fresh[tool] = { ...fresh[tool], lastSeenVersion: version, models: res.models, source: 'official' };
+      fresh.updatedAt = Date.now();
+      saveCatalogCache(stateDir, fresh);
+      console.log(`[llm-switcher:catalog] Detected ${tool} version update to ${version} -> refreshed model catalog (${res.models.length} models)`);
+    })
+    .catch(() => {})
+    .finally(() => {
+      refreshingTools.delete(tool);
+    });
 }

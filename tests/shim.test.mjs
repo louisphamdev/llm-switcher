@@ -156,8 +156,8 @@ test('A2: codex shim passes no config override', () => {
 test('codex shim wires only the interceptor proxy and passes its arguments through', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
   const out = runShim('codex', ['exec', 'hi'], {
-    fakeDir: makeArgvBin('codex'),
-    files: { 'active.flag': 'active' }
+    active: true,
+    fakeDir: makeArgvBin('codex')
   }).split('\n');
   assert.equal(out[0], 'HTTPS_PROXY=http://127.0.0.1:3457', 'the interceptor is the only wiring');
   assert.deepEqual(out.slice(1), ['exec', 'hi'], 'arguments must be preserved');
@@ -171,6 +171,7 @@ test('Claude shim never loads the Codex-only file or passes Codex overrides', (t
   // env-codex.sh carries a deliberately different port: if the claude shim ever sourced it,
   // that value would show up instead of the claude one.
   const out = runShim('claude', ['--resume'], {
+    active: true,
     fakeDir: makeArgvBin('claude'),
     files: { 'env-codex.sh': "export HTTPS_PROXY='http://127.0.0.1:9999'\n" }
   }).split('\n');

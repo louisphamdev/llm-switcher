@@ -113,7 +113,7 @@ async function startInterceptor({ port, gatewayPort, config, activeTools = 'clau
   child.stderr.on('data', (d) => output.push(String(d)));
 
   const stop = async () => {
-    if (child.exitCode !== null) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
     child.kill();
     await once(child, 'exit').catch(() => {});
   };

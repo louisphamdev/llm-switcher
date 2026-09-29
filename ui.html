@@ -520,6 +520,39 @@
     .search svg { position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%); color: var(--faint); width: 15px; height: 15px; pointer-events: none; }
     .search input { padding-left: 2rem; min-height: 32px; }
 
+    /* Model slot combobox: one listbox per slot, provider prefix dimmed, match in the accent. */
+    .combo { position: relative; }
+    .combo > input { padding-right: 2.25rem; font-family: var(--font-mono); font-size: 0.8rem; }
+    .combo-toggle {
+      position: absolute; right: 4px; top: 4px; width: 28px; height: 28px;
+      display: grid; place-items: center; padding: 0; min-height: 0;
+      border: 0; border-radius: 6px; background: transparent; color: var(--faint); cursor: pointer;
+    }
+    .combo-toggle:hover { color: var(--fg); background: var(--card2); }
+    .combo-toggle svg { width: 14px; height: 14px; transition: transform 0.15s ease; }
+    .combo[data-open] .combo-toggle svg { transform: rotate(180deg); }
+    .combo-list {
+      position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px);
+      max-height: 15rem; overflow-y: auto; margin: 0; padding: 0.25rem; list-style: none;
+      background: var(--card2); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+    }
+    .combo[data-up] .combo-list { top: auto; bottom: calc(100% + 4px); }
+    .combo-opt {
+      display: flex; align-items: baseline; gap: 0.5rem; padding: 0.4rem 0.55rem;
+      border-left: 2px solid transparent; border-radius: 6px; cursor: pointer;
+      font-family: var(--font-mono); font-size: 0.8rem; color: var(--fg);
+    }
+    .combo-opt .id { overflow-wrap: anywhere; }
+    .combo-opt .pfx { color: var(--muted); }   /* --faint fails 4.5:1 on the selected row in light */
+    .combo-opt mark { background: transparent; color: var(--accent); font-weight: 600; }
+    .combo-opt:hover { background: var(--bg); }
+    .combo-opt[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+    .combo-opt .cur { margin-left: auto; flex: none; color: var(--accent); font-size: 0.7rem; }
+    .combo-empty { padding: 0.5rem 0.55rem; font-size: 0.78rem; color: var(--faint); }
+    .models-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem; color: var(--faint); }
+    .models-status[data-state="error"] { color: var(--err); }
+    @media (prefers-reduced-motion: reduce) { .combo-toggle svg { transition: none; } }
+
     /* Switch */
     .switch { position: relative; width: 36px; height: 20px; flex: none; display: inline-block; }
     .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; min-height: 0; }
@@ -716,7 +749,7 @@
 <body>
   <!-- Sidebar -->
   <aside>
-    <a class="brand" href="#/routes" aria-label="LLM Switcher home">
+    <a class="brand" href="#/routes">
       <span class="logo">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <defs>
@@ -802,7 +835,7 @@
                 <div class="meta">Native Anthropic Messages · <code>/v1/messages</code></div>
               </div>
               <div style="min-width:14rem;">
-                <select id="select-slot-claude" onchange="switchCliTarget('claude', this.value)">
+                <select id="select-slot-claude" aria-label="Claude Code route" onchange="switchCliTarget('claude', this.value)">
                   <option value="">Official endpoint</option>
                 </select>
               </div>
@@ -817,7 +850,7 @@
                 <div class="meta">Responses WebSocket · <code>/v1/responses</code></div>
               </div>
               <div style="min-width:14rem;">
-                <select id="select-slot-codex" onchange="switchCliTarget('codex', this.value)">
+                <select id="select-slot-codex" aria-label="Codex route" onchange="switchCliTarget('codex', this.value)">
                   <option value="">Official endpoint</option>
                 </select>
               </div>
@@ -936,7 +969,7 @@
   </div>
 
   <!-- Profile Modal Editor -->
-  <div id="profile-modal-overlay" class="overlay" style="display:none;" onclick="if(event.target===this) closeProfileModal()">
+  <div id="profile-modal-overlay" class="overlay" style="display:none;" onmousedown="overlayPressed = event.target === this" onclick="if (overlayPressed && event.target === this) closeProfileModal()">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="form-title">
       <div class="mh">
         <div>
@@ -946,7 +979,7 @@
         <button class="icon" type="button" onclick="closeProfileModal()" aria-label="Close dialog">✕</button>
       </div>
 
-      <form id="profile-form" onsubmit="saveProfile(event)" style="display:flex; flex-direction:column; overflow:hidden;">
+      <form id="profile-form" onsubmit="saveProfile(event)" onkeydown="blockImplicitSubmit(event)" style="display:flex; flex-direction:column; overflow:hidden;">
         <!-- Modal Inset Tabs -->
         <div style="padding:0.85rem 1.25rem 0.5rem; background:var(--card2);">
           <div class="tabs">
@@ -1000,6 +1033,7 @@
               </label>
               <label class="f">Outbound Format
                 <select id="p-outformat">
+                  <option value="">Auto (detect from the model)</option>
                   <option value="openai-chat">OpenAI Chat (/v1/chat/completions)</option>
                   <option value="anthropic">Anthropic Messages (/v1/messages)</option>
                   <option value="vertex">Google Vertex AI (/models/...)</option>
@@ -1031,20 +1065,12 @@
               <span id="warn-1m-icon">⚠️</span> <span id="warn-1m-text">1M context flag is enabled</span>
             </div>
 
-            <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
               <h3 id="model-slot-heading" style="font-size:0.92rem; font-weight:600;">Model Slots Mapping</h3>
-              <button type="button" id="btn-fetch-models" class="btn btn-outline btn-sm" onclick="fetchModelList()">Browse Models</button>
+              <div id="models-status" class="models-status" aria-live="polite"></div>
             </div>
 
             <div id="slot-fields" style="display:grid; gap:0.75rem;"></div>
-
-            <div id="model-browser" style="display:none; background:var(--card2); padding:0.85rem; border-radius:8px; border:1px solid var(--line);">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                <span id="model-count-label" class="hint">Loaded models</span>
-                <input type="text" id="model-filter" placeholder="Search..." oninput="filterModels()" style="width:12rem; min-height:28px;">
-              </div>
-              <div id="model-items" style="max-height:8rem; overflow-y:auto; display:flex; flex-wrap:wrap; gap:0.35rem;"></div>
-            </div>
           </div>
 
           <!-- Test Connection Box -->
@@ -1072,7 +1098,6 @@
   </div>
 
   <div id="toast" class="toast"></div>
-  <datalist id="model-options"></datalist>
 
   <script>
     // State & Globals
@@ -1163,9 +1188,17 @@
       if (modal) modal.style.display = 'none';
     }
 
-    // Close modal on Escape
+    // A text selection that starts in a field and ends on the overlay also clicks the overlay.
+    let overlayPressed = false;
+
+    // Enter in a field would submit the form and save a half-typed value. Only Save Profile saves.
+    function blockImplicitSubmit(e) {
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'submit') e.preventDefault();
+    }
+
+    // Close modal on Escape. Inside a field, Escape belongs to the field (it closes the autocomplete list).
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.target.closest?.('input, select, textarea')) {
         const modal = document.getElementById('profile-modal-overlay');
         if (modal && modal.style.display !== 'none') {
           closeProfileModal();
@@ -1265,6 +1298,7 @@
         target.classList.add('active');
         target.style.display = 'grid';
       }
+      if (tabId === 'tab-models') ensureModelsLoaded();
     }
 
     // Slot Configs
@@ -1391,9 +1425,16 @@
               1M context
             </label>
           </div>
-          <input type="text" id="p-${s.id}" list="model-options" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
+          <div class="combo">
+            <input type="text" id="p-${s.id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="p-${s.id}-list" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
+            <button type="button" class="combo-toggle" tabindex="-1" aria-label="Show models for ${escapeHtml(s.name)}">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+            </button>
+            <ul class="combo-list" id="p-${s.id}-list" role="listbox" aria-label="${escapeHtml(s.name)} models" hidden></ul>
+          </div>
         `;
         container.appendChild(slotRow);
+        wireCombo(slotRow.querySelector('.combo'));
       }
       update1mWarnings();
     }
@@ -1591,7 +1632,7 @@
               </div>
             </div>
             <label class="switch" onclick="event.stopPropagation()">
-              <input type="checkbox" ${isActiveAny ? 'checked' : ''} onchange="toggleProfileAllCli('${escapeHtml(key)}', this.checked)">
+              <input type="checkbox" aria-label="Use ${escapeHtml(p.name)} (${escapeHtml(key)}) for every compatible CLI" ${isActiveAny ? 'checked' : ''} onchange="toggleProfileAllCli('${escapeHtml(key)}', this.checked)">
               <span></span>
             </label>
           </div>
@@ -1633,7 +1674,7 @@
           body: JSON.stringify({ target, profile: profileKey || null })
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast('Updated ' + target + ' routing');
           await loadStatus();
         } else {
@@ -1653,7 +1694,7 @@
           body: JSON.stringify({ profile: key, deactivate: !enable })
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast(key + (enable ? ' activated' : ' deactivated'));
           await loadStatus();
         } else {
@@ -1678,7 +1719,7 @@
       document.getElementById('p-key-val').value = p.apiKey ? MASKED_KEY : '';
       const toolVal = p.tool || 'auto';
       document.getElementById('p-tool').value = toolVal;
-      document.getElementById('p-outformat').value = p.outFormat || 'openai-chat';
+      document.getElementById('p-outformat').value = p.outFormat || '';
       document.getElementById('p-mode').value = p.mode || 'convert';
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
       document.getElementById('btn-delete').style.display = 'inline-flex';
@@ -1801,7 +1842,7 @@
           body: JSON.stringify({ enabled: !isAnyActive })
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast(isAnyActive ? 'Using official endpoints' : 'Gateway activated');
           await loadStatus();
         } else {
@@ -1851,7 +1892,7 @@
           body: JSON.stringify({ key, profile: profilePayload })
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast('Profile "' + key + '" saved successfully');
           closeProfileModal();
           await loadStatus();
@@ -1875,7 +1916,7 @@
           body: JSON.stringify({ key })
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast('Profile "' + key + '" deleted');
           closeProfileModal();
           await loadStatus();
@@ -1949,89 +1990,217 @@
       }
     }
 
+    // Provider models for the slot comboboxes. The Model Slots tab loads them once per source.
+    let modelsLoadedFor = '';
+    let modelsRequest = 0;
+
+    function modelsSourceKey() {
+      return [document.getElementById('p-url').value.trim(), formLoadedKey || '', document.getElementById('p-key-val').value.trim()].join('\n');
+    }
+
+    function setModelsStatus(stateName, text, action) {
+      const el = document.getElementById('models-status');
+      if (!el) return;
+      el.dataset.state = stateName;
+      el.innerHTML = `<span>${escapeHtml(text)}</span>`
+        + (action ? `<button type="button" class="btn btn-outline btn-sm" onclick="ensureModelsLoaded(true)">${action}</button>` : '');
+    }
+
+    // The upstream error body is often JSON; show its message, not the raw text.
+    function modelsError(raw) {
+      let text = String(raw || 'no models returned');
+      try { const j = JSON.parse(text); text = j?.error?.message || j?.error || j?.message || text; } catch {}
+      return String(text).slice(0, 140);
+    }
+
+    async function ensureModelsLoaded(force = false) {
+      if (!force && modelsSourceKey() === modelsLoadedFor) return;
+      await fetchModelList();
+    }
+
     async function fetchModelList() {
-      const btn = document.getElementById('btn-fetch-models');
-      const browser = document.getElementById('model-browser');
       const baseURL = document.getElementById('p-url').value.trim();
       const apiKeyVal = document.getElementById('p-key-val').value.trim();
       const apiKey = (apiKeyVal === MASKED_KEY) ? (state.config?.profiles?.[formLoadedKey]?.apiKey || '') : apiKeyVal;
+      const source = modelsSourceKey();
+      const request = ++modelsRequest;
 
       if (!baseURL) {
-        showToast('Please enter a Base URL first', true);
+        loadedModels = [];
+        modelsLoadedFor = '';
+        setModelsStatus('idle', 'Enter a Base URL on the General tab to list models');
         return;
       }
 
-      btn.disabled = true;
-      btn.innerText = 'Fetching...';
+      setModelsStatus('loading', 'Loading models...');
       try {
         const res = await api('/api/fetch-models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ baseURL, apiKey })
+          body: JSON.stringify({ baseURL, apiKey, key: formLoadedKey })
         });
         const data = await res.json();
+        if (request !== modelsRequest) return;   // a newer load started while this one waited
         if (data.ok && Array.isArray(data.models)) {
           loadedModels = data.models;
-          populateModelOptions(loadedModels);
-          renderModelBrowser(loadedModels);
-          browser.style.display = 'block';
-          showToast('Loaded ' + loadedModels.length + ' models');
+          modelsLoadedFor = source;
+          setModelsStatus('ready', loadedModels.length + (loadedModels.length === 1 ? ' model' : ' models'), 'Reload');
         } else {
-          showToast(data.error || 'No models returned from provider', true);
+          loadedModels = [];
+          modelsLoadedFor = '';
+          setModelsStatus('error', 'Models not loaded: ' + modelsError(data.error), 'Retry');
         }
       } catch (err) {
-        showToast('Error fetching models: ' + err.message, true);
-      } finally {
-        btn.disabled = false;
-        btn.innerText = 'Browse Models';
+        if (request !== modelsRequest) return;
+        loadedModels = [];
+        modelsLoadedFor = '';
+        setModelsStatus('error', 'Models not loaded: ' + err.message, 'Retry');
       }
+      document.querySelectorAll('.combo[data-open]').forEach(renderComboOptions);
     }
 
-    function populateModelOptions(models) {
-      const dl = document.getElementById('model-options');
-      if (!dl) return;
-      dl.innerHTML = '';
-      for (const m of models) {
-        const opt = document.createElement('option');
-        opt.value = m;
-        dl.appendChild(opt);
+    // Slot combobox (ARIA combobox with a listbox). Typing filters; the arrow opens the full list.
+    // Free text stays valid: a model the provider does not list is typed and kept.
+    function wireCombo(combo) {
+      const input = combo.querySelector('input');
+      combo.activeIndex = -1;
+      input.addEventListener('input', () => { combo.dataset.filter = '1'; combo.activeIndex = -1; openCombo(combo); });
+      input.addEventListener('keydown', onComboKeydown);
+      input.addEventListener('blur', () => closeCombo(combo));
+      // Keep the focus in the field while the list or the arrow is used.
+      combo.querySelector('.combo-list').addEventListener('mousedown', e => e.preventDefault());
+      const toggle = combo.querySelector('.combo-toggle');
+      toggle.addEventListener('mousedown', e => e.preventDefault());
+      toggle.addEventListener('click', () => {
+        if (combo.hasAttribute('data-open')) return closeCombo(combo);
+        input.focus();
+        input.select();   // typing then replaces the current model instead of joining it
+        delete combo.dataset.filter;
+        openCombo(combo);
+      });
+    }
+
+    function openCombo(combo) {
+      combo.setAttribute('data-open', '');
+      combo.querySelector('input').setAttribute('aria-expanded', 'true');
+      combo.querySelector('.combo-list').hidden = false;
+      renderComboOptions(combo);
+      placeCombo(combo);
+      setComboActive(combo, combo.activeIndex);   // again, now that the list has its final height
+    }
+
+    function closeCombo(combo) {
+      if (!combo.hasAttribute('data-open')) return;
+      const input = combo.querySelector('input');
+      combo.removeAttribute('data-open');
+      combo.removeAttribute('data-up');
+      delete combo.dataset.filter;
+      combo.activeIndex = -1;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      combo.querySelector('.combo-list').hidden = true;
+    }
+
+    // The modal body scrolls and clips the list: open toward the larger room and fit the list into it.
+    function placeCombo(combo) {
+      const list = combo.querySelector('.combo-list');
+      const scroller = combo.closest('.mb');
+      combo.removeAttribute('data-up');
+      list.style.maxHeight = '';
+      if (!scroller) return;
+      const box = scroller.getBoundingClientRect();
+      const field = combo.getBoundingClientRect();
+      const below = box.bottom - field.bottom - 8;
+      const above = field.top - box.top - 8;
+      const up = below < list.offsetHeight && above > below;
+      if (up) combo.setAttribute('data-up', '');
+      list.style.maxHeight = Math.max(120, Math.min(240, up ? above : below)) + 'px';
+    }
+
+    function markMatch(text, q) {
+      const at = q ? text.toLowerCase().indexOf(q) : -1;
+      if (at < 0) return escapeHtml(text);
+      return escapeHtml(text.slice(0, at)) + '<mark>' + escapeHtml(text.slice(at, at + q.length)) + '</mark>' + escapeHtml(text.slice(at + q.length));
+    }
+
+    function renderComboOptions(combo) {
+      const input = combo.querySelector('input');
+      const list = combo.querySelector('.combo-list');
+      const q = combo.dataset.filter ? input.value.trim().toLowerCase() : '';
+      const current = input.value.trim();
+      const matches = loadedModels.filter(m => !q || m.toLowerCase().includes(q)).slice(0, 200);
+      combo.matches = matches;
+      if (!loadedModels.length) {
+        const status = document.getElementById('models-status')?.textContent || '';
+        list.innerHTML = `<li class="combo-empty">${escapeHtml(status || 'No models loaded')}</li>`;
+        return;
       }
-    }
-
-    function renderModelBrowser(models) {
-      const container = document.getElementById('model-items');
-      const label = document.getElementById('model-count-label');
-      if (!container) return;
-      container.innerHTML = '';
-      if (label) label.textContent = models.length + ' models found';
-
-      for (const m of models) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-outline btn-sm';
-        btn.style.cssText = 'font-size:0.75rem; padding:0.15rem 0.5rem;';
-        btn.textContent = m;
-        btn.onclick = () => selectModel(m);
-        container.appendChild(btn);
+      if (!matches.length) {
+        list.innerHTML = '<li class="combo-empty">No listed model matches. The typed name is kept as it is.</li>';
+        return;
       }
+      if (!(combo.activeIndex >= 0 && combo.activeIndex < matches.length)) combo.activeIndex = matches.indexOf(current);
+      list.innerHTML = matches.map((m, i) => {
+        const cut = m.lastIndexOf('/') + 1;
+        const prefix = cut ? `<span class="pfx">${markMatch(m.slice(0, cut), q)}</span>` : '';
+        return `<li class="combo-opt" role="option" id="${input.id}-opt-${i}" data-i="${i}" aria-selected="${i === combo.activeIndex}"`
+          + ` onmousedown="event.preventDefault(); chooseComboOption(this)">`
+          + `<span class="id">${prefix}${markMatch(m.slice(cut), q)}</span>`
+          + (m === current ? '<span class="cur">current</span>' : '') + '</li>';
+      }).join('');
+      setComboActive(combo, combo.activeIndex);
     }
 
-    function filterModels() {
-      const q = (document.getElementById('model-filter')?.value || '').toLowerCase();
-      const filtered = loadedModels.filter(m => m.toLowerCase().includes(q));
-      renderModelBrowser(filtered);
-    }
-
-    function selectModel(modelId) {
-      const activeTab = document.querySelector('.tab-content.active');
-      const focused = activeTab?.querySelector('input[type="text"]:focus');
-      if (focused && focused.id.startsWith('p-')) {
-        focused.value = modelId;
+    function setComboActive(combo, i) {
+      const input = combo.querySelector('input');
+      combo.activeIndex = i;
+      combo.querySelectorAll('.combo-opt').forEach(li => li.setAttribute('aria-selected', String(Number(li.dataset.i) === i)));
+      const active = i >= 0 ? document.getElementById(`${input.id}-opt-${i}`) : null;
+      if (active) {
+        input.setAttribute('aria-activedescendant', active.id);
+        // Scroll the list only. The browser's scroll-into-view also scrolls the dialog body.
+        const list = combo.querySelector('.combo-list');
+        if (active.offsetTop < list.scrollTop) list.scrollTop = active.offsetTop - 4;
+        else if (active.offsetTop + active.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = active.offsetTop + active.offsetHeight - list.clientHeight + 4;
       } else {
-        const sonnetInput = document.getElementById('p-sonnet') || document.getElementById('p-default');
-        if (sonnetInput) sonnetInput.value = modelId;
+        input.removeAttribute('aria-activedescendant');
       }
-      showToast('Selected: ' + modelId);
+    }
+
+    function chooseComboOption(li) {
+      const combo = li.closest('.combo');
+      const model = combo?.matches?.[Number(li.dataset.i)];
+      if (!model) return;
+      combo.querySelector('input').value = model;
+      closeCombo(combo);
+    }
+
+    function onComboKeydown(e) {
+      const combo = e.currentTarget.closest('.combo');
+      const open = combo.hasAttribute('data-open');
+      const count = combo.matches?.length || 0;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!open) return openCombo(combo);
+        if (!count) return;
+        const from = combo.activeIndex;
+        const next = e.key === 'ArrowDown' ? (from < 0 ? 0 : (from + 1) % count) : (from <= 0 ? count - 1 : from - 1);
+        setComboActive(combo, next);
+      } else if (e.key === 'Enter') {
+        // Never submit from a slot. Enter picks the highlighted model, or keeps the typed text.
+        e.preventDefault();
+        e.stopPropagation();
+        if (open && combo.activeIndex >= 0) chooseComboOption(document.getElementById(`${e.currentTarget.id}-opt-${combo.activeIndex}`));
+        else closeCombo(combo);
+      } else if (e.key === 'Escape') {
+        if (open) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeCombo(combo);
+        }
+      } else if (e.key === 'Tab') {
+        closeCombo(combo);
+      }
     }
 
     // Dynamic Model Catalog View
@@ -2104,7 +2273,7 @@
       try {
         const res = await api('/api/catalog/refresh', { method: 'POST' });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast('Model catalog synchronized');
           await renderCatalogView();
         } else {
@@ -2181,7 +2350,7 @@
       try {
         const res = await api('/api/logs/clear', { method: 'POST' });
         const data = await res.json();
-        if (data.ok) {
+        if (data.success) {
           showToast('Request inspector logs cleared');
           await loadInspectorLogs();
         }

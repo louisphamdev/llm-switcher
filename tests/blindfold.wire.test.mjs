@@ -53,7 +53,9 @@ async function startInterceptor() {
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(ROOT, 'blindfold', 'blindfold.mjs'),
     '--port', String(port), '--gateway-port', String(gatewayPort), '--certs', certDir,
-    '--capture', captureDir, '--token-file', path.join(dir, 'admin.token')], { stdio: ['ignore', 'pipe', 'pipe'] });
+    '--capture', captureDir, '--token-file', path.join(dir, 'admin.token'),
+    // Since R3 only the paths of an active tool reach the gateway; everything else passes through.
+    '--active-tools', 'codex'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.on('data', d => { out += d; });
   child.stderr.on('data', d => { out += d; });

@@ -143,11 +143,11 @@ async function handleToolCall(name, args) {
   const port = getMcpPort();
 
   if (name === 'switcher_models') {
-    const { loadCatalogCache, refreshCatalog } = await import('./catalog.mjs');
+    const { syncLocalCatalog, refreshCatalog } = await import('./catalog.mjs');
     if (args?.refresh) {
       await refreshCatalog(STATE_DIR);
     }
-    const cache = loadCatalogCache(STATE_DIR);
+    const cache = syncLocalCatalog(STATE_DIR);
     const t = args?.tool?.toLowerCase();
     const res = {};
     if (!t || t === 'claude') res.claude = cache.claude;
