@@ -421,6 +421,7 @@ async function turnOn(profileName, cliTarget) {
   const savedBytes = fs.readFileSync(configPath);
   const st = applyLaunchState(planned, port);
   reportSettings(st.settings);
+  reportCodexDaemon(st);
   const bf = await requestBlindfoldSync(port);
   if (!bf.ok) {
     console.error(`[Error] ${bf.error}`);
@@ -526,7 +527,7 @@ async function turnOff(targetArg) {
       // The order is fixed by R7b: the CAS write, then this tool's env files, then the active-tools
       // update. If the CAS write cannot land, the env file and the interceptor stay untouched.
       const saved = casOff([target]);
-      emptyToolEnvFiles(target);
+      reportCodexDaemon(emptyToolEnvFiles(target));
       const bf = await syncOrStopBlindfold(port, config);
       if (!bf.ok) {
         console.error(`[Error] ${target} is switched back, but the interceptor is not in line: ${bf.error}`);
@@ -540,6 +541,7 @@ async function turnOff(targetArg) {
     saveConfig(config);
     const st = applyLaunchState(config, port);
     reportSettings(st.settings);
+    reportCodexDaemon(st);
     const bf = await syncOrStopBlindfold(port, config);
     if (!bf.ok) {
       console.error(`[Error] ${target} is switched back, but the blindfold interceptor is not in line: ${bf.error}`);
@@ -587,6 +589,12 @@ function auditActiveClis() {
 function reportSettings(result) {
   if (result?.removed?.length) console.log(`[settings.json] Removed switcher-written values: ${result.removed.join(', ')}`);
   if (result?.error) console.warn(`[settings.json] Not cleaned: ${result.error}`);
+  reportCodexDaemon(result);
+}
+
+// The interactive Codex TUI keeps using its shared daemon, so a new route needs that daemon restarted.
+function reportCodexDaemon(st) {
+  if (st?.codexDaemon?.restarted) console.log('[Codex] Restarted the codex app-server daemon: open Codex sessions reconnect with the new route.');
 }
 
 async function showStatus() {

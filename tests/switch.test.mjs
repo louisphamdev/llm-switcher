@@ -21,11 +21,12 @@ const freePort = () => new Promise(r => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); });
 });
 
-function workspace(t, port, profiles) {
+// A free interceptor port too: the default 3457 belongs to a switcher that may run on this machine.
+async function workspace(t, port, profiles) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cli-'));
   const cfgPath = path.join(dir, 'config.json');
   fs.writeFileSync(cfgPath, JSON.stringify({
-    port, activeProfiles: { anthropic: null, responses: null, 'openai-chat': null, vertex: null },
+    port, blindfold: { port: await freePort() }, activeProfiles: { anthropic: null, responses: null, 'openai-chat': null, vertex: null },
     profiles: profiles || { plain: { name: 'Plain', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } } }
   }, null, 2), { mode: 0o600 });
   // HOME too: `switch on` installs shims under the home directory, and a test must never rewrite the real ones.
@@ -57,7 +58,7 @@ function run(ws, args, { onLine, env = {} } = {}) {
 const readCfg = (ws) => JSON.parse(fs.readFileSync(ws.cfgPath, 'utf8'));
 
 test('profile names are printed without terminal control sequences', { skip: !POSIX && 'posix' }, async (t) => {
-  const ws = workspace(t, await freePort(), {
+  const ws = await workspace(t, await freePort(), {
     evil: { name: 'Evil\u001b[2J\u001b]0;pwned\u0007', mode: 'convert', inFormat: 'auto', baseURL: 'http://127.0.0.1:9/v1\u001b[31m', apiKey: 'k', defaultModels: { opus: 'o' } }
   });
   const r = await run(ws, ['status']);
@@ -69,7 +70,7 @@ test('profile names are printed without terminal control sequences', { skip: !PO
 test('-p is the global port option at any position, never the port command', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
   const other = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   const r = await run(ws, ['-p', String(other), 'status']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /=== LLM Switcher Status ===/);
@@ -79,7 +80,7 @@ test('-p is the global port option at any position, never the port command', { s
 });
 
 test('switch on keeps a change that another writer saved while it waited for the gateway', { skip: !POSIX && 'posix' }, async (t) => {
-  const ws = workspace(t, await freePort());
+  const ws = await workspace(t, await freePort());
   let edited = false;
   const r = await run(ws, ['on', 'plain'], {
     onLine: (line) => {
@@ -100,7 +101,7 @@ test('switch on keeps a change that another writer saved while it waited for the
 
 test('switch port refuses a port that another process holds and leaves the gateway where it was', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   assert.equal((await run(ws, ['on', 'plain'])).status, 0);
   const squatter = net.createServer(s => s.end('HTTP/1.1 200 OK\r\n\r\nnot the switcher'));
   const held = await new Promise(r => squatter.listen(0, '127.0.0.1', () => r(squatter.address().port)));
@@ -116,7 +117,7 @@ test('switch port refuses a port that another process holds and leaves the gatew
 test('switch port puts config.json and the gateway back when the new gateway does not come up', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
   const next = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   assert.equal((await run(ws, ['on', 'plain'])).status, 0);
   // The new port is free at the check and taken right after the old gateway stops.
   const squatter = net.createServer(s => s.destroy());
@@ -133,7 +134,7 @@ test('switch port puts config.json and the gateway back when the new gateway doe
 // A shim bakes in the state dir. A temp state dir, deleted later, would make every shim source a path that
 // another account can re-create (audit follow-up attacker-1).
 test('switch on installs no shims when the launch files live outside the checkout', { skip: !POSIX && 'posix' }, async (t) => {
-  const ws = workspace(t, await freePort());
+  const ws = await workspace(t, await freePort());
   const r = await run(ws, ['on', 'plain']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\[Shim\] Not installed automatically/);
@@ -148,7 +149,7 @@ const slowStart = (script, ms) => ({ NODE_OPTIONS: `--import=data:text/javascrip
 test('switch port stops the new gateway it started when it rolls back', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
   const next = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   assert.equal((await run(ws, ['on', 'plain'])).status, 0);
   const r = await run(ws, ['port', String(next)], { env: slowStart('proxy.mjs', 7000) });
   assert.notEqual(r.status, 0, r.stdout);
@@ -164,7 +165,7 @@ test('switch port stops the new gateway it started when it rolls back', { skip: 
 // header, and Codex prints false "metadata not found" and "high-risk cyber activity" warnings.
 test('switch codex and switch doctor warn when the Codex profile has no publicModels', { skip: !POSIX && 'posix' }, async (t) => {
   const base = { mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } };
-  const ws = workspace(t, await freePort(), { bare: { name: 'Bare', ...base }, named: { name: 'Named', ...base, publicModels: ['gpt-5.6-sol'] } });
+  const ws = await workspace(t, await freePort(), { bare: { name: 'Bare', ...base }, named: { name: 'Named', ...base, publicModels: ['gpt-5.6-sol'] } });
   const on = await run(ws, ['codex', 'bare']);
   assert.equal(on.status, 0, on.stderr);
   assert.match(on.stdout + on.stderr, /\[WARN\].*"bare".*publicModels/);
@@ -194,7 +195,7 @@ const failCASInject = {
 
 test('with migrationError set, running "switch <p>" asserts exit 1, stderr containing "Migration error", and no gateway answering on the port afterwards', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port, { plain: { inFormat: 'anthropic' } });
+  const ws = await workspace(t, port, { plain: { inFormat: 'anthropic' } });
   const r = await run(ws, ['plain'], { env: failCASInject });
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /Migration error/);
@@ -223,7 +224,7 @@ test('A5: save-profile refuses inFormat and legacy blindfold fields with 400', a
 
 test('R7: gateway process startup and reconcile refuse while getMigrationCollision is non-null', { skip: !POSIX && 'posix' }, async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   // Write a colliding config into workspace
   const collidingCfg = {
     port,
@@ -319,7 +320,7 @@ test('calling /api/switch, /api/toggle, /api/save-profile, /api/delete-profile w
 // probe from this workspace can never reach the interceptor of another install on the machine.
 async function collisionWs(t, extra = {}) {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   const bfPort = await freePort();
   fs.writeFileSync(ws.cfgPath, JSON.stringify({
     port,
@@ -456,7 +457,7 @@ test('R7: during collision, switch doctor exits 0', async (t) => {
 // accepts the request and then has nowhere to send it.
 test('A6: switch codex <claude-profile> exits non-zero and changes nothing', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port, {
+  const ws = await workspace(t, port, {
     claudeOnly: { name: 'C', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'x' } },
     codexOnly: { name: 'K', mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { main: 'y' } }
   });
@@ -497,7 +498,7 @@ const failCASThenClean = {
 
 test('with migrationError set, running "switch off <tool>" uses CAS setting activeProfiles.<tool>=null, empties env-<tool>.sh, syncs interceptor, and exits 0', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   fs.writeFileSync(ws.cfgPath, JSON.stringify({
     port,
     activeProfile: 'plain',
@@ -520,7 +521,7 @@ test('with migrationError set, running "switch off <tool>" uses CAS setting acti
 
 test('R1: bare switch off under migrationError writes both pointers null through the CAS writer; after 3 forced CAS failures it exits 1 and the gateway still answers', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   fs.writeFileSync(ws.cfgPath, JSON.stringify({
     port,
     activeProfile: 'plain',
@@ -545,7 +546,7 @@ test('R1: bare switch off under migrationError writes both pointers null through
 
 test('R7e: CLI mutating command exits non-zero with error on stderr when saveConfig refuses under getMigrationError', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port, { plain: { inFormat: 'anthropic' } });
+  const ws = await workspace(t, port, { plain: { inFormat: 'anthropic' } });
   const r = await run(ws, ['on', 'plain'], { env: failCASInject });
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /Migration error/);
@@ -559,7 +560,7 @@ test('R7e: CLI mutating command exits non-zero with error on stderr when saveCon
 test('R1: port-change path exits 1 before stopProxy is called under migrationError', async (t) => {
   const port = await freePort();
   const other = await freePort();
-  const ws = workspace(t, port, { plain: { inFormat: 'anthropic' } });
+  const ws = await workspace(t, port, { plain: { inFormat: 'anthropic' } });
   await startGateway(t, ws.dir, ws.cfgPath, port, failCASInject);
 
   const r = await run(ws, ['port', String(other)], { env: failCASInject });
@@ -576,7 +577,7 @@ test('R1: port-change path exits 1 before stopProxy is called under migrationErr
 // parsing while it waited for the gateway.
 test('R7e: parse guard blocks writes and exits non-zero when lastLoadError is set', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port);
+  const ws = await workspace(t, port);
   fs.writeFileSync(ws.cfgPath, JSON.stringify({
     port,
     blindfold: { port: await freePort() },
@@ -604,7 +605,7 @@ test('R7e: parse guard blocks writes and exits non-zero when lastLoadError is se
 
 test('R7e: saves work again after the file is fixed', async (t) => {
   const port = await freePort();
-  const ws = workspace(t, port, { plain: { inFormat: 'anthropic' } });
+  const ws = await workspace(t, port, { plain: { inFormat: 'anthropic' } });
   fs.writeFileSync(ws.cfgPath, '{"port": ');
   const broken = await run(ws, ['plain']);
   assert.notEqual(broken.status, 0, broken.stdout);

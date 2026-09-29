@@ -1441,26 +1441,78 @@ function writeToolFiles(pairs, shPath, cmdPath) {
 // launcher files are never opened (A13: emptied, never deleted).
 export function emptyToolEnvFiles(tool) {
   const codex = tool === 'codex';
-  withLaunchLock(() => {
+  const codexRouteChanged = withLaunchLock(() => {
+    const before = codex ? readOrEmpty(paths.envCodexSh) : '';
     writeAtomic(codex ? paths.envCodexCmd : paths.envClaudeCmd, '');
     writeAtomic(codex ? paths.envCodexSh : paths.envClaudeSh, '');
+    return before !== '';
   });
+  return { codexRouteChanged, codexDaemon: codexRouteChanged ? restartCodexDaemon([]) : undefined };
 }
 
 // Write the per-tool env files from activeProfiles. settings.json is never touched here: it
 // belongs to the coding tool (R1), and model-catalog.json is no longer written (R9).
 export function applyLaunchState(cfg, port, opts = {}) {
-  return withLaunchLock(() => writeLaunchState(cfg, port, opts));
+  const st = withLaunchLock(() => writeLaunchState(cfg, port, opts));
+  if (st.codexRouteChanged) st.codexDaemon = restartCodexDaemon(st.envCodex);
+  return st;
+}
+
+const LOOPBACK_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/i;
+
+/**
+ * The interactive Codex TUI talks to a shared `codex app-server` daemon, and the daemon keeps the
+ * environment it started with. A new route reaches it only through a restart. Only the launch files
+ * that the installed codex shim reads can route that daemon, so any other state dir (tests) is a no-op.
+ */
+export function restartCodexDaemon(pairs, {
+  home = os.homedir(),
+  codexHome = process.env.CODEX_HOME || path.join(home, '.codex'),
+  stateDir = STATE_DIR,
+  baseEnv = process.env,
+  ca = paths.blindfoldCA,
+  spawnFn = spawn
+} = {}) {
+  let shim = '';
+  try { shim = fs.readFileSync(path.join(home, '.llm-switcher', 'bin', 'codex'), 'utf8'); } catch {}
+  if (!shim.includes(`SWITCHER_DIR="${stateDir}"`)) return { restarted: false, reason: 'the codex shim does not read this state dir' };
+  const bin = path.join(codexHome, 'packages', 'app-server-daemon', 'current', 'bin', 'codex');
+  // The socket is a link to the running daemon; it no longer resolves once the daemon stopped.
+  if (!fs.existsSync(bin) || !fs.existsSync(path.join(codexHome, 'app-server-control', 'app-server-control.sock'))) {
+    return { restarted: false, reason: 'no Codex daemon runs' };
+  }
+
+  // Remove only the values this switcher writes (R8); a proxy or CA the user set stays.
+  const env = { ...baseEnv };
+  for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) if (LOOPBACK_URL.test(env[k] || '')) delete env[k];
+  for (const k of ['NO_PROXY', 'no_proxy']) if (env[k] === '127.0.0.1,localhost') delete env[k];
+  if (env.CODEX_CA_CERTIFICATE === ca) delete env.CODEX_CA_CERTIFICATE;
+  for (const [k, v] of pairs) env[k] = v;
+
+  try {
+    const child = spawnFn(bin, ['app-server', 'daemon', 'restart'], { env, stdio: 'ignore', detached: true });
+    child.on?.('error', () => {});
+    child.unref?.();
+    return { restarted: true };
+  } catch (err) {
+    return { restarted: false, reason: err.message };
+  }
+}
+
+function readOrEmpty(file) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
 }
 
 function writeLaunchState(cfg, port) {
   const st = computeLaunchState(cfg, port);
+  const codexBefore = readOrEmpty(paths.envCodexSh);
 
   // Env files first, the flag last: a flag that says "active" while a file is missing or stale
   // makes the launcher route with the wrong variables. A failed write leaves the flag as it was.
   try {
     writeToolFiles(st.envClaude, paths.envClaudeSh, paths.envClaudeCmd);
     writeToolFiles(st.envCodex, paths.envCodexSh, paths.envCodexCmd);
+    st.codexRouteChanged = readOrEmpty(paths.envCodexSh) !== codexBefore;
     // Recorded on switch on so a shell opened while the gateway ran can still recognize its own
     // stale loopback URL later, after the port changed (R8).
     if (st.active) writeAtomic(paths.gatewayPort, `${port}\n`);
@@ -1476,7 +1528,8 @@ function writeLaunchState(cfg, port) {
 }
 
 export function clearLaunchState(port) {
-  withLaunchLock(() => {
+  const codexRouteChanged = withLaunchLock(() => {
+    const codexBefore = readOrEmpty(paths.envCodexSh);
     writeOrRemove(paths.activeFlag, null);
     // Stubs rather than deletions, and the tool files emptied rather than removed (R8, A13):
     // `switch off claude` must leave an empty claude file behind, and bare `switch off` must
@@ -1486,9 +1539,10 @@ export function clearLaunchState(port) {
     for (const f of [paths.envClaudeCmd, paths.envClaudeSh, paths.envCodexCmd, paths.envCodexSh]) {
       writeAtomic(f, '');
     }
+    return codexBefore !== '';
   });
   // settings.json belongs to the coding tool: the switcher neither reads nor writes it (R1).
-  return { changed: false, removed: [] };
+  return { changed: false, removed: [], codexRouteChanged, codexDaemon: codexRouteChanged ? restartCodexDaemon([]) : undefined };
 }
 
 export function readLaunchFlags() {
