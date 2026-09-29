@@ -177,6 +177,14 @@
       letter-spacing: 0.02em;
     }
 
+    .update-notice {
+      display: grid; gap: 0.4rem; margin: 0 0.25rem 0.75rem; padding: 0.6rem 0.65rem;
+      border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 0.75rem; color: var(--fg);
+    }
+    .update-notice[hidden] { display: none; }
+    .update-notice b { color: var(--warn); font-weight: 600; }
+    .update-notice code { font-family: var(--font-mono); font-size: 0.72rem; overflow-wrap: anywhere; color: var(--muted); }
+
     aside nav { display: grid; gap: 0.25rem; }
     aside a.nav-link {
       display: flex;
@@ -765,8 +773,15 @@
       <div>
         <b>LLM Switcher</b>
         <small>Edge Gateway · :<span class="gateway-port">3456</span></small>
+        <small id="app-version"></small>
       </div>
     </a>
+
+    <div id="update-notice" class="update-notice" role="status" hidden>
+      <b>Update available: v<span id="update-latest"></span></b>
+      <code id="update-command"></code>
+      <button type="button" class="btn btn-outline btn-sm" onclick="copyUpdateCommand()">Copy command</button>
+    </div>
 
     <nav id="sideNav">
       <a class="nav-link" href="#/routes" data-nav="routes">
@@ -2375,6 +2390,23 @@
     }
 
     // Initial Bootstrap
+    // The version check never blocks the dashboard: without an answer there is no notice.
+    async function loadVersion() {
+      try {
+        const v = await (await api('/api/version')).json();
+        document.getElementById('app-version').textContent = 'v' + v.current;
+        if (!v.updateAvailable) return;
+        document.getElementById('update-latest').textContent = v.latest;
+        document.getElementById('update-command').textContent = v.updateCommand;
+        document.getElementById('update-notice').hidden = false;
+      } catch {}
+    }
+
+    function copyUpdateCommand() {
+      const cmd = document.getElementById('update-command').textContent;
+      navigator.clipboard.writeText(cmd).then(() => showToast('Copied: ' + cmd), () => showToast('Copy failed. Select the command and copy it by hand.', true));
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       // Setup initial theme buttons state
       const currentTheme = document.documentElement.dataset.theme || 'dark';
@@ -2389,6 +2421,7 @@
 
       // Load initial state from edge gateway
       loadStatus();
+      loadVersion();
     });
   </script>
 </body>

@@ -24,6 +24,7 @@ import {
   contractLabSettings, STATE_DIR
 } from './state.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
+import { checkForUpdate } from './version.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1295,6 +1296,10 @@ async function routeApi(req, res, method, pathname) {
   // GET /api/logs (Live Request/Response Inspector)
   if (method === 'GET' && pathname === '/api/logs') {
     return sendJson(res, 200, { logs: requestLogs.slice().reverse() });
+  }
+
+  if (method === 'GET' && pathname === '/api/version') {
+    return sendJson(res, 200, await checkForUpdate({ stateDir: STATE_DIR }));
   }
 
   // GET /api/catalog (Dynamic Model Discovery)

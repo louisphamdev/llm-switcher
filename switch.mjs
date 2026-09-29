@@ -26,6 +26,12 @@ const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
 const proxyLogPath = paths.proxyLog;
 const userProfile = os.homedir();
 
+// The version needs no config.json: it must also answer before the first setup.
+if (['version', '--version', '-v'].includes(String(process.argv[2] || '').toLowerCase())) {
+  await showVersion();
+  process.exit(0);
+}
+
 const config = loadConfig();
 if (!config) {
   const err = getConfigLoadError();
@@ -1039,6 +1045,15 @@ async function runContractCheck() {
   }
 }
 
+async function showVersion() {
+  const { checkForUpdate } = await import('./version.mjs');
+  const v = await checkForUpdate({ stateDir: STATE_DIR });
+  console.log(`llm-switcher ${v.current}`);
+  if (v.updateAvailable) console.log(`A new version is available: ${v.latest}. Update with: ${v.updateCommand}`);
+  else if (!v.latest) console.log('Could not check the npm registry for a newer version.');
+  else console.log('This is the latest version.');
+}
+
 async function showModels(target) {
   const { syncLocalCatalog, refreshCatalog } = await import('./catalog.mjs');
   if (optionValue('--refresh') || process.argv.includes('--refresh')) {
@@ -1108,6 +1123,7 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('Usage:');
   console.log('  switch ui                      # Open Web UI dashboard');
   console.log('  switch status                  # Show multi-CLI active status');
+  console.log('  switch version                 # Show the version and check for a newer one');
   console.log('  switch doctor                  # Audit environment, settings & routing');
   console.log('  switch on [profile]            # Start gateway & activate profile for all compatible targets');
   console.log('  switch <profile>               # Activate profile for all compatible targets');
