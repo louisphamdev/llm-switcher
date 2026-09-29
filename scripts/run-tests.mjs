@@ -15,8 +15,7 @@ const files = [];
   }
 })(path.join(root, 'tests'));
 
-// A test that switches Codex on must never restart the Codex app-server daemon of this machine.
-// A version check must never reach the real npm registry either.
-const env = { ...process.env, LLM_SWITCHER_CODEX_BIN: path.join(root, 'tests', 'no-codex-here'), LLM_SWITCHER_REGISTRY_URL: 'http://127.0.0.1:9/' };
+// A version check must never reach the real npm registry.
+const env = { ...process.env, LLM_SWITCHER_REGISTRY_URL: 'http://127.0.0.1:9/' };
 const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: root, stdio: 'inherit', env });
 process.exit(r.status ?? 1);

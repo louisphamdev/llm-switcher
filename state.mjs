@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import http from 'node:http';
-import { spawn, execFile, execFileSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1346,28 +1346,6 @@ export function computeLaunchState(cfg, port) {
   if (claude) state.envClaude = proxyPairs();
   if (codex) state.envCodex = [...proxyPairs(), ['CODEX_CA_CERTIFICATE', paths.blindfoldCA]];
   return state;
-}
-
-/**
- * The Codex app-server daemon keeps the environment it started with, so a Codex profile that is
- * switched on reaches it only after a restart. Returns null when Codex was not switched on, else
- * { ok } or { ok: false, error }; a failure never blocks the switch (Codex can be absent or older).
- */
-export function restartCodexDaemonOnSwitch(before, after, port) {
-  const next = getActiveMap(after).codex;
-  if (!next || (before && getActiveMap(before).codex === next)) return null;
-  const env = { ...process.env, ...Object.fromEntries(computeLaunchState(after, port).envCodex) };
-  const args = ['app-server', 'daemon', 'restart'];
-  // LLM_SWITCHER_CODEX_BIN lets the test runner keep every test away from the real daemon.
-  const bin = process.env.LLM_SWITCHER_CODEX_BIN || 'codex';
-  return new Promise((resolve) => {
-    // npm installs Codex as codex.cmd on Windows, which only a shell resolves. The arguments are fixed.
-    execFile(bin, args, { env, timeout: 30000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout, stderr) => {
-      if (!err) return resolve({ ok: true });
-      const why = String(stderr || '').trim().split('\n').pop() || err.message;
-      resolve({ ok: false, error: `codex ${args.join(' ')} failed: ${why}` });
-    });
-  });
 }
 
 // tmp + rename: a launcher never sources a half-written env file.
