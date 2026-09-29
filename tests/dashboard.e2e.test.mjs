@@ -55,10 +55,6 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   const cardNumber = (key) => Object.keys(fx.config().profiles).indexOf(key) + 1;
   const modalOpen = () => page.visible('#profile-modal-overlay .modal');
   const profiles = () => fx.config().profiles;
-  // The form writes `thinkingMode: "auto"` (the default) and an empty `model1M` on every save. Both
-  // mean what an absent key means, so they are not a change of the profile.
-  const meaning = (p) => { const { model1M, thinkingMode, ...rest } = p; return { ...rest, ...(model1M && Object.keys(model1M).length ? { model1M } : {}), ...(thinkingMode && thinkingMode !== 'auto' ? { thinkingMode } : {}) }; };
-
   // What the page shows for the routes, read from the screen.
   const readScreen = () => page.evaluate(`(() => {
     const text = id => document.getElementById(id)?.textContent.trim();
@@ -296,12 +292,12 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   describe('editing a profile', () => {
     for (const key of ['intact-claude', 'intact-codex', 'shared']) {
       it(`opening "${key}" and saving with no change leaves it as it was`, async () => {
-        const before = meaning(profiles()[key]);
+        const before = profiles()[key];
         await act(() => editProfile(key));
         assert.equal(await modalOpen(), true);
         await act(() => saveForm());
         assert.match(await toast(), /saved successfully/, 'the save was refused');
-        assert.deepEqual(meaning(profiles()[key]), before, 'a save with no edit changed the profile');
+        assert.deepEqual(profiles()[key], before, 'a save with no edit changed the profile');
         await expectScreenMatchesDisk('save with no change');
       });
     }
@@ -323,7 +319,7 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       await act(() => saveForm());
       const after = profiles()['intact-claude'];
       assert.equal(after.name, 'Renamed Claude');
-      assert.deepEqual(meaning({ ...after, name: before.name }), meaning(before), 'a rename changed something else');
+      assert.deepEqual({ ...after, name: before.name }, before, 'a rename changed something else');
       await expectScreenMatchesDisk('rename');
       assert.match(await page.text(`#profiles-grid .pcard:nth-child(${cardNumber('intact-claude')}) .nm`), /Renamed Claude/);
     });
@@ -362,6 +358,32 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
         assert.equal(await page.value('#p-name'), 'Shared Router', 'the form keeps text that was never saved');
       });
     }
+
+    it('asks before it throws away typed text, and says nothing when nothing was typed', async () => {
+      await act(() => editProfile('shared'));
+      await act(() => page.clickText('#profile-form .mf button', 'Cancel'));
+      assert.deepEqual(page.dialogs, [], 'a dialog asked about changes that were never made');
+      assert.equal(await modalOpen(), false);
+
+      page.dialogPolicy = 'dismiss';
+      await act(() => editProfile('shared'));
+      await fillForm({ name: 'Typed but not saved' });
+      await act(() => page.clickText('#profile-form .mf button', 'Cancel'));
+      assert.match(page.dialogs.at(-1)?.message ?? '', /Discard unsaved changes/, 'no question before the typed text was lost');
+      assert.equal(await modalOpen(), true, 'the dialog closed although the person said no');
+      assert.equal(await page.value('#p-name'), 'Typed but not saved');
+
+      page.dialogPolicy = 'accept';
+      await act(() => page.clickText('#profile-form .mf button', 'Cancel'));
+      assert.equal(await modalOpen(), false);
+    });
+
+    it('keeps typed text when the page reads the state again', async () => {
+      await act(() => editProfile('shared'));
+      await fillForm({ name: 'Half typed' });
+      await act(() => page.evaluate('loadStatus()'));     // what a 409 does behind the dialog
+      assert.equal(await page.value('#p-name'), 'Half typed', 'a refresh wiped the text the person was typing');
+    });
 
     it('does not save when Enter is pressed in a field', async () => {
       const before = JSON.stringify(fx.config());
@@ -443,6 +465,25 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       await act(() => page.clickText('#models-status button', 'Retry'));
       await page.waitFor(`document.querySelector('#models-status')?.dataset.state === 'ready'`, 'the model list after Retry');
       assert.equal(await modelsStatus(), '3 models');
+    });
+
+    it('clears a model slot and a 1M box that the person emptied', async () => {
+      const cfg = fx.config();
+      cfg.profiles['intact-claude'].model1M = { opus: true };
+      fx.writeConfig(cfg);
+      await open('#/routes');
+      await act(() => editProfile('intact-claude'));
+      await act(() => tab('models'));
+      await page.waitFor(`document.querySelector('#models-status')?.dataset.state === 'ready'`, 'the model list');
+      await page.type('#p-sonnet', '');
+      await page.key('Escape');    // the list of suggestions covers the boxes below until it closes
+      await page.click('label:has(#p-opus-1m)');
+      assert.equal(await page.evaluate(`document.getElementById('p-opus-1m').checked`), false);
+      await act(() => saveForm());
+      const saved = profiles()['intact-claude'];
+      assert.equal(saved.defaultModels.sonnet, undefined, 'the emptied slot came back');
+      assert.equal(saved.defaultModels.opus, 'up-opus');
+      assert.ok(!saved.model1M?.opus, 'the unticked 1M box came back');
     });
 
     it('shows the slots of the tool that the profile serves', async () => {

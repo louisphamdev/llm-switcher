@@ -1086,17 +1086,17 @@
   </div>
 
   <!-- Profile Modal Editor -->
-  <div id="profile-modal-overlay" class="overlay" style="display:none;" onmousedown="overlayPressed = event.target === this" onclick="if (overlayPressed && event.target === this) closeProfileModal()">
+  <div id="profile-modal-overlay" class="overlay" style="display:none;" onmousedown="overlayPressed = event.target === this" onclick="if (overlayPressed && event.target === this) requestCloseProfileModal()">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="form-title">
       <div class="mh">
         <div>
           <strong id="form-title">Edit Provider Profile</strong>
           <span id="active-tag" style="font-size:0.75rem; color:var(--ok); margin-left:0.5rem; font-weight:600;"></span>
         </div>
-        <button class="icon" type="button" onclick="closeProfileModal()" aria-label="Close dialog">✕</button>
+        <button class="icon" type="button" onclick="requestCloseProfileModal()" aria-label="Close dialog">✕</button>
       </div>
 
-      <form id="profile-form" onsubmit="saveProfile(event)" onkeydown="blockImplicitSubmit(event)" style="display:flex; flex-direction:column; overflow:hidden;">
+      <form id="profile-form" onsubmit="saveProfile(event)" onkeydown="blockImplicitSubmit(event)" oninput="formDirty = true" onchange="formDirty = true" style="display:flex; flex-direction:column; overflow:hidden;">
         <!-- Modal Inset Tabs -->
         <div style="padding:0.85rem 1.25rem 0.5rem; background:var(--card2);">
           <div class="tabs">
@@ -1206,7 +1206,7 @@
           </div>
           <div style="display:flex; gap:0.6rem;">
             <button type="button" id="btn-test-conn" class="btn btn-outline" onclick="testConnection()">Test Connection</button>
-            <button type="button" class="btn btn-outline" onclick="closeProfileModal()">Cancel</button>
+            <button type="button" class="btn btn-outline" onclick="requestCloseProfileModal()">Cancel</button>
             <button type="submit" class="btn btn-primary">Save Profile</button>
           </div>
         </div>
@@ -1334,6 +1334,14 @@
     function closeProfileModal() {
       const modal = document.getElementById('profile-modal-overlay');
       if (modal) modal.style.display = 'none';
+      formDirty = false;
+    }
+
+    // The close button, Cancel, the dark area and Escape. A save or a delete calls closeProfileModal
+    // directly, because by then nothing is left to lose.
+    function requestCloseProfileModal() {
+      if (formDirty && !confirm('Discard unsaved changes?')) return;
+      closeProfileModal();
     }
 
     // A text selection that starts in a field and ends on the overlay also clicks the overlay.
@@ -1349,7 +1357,7 @@
       if (e.key === 'Escape' && !e.target.closest?.('input, select, textarea')) {
         const modal = document.getElementById('profile-modal-overlay');
         if (modal && modal.style.display !== 'none') {
-          closeProfileModal();
+          requestCloseProfileModal();
         }
       }
     });
@@ -1889,6 +1897,7 @@
       const p = state.config?.profiles?.[key];
       if (!p) return;
       formLoadedKey = key;
+      formDirty = false;
       currentProfileBuffer = JSON.parse(JSON.stringify(p));
 
       document.getElementById('form-title').textContent = 'Edit Profile: ' + p.name;
@@ -1916,6 +1925,7 @@
 
     function initNewProfile() {
       creatingNew = true;
+      formDirty = false;
       currentlyEditingKey = '';
       formLoadedKey = null;
       currentProfileBuffer = {
@@ -2007,6 +2017,7 @@
       document.getElementById('p-mode').value = t.mode;
       document.getElementById('p-thinking-mode').value = t.thinkingMode;
       currentProfileBuffer = { ...currentProfileBuffer, ...t };
+      formDirty = true;
       renderModelSlots(t.tool || 'auto', t);
       showToast('Template "' + t.name + '" applied');
     }
@@ -2053,10 +2064,15 @@
         tool: document.getElementById('p-tool').value === 'auto' ? null : document.getElementById('p-tool').value,
         outFormat: document.getElementById('p-outformat').value,
         mode: document.getElementById('p-mode').value,
-        thinkingMode: document.getElementById('p-thinking-mode').value,
-        defaultModels: { ...(existing.defaultModels || {}), ...(currentProfileBuffer?.defaultModels || {}) },
-        model1M: { ...(existing.model1M || {}), ...(currentProfileBuffer?.model1M || {}) }
+        // The buffer already holds what the profile had, minus what the person emptied.
+        defaultModels: { ...(currentProfileBuffer?.defaultModels || {}) }
       };
+      // A save with no edit must leave the profile as it was: write a default only where the profile
+      // already had the key.
+      const model1M = { ...(currentProfileBuffer?.model1M || {}) };
+      if (Object.keys(model1M).length || existing.model1M) profilePayload.model1M = model1M;
+      const thinkingMode = document.getElementById('p-thinking-mode').value;
+      if (thinkingMode !== 'auto' || existing.thinkingMode) profilePayload.thinkingMode = thinkingMode;
 
       if (keyVal === MASKED_KEY) {
         profilePayload.apiKey = existing.apiKey || '';
@@ -2361,6 +2377,7 @@
       const model = combo?.matches?.[Number(li.dataset.i)];
       if (!model) return;
       combo.querySelector('input').value = model;
+      formDirty = true;
       closeCombo(combo);
       update1mWarnings();
     }

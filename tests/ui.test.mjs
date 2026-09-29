@@ -41,7 +41,7 @@ test('Enter in a profile field does not submit the form', () => {
 
 test('the overlay closes the dialog only for a press that started on the overlay', () => {
   assert.match(html, /id="profile-modal-overlay"[^>]*onmousedown="overlayPressed = event\.target === this"/);
-  assert.match(html, /id="profile-modal-overlay"[^>]*onclick="if \(overlayPressed && event\.target === this\) closeProfileModal\(\)"/);
+  assert.match(html, /id="profile-modal-overlay"[^>]*onclick="if \(overlayPressed && event\.target === this\) requestCloseProfileModal\(\)"/);
 });
 
 test('Escape inside a dialog field is left to the field', () => {
