@@ -122,7 +122,8 @@ const DECODERS = {
   'x-gzip': zlib.gunzipSync,
   br: zlib.brotliDecompressSync,
   deflate: zlib.inflateSync,
-  zstd: zlib.zstdDecompressSync
+  // zstd arrived in Node 22.15; older runtimes report the body as undecodable instead of noise.
+  zstd: zlib.zstdDecompressSync || (() => { throw new Error('zstd is not supported by this Node.js version'); })
 };
 
 export function decodeBody(buffer, contentEncoding) {

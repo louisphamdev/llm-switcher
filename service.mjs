@@ -5,7 +5,7 @@ import path from 'node:path';
 
 // A service does not inherit the installing shell. Without these it would read another config.json
 // or clean another settings.json than the shell that installed it.
-const SERVICE_ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'LLM_SWITCHER_CONFIG', 'LLM_SWITCHER_STATE_DIR', 'LLM_SWITCHER_BLINDFOLD_CERTS'];
+const SERVICE_ENV_KEYS = ['LLM_SWITCHER_HOME', 'CLAUDE_CONFIG_DIR', 'LLM_SWITCHER_CONFIG', 'LLM_SWITCHER_STATE_DIR', 'LLM_SWITCHER_BLINDFOLD_CERTS'];
 
 export function serviceEnv(env = process.env) {
   return SERVICE_ENV_KEYS.filter(k => env[k]).map(k => [k, env[k]]);

@@ -16,6 +16,8 @@ const HAS_XMLLINT = (() => { try { execFileSync('xmllint', ['--version'], { stdi
 test('serviceEnv passes only the variables that change where the gateway reads and writes', () => {
   const env = serviceEnv({ CLAUDE_CONFIG_DIR: '/c', LLM_SWITCHER_CONFIG: '/cfg.json', LLM_SWITCHER_BLINDFOLD_CERTS: '', HOME: '/h', PATH: '/bin' });
   assert.deepEqual(env, [['CLAUDE_CONFIG_DIR', '/c'], ['LLM_SWITCHER_CONFIG', '/cfg.json']]);
+  // The data folder override must reach the service too, or it reads another config.json.
+  assert.deepEqual(serviceEnv({ LLM_SWITCHER_HOME: '/data' }), [['LLM_SWITCHER_HOME', '/data']]);
 });
 
 test('systemd unit quotes the command and carries the environment', () => {

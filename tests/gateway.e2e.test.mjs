@@ -470,7 +470,7 @@ test('save-profile rejects a model name that could act as a command', async () =
   assert.equal(ok.status, 200);
 });
 
-test('Codex WS transport: upstream 429 becomes response.failed with rate_limit_exceeded', async () => {  const ws = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/responses`);
+test('Codex WS transport: upstream 429 becomes response.failed with rate_limit_exceeded', { skip: typeof WebSocket === 'undefined' && 'global WebSocket needs Node 22+' }, async () => {  const ws = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/responses`);
   await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('ws open timeout')), 5000);
     ws.addEventListener('open', () => { clearTimeout(t); resolve(); }, { once: true });

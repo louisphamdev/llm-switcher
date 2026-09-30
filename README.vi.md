@@ -171,7 +171,7 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
 npm install -g llm-switcher
 
 # Chép file cấu hình mẫu vào thư mục dữ liệu.
-mkdir -p ~/.llm-switcher
+mkdir -p -m 700 ~/.llm-switcher
 cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
 ```
 
@@ -429,7 +429,9 @@ cụ: `tool` là `"claude"` hoặc `"codex"` (hoặc `null` khi profile đang t�
 các route đầu vào mà chúng đại diện đã bị gỡ.
 
 
-Service không chạy trong shell của bạn. Vì vậy `switch service install` chép `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
+Service không chạy trong shell của bạn. Vì vậy `switch service install` chép `LLM_SWITCHER_HOME`, `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
+
+Trên Linux, unit là service systemd *của user*: nó khởi động khi bạn đăng nhập. Muốn nó chạy ngay khi máy boot mà không cần đăng nhập (ví dụ server truy cập qua SSH), chạy một lần `loginctl enable-linger $USER`. Unit ghi đường dẫn tuyệt đối của `node` hiện tại; nếu bạn quản lý Node bằng nvm và gỡ phiên bản đó, hãy chạy lại `switch service install`.
 ### Phiên mở lại (`--resume`) và cơ chế shim — quan trọng
 
 `switch on` ghi `env-claude.*` và `env-codex.*`, và **không ghi gì** vào

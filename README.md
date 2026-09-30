@@ -171,7 +171,7 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
 npm install -g llm-switcher
 
 # Copy the example configuration into your data folder.
-mkdir -p ~/.llm-switcher
+mkdir -p -m 700 ~/.llm-switcher
 cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
 ```
 
@@ -431,7 +431,9 @@ either `"claude"` or `"codex"` (or `null` for a profile that is switched off), s
 `switch codex` can never point at the same profile by accident. There is no `openai` or `vertex`
 target any more — the input routes those names stood for are gone.
 
-The service runs without your shell. `switch service install` therefore copies `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
+The service runs without your shell. `switch service install` therefore copies `LLM_SWITCHER_HOME`, `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
+
+On Linux the unit is a systemd *user* service: it starts when you log in. To start it at boot without a login (a server reached over SSH), run `loginctl enable-linger $USER` once. The unit records the absolute path of the current `node`; if you manage Node with nvm and remove that version, run `switch service install` again.
 
 ### Resumed sessions & the shim (important)
 

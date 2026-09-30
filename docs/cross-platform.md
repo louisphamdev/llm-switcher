@@ -141,5 +141,7 @@ Run the test suite:
 npm test
 ```
 
-On Linux and macOS every test runs. On Windows four shim tests skip. A failure on any
+On Linux and macOS every test runs. On Windows four shim tests skip. On Node older than 22,
+the three WebSocket client tests skip (no global `WebSocket`), and the zstd assertion is
+skipped before Node 22.15. A failure on any
 platform is a real defect; report it with the platform name and the Node version.

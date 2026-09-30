@@ -137,7 +137,7 @@ test('a compressed response body is decoded for the capture', () => {
   assert.equal(decodeBody(zlib.gzipSync(Buffer.from(sse)), 'GZIP'), sse, 'must be case-insensitive');
   assert.equal(decodeBody(zlib.brotliCompressSync(Buffer.from(sse)), 'br'), sse);
   assert.equal(decodeBody(zlib.deflateSync(Buffer.from(sse)), 'deflate'), sse);
-  assert.equal(decodeBody(zlib.zstdCompressSync(Buffer.from(sse)), 'zstd'), sse);
+  if (typeof zlib.zstdCompressSync === 'function') assert.equal(decodeBody(zlib.zstdCompressSync(Buffer.from(sse)), 'zstd'), sse);
 });
 
 test('an unencoded body is passed through untouched', () => {

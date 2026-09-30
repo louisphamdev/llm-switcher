@@ -324,7 +324,7 @@ test('Real User Sim 3: Gemini / Vertex healing of empty & complex tool schemas',
   await post('/api/switch', { tool: 'claude', profile: 'chat' });
 });
 
-test('Real User Sim 4: Codex WebSocket turns (warmup -> prompt -> apply_patch -> continue)', async () => {
+test('Real User Sim 4: Codex WebSocket turns (warmup -> prompt -> apply_patch -> continue)', { skip: typeof WebSocket === 'undefined' && 'global WebSocket needs Node 22+' }, async () => {
   const ws = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/responses`);
   const messages = [];
 
@@ -387,7 +387,7 @@ test('Real User Sim 4: Codex WebSocket turns (warmup -> prompt -> apply_patch ->
   ws.close();
 });
 
-test('Real User Sim 5: High-concurrency dual-tool execution (Claude streaming + Codex WS simultaneously)', async () => {
+test('Real User Sim 5: High-concurrency dual-tool execution (Claude streaming + Codex WS simultaneously)', { skip: typeof WebSocket === 'undefined' && 'global WebSocket needs Node 22+' }, async () => {
   const ws = new WebSocket(`ws://127.0.0.1:${proxyPort}/v1/responses`);
   await new Promise(r => { ws.onopen = r; });
   const wsMessages = [];
