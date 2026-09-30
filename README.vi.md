@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Cổng ngõ biên (Edge Gateway) chuyển đổi đa giao thức LLM siêu nhẹ, Zero-Dependency</b><br>
-  Cầu nối hai chiều giữa <b>Claude Code</b>, <b>Codex</b>, OpenAI SDKs, Gemini/Vertex SDKs với mọi nhà cung cấp LLM.<br>
+  Cầu nối hai chiều giữa <b>Claude Code</b> và <b>Codex</b> với mọi nhà cung cấp LLM: OpenAI-compatible, Anthropic hoặc Vertex.<br>
   Chuyển đổi giao thức qua IR, cửa sổ context theo model chính thức, trích xuất thinking blocks và tự chữa lành đồ thị tin nhắn trước khi ra Internet.
 </p>
 
@@ -235,6 +235,10 @@ bạn, nên `switch off` là off thật sự.
 Trong thực tế bạn không bao giờ tự gọi các file này. `switch shim install` đặt `~/.llm-switcher/bin`
 vào `PATH`, và mọi lệnh `claude` hay `codex` — kể cả `claude --resume` trong một terminal hoàn toàn
 mới — đều chạy shim, vốn chỉ tiêm biến vào đúng tiến trình đó.
+
+`switch on` tự cài shim và in ra những gì đã cài, nên lệnh trên chỉ cần khi `LLM_SWITCHER_STATE_DIR`
+được đặt. Shim mang theo state directory, và trong trưồng hợp đó `switch on` để việc cài cho bạn,
+vì một state directory tạm thời sẽ biến mất trước shim.
 
 ---
 
@@ -625,7 +629,8 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 |---|---|
 | `LLM_SWITCHER_HOME=/path` | Dùng thư mục này làm thư mục dữ liệu (config, admin token, file launcher, log) cho cả bản npm lẫn bản checkout. |
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài thư mục dữ liệu (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
-| `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe (ưu tiên: flag > env > `config.port`). |
+| `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe của gateway (ưu tiên: flag > env > `config.port`). |
+| `LLM_SWITCHER_BLINDFOLD_PORT` | Ghi đè cổng lắng nghe của interceptor (ưu tiên: env > `config.blindfold.port` > 3457). Đảm bảo đặt cùng `LLM_SWITCHER_PORT` khi chạy instance thứ hai. |
 | Header `x-llm-profile: <key>` (tên khác `x-profile`) hoặc `?profile=<key>` | Định tuyến riêng 1 request qua profile chỉ định. Key không tồn tại trả HTTP 400 thay vì âm thầm dùng profile khác. |
 | `profile.thinkingMode` | `auto` (mặc định, cho gateway như intact hoặc 9Router): phục hồi thinking bị xoá, inject hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
 | `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |

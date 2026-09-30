@@ -37,6 +37,14 @@ set through the page's own JavaScript. Each item below has a browser test that r
 - **A placeholder profile activated without a warning:** With the unedited `config.example.json`, `switch on` printed `[SUCCESS]` and routed to `https://YOUR-ROUTER-HOST/v1`. Only `switch doctor` gave a warning. Activation now uses the same `hasPlaceholder` test as `doctor`, and it names the file to edit. Activation only warns and does not refuse, so a scripted setup still works.
 - **Tests:** New tests cover the service environment keys, `hasPlaceholder`, and a migrated configuration that does not need migration again after a switch. One test pins the same invariant on `deleteProfile`, the third place that can write the legacy pointer.
 
+### Ports, shells, and what the package serves
+
+- **A second instance had no port for the interceptor:** `--port` and `LLM_SWITCHER_PORT` move the gateway through `resolvePort`, but `computeLaunchState` read the interceptor port from `config.json` alone. `LLM_SWITCHER_BLINDFOLD_PORT` reached a hand-started `blindfold.mjs` and nothing else. A gateway sent to 3457 also landed on the port of the interceptor. The interceptor port now follows the same precedence as the gateway port, and it moves off the gateway port when the two meet. The README names both variables together.
+- **A fish user got a line that fish cannot run:** The PATH hint printed `export PATH="..."`, which is not fish syntax, and it named `~/.profile`, which fish does not read. The hint now names `~/.config/fish/config.fish` and gives `fish_add_path -m`. zsh and bash keep what they had.
+- **`switch on` installs the shims:** The README gave `switch shim install` as a separate step. `switch on` already installs the shims and prints what it installed. The README now says so, and it names the one case that still needs the command: a set `LLM_SWITCHER_STATE_DIR`.
+- **What the package says it serves:** The description and both README taglines gave OpenAI and Gemini as clients. This gateway accepts two clients, Claude Code and Codex, and `toIR` accepts no other input format. OpenAI, Anthropic and Vertex are upstreams. All three texts now say that.
+- **A test that failed on a loaded machine:** The lock test released the lock 400 ms after it started the child, then asserted that the child waited 100 ms or more. A spawn plus an import measured 163 to 541 ms on Node 18, so the child sometimes found the lock gone. The test now counts the 400 ms from the moment the child reports its start, the same way the test below it does.
+
 ## Release 1.2.7
 
 - **Save from the dashboard:** The dashboard sent `tool: "auto"` for a profile that serves both tools. The gateway refuses that value. As a result, a new profile with the default tool, four of the five templates, and a save of any both-tools profile all failed. Now the dashboard saves `tool: null` for such a profile. The Vertex AI template uses `claude`.

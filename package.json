@@ -1,7 +1,7 @@
 {
   "name": "llm-switcher",
   "version": "1.2.8",
-  "description": "Zero-dependency multi-protocol edge gateway & provider switcher for Claude Code, Codex, OpenAI and Gemini clients",
+  "description": "Zero-dependency multi-protocol edge gateway & provider switcher for Claude Code and Codex, with OpenAI-compatible, Anthropic and Vertex upstreams",
   "keywords": [
     "llm",
     "gateway",

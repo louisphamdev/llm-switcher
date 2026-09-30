@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Zero-dependency, multi-protocol edge gateway & provider switcher</b><br>
-  Seamlessly bridge <b>Claude Code</b>, <b>Codex</b>, OpenAI, and Gemini SDKs to any upstream LLM API.<br>
+  Bridge <b>Claude Code</b> and <b>Codex</b> to any upstream LLM API: OpenAI-compatible, Anthropic, or Vertex.<br>
   Full bi-directional protocol conversion, official-model context windows, thinking protocol extraction, and edge message healing.
 </p>
 
@@ -233,6 +233,10 @@ release or from your own shell, so `switch off` really is off.
 In practice you never call these files. `switch shim install` puts `~/.llm-switcher/bin` on `PATH`,
 and every `claude` and `codex` invocation — including `claude --resume` in a brand-new terminal —
 runs the shim, which injects the variables into that one process.
+
+`switch on` installs the shims itself and prints what it installed, so the command above is only
+necessary when `LLM_SWITCHER_STATE_DIR` is set. A shim holds the state directory, and `switch on`
+leaves the install to you in that case, because a temporary state directory outlives no shim.
 
 ---
 
@@ -629,7 +633,8 @@ Because of this split, a provider fingerprint is never a rule in this gateway. I
 |---|---|
 | `LLM_SWITCHER_HOME=/path` | Use this folder as the data folder (config, admin token, launch files, logs) for an npm install or a checkout. |
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the data folder (the proxy, `switch` and `mcp.mjs` all honour it). |
-| `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port (priority: flag > env > `config.port`). |
+| `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port of the gateway (priority: flag > env > `config.port`). |
+| `LLM_SWITCHER_BLINDFOLD_PORT` | Override the listening port of the interceptor (priority: env > `config.blindfold.port` > 3457). Set it together with `LLM_SWITCHER_PORT` to run a second instance. |
 | `x-llm-profile: <key>` header (alias `x-profile`) or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
 | `profile.thinkingMode` | `auto` (default, for gateways like intact or 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |
