@@ -458,6 +458,11 @@ export function validateProfileInput(p) {
   return null;
 }
 
+/** True while a profile still carries the example config's placeholder baseURL or apiKey. */
+export function hasPlaceholder(p) {
+  return !p?.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey ?? ''}`);
+}
+
 export function needsMigration(cfg) {
   if (!cfg || typeof cfg !== 'object') return false;
   if (Object.hasOwn(cfg, 'activeProfile')) return true;
@@ -1231,8 +1236,9 @@ export function setTargetProfile(cfg, target, profileKey) {
   if (!profileAcceptsTarget(p, tool)) {
     return `Profile "${profileKey}" only accepts "${p.tool || p.inFormat}" input and cannot serve target "${tool}"`;
   }
+  // No legacy `activeProfile` here: needsMigration flags it, so every switch would re-run the
+  // migration on the next load and leave another config.json.bak-* holding the API keys.
   map[tool] = profileKey;
-  cfg.activeProfile = profileKey;
   return null;
 }
 
@@ -1244,7 +1250,6 @@ export function activateProfile(cfg, profileKey) {
   for (const t of TOOLS) {
     if (profileAcceptsTarget(p, t)) map[t] = profileKey;
   }
-  cfg.activeProfile = profileKey;
   return null;
 }
 

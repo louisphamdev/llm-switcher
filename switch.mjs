@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import {
-  ROOT_DIR, STATE_DIR, TOOLS, configPath, claudeSettingsPath, paths, certCoversHost, loadConfig, getConfigLoadError, saveConfig,
+  ROOT_DIR, STATE_DIR, TOOLS, configPath, hasPlaceholder, claudeSettingsPath, paths, certCoversHost, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
   modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
@@ -392,6 +392,10 @@ async function turnOn(profileName, cliTarget) {
 
   // Plan on a copy. Nothing is written until every check below passes.
   let planned = planSwitch(config, key, cliTarget);
+  // The example config routes to YOUR-ROUTER-HOST; activating it silently makes every request fail.
+  if (hasPlaceholder(planned.profiles[key])) {
+    console.warn(`[WARN] Profile "${show(key)}" still has a placeholder baseURL/apiKey. Edit ${configPath} first, or requests will fail.`);
+  }
   console.log(`Activating profile: [${show(planned.profiles[key].name || key)}] (${show(key)})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
 
   const gatewayState = await probeGateway(port);
@@ -904,7 +908,7 @@ async function runDoctor() {
     if (!key) continue;
     const p = config.profiles[key];
     if (!p) warn(`[WARN] Target ${t} points to missing profile "${show(key)}".`);
-    else if (!p.baseURL || /YOUR-|REPLACE-ME/i.test(`${p.baseURL} ${p.apiKey}`)) warn(`[WARN] Profile "${show(key)}" (${t}) still has placeholder baseURL/apiKey.`);
+    else if (hasPlaceholder(p)) warn(`[WARN] Profile "${show(key)}" (${t}) still has placeholder baseURL/apiKey.`);
     if (p && t === 'codex') {
       const codexWarning = codexPublicModelsWarning(show(key), p);
       if (codexWarning) warn(`[WARN] ${codexWarning}`);

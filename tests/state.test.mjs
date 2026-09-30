@@ -7,7 +7,7 @@ import {
   modelSlotsForProfile, modelForSlot, primaryModel, codexPublicModel,
   certCoversHost, blindfoldPreflight, ROOT_DIR, openLog, probeGateway, isSafeModelName,
   getMigrationCollision, getMigrationError, getConfigLoadError, saveConfig, loadConfig,
-  migrateConfigInMemory, saveConfigAtomicCAS, TOOLS, validateProfileInput, needsMigration
+  migrateConfigInMemory, saveConfigAtomicCAS, TOOLS, validateProfileInput, needsMigration, hasPlaceholder
 } from '../state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,6 +50,49 @@ test('activateProfile only assigns compatible tools; deactivateProfile leaves th
   assert.deepEqual(cfg.activeProfiles, { claude: null, codex: 'codexOnly' });
   deactivateProfile(cfg, 'codexOnly');
   assert.deepEqual(cfg.activeProfiles, { claude: null, codex: null });
+});
+
+test('switching a migrated config does not make it need migration again', () => {
+  // A legacy pointer written on every switch re-ran the migration on the next load and left one
+  // more config.json.bak-* (with the API keys) in the data folder each time.
+  const cfg = {
+    port: 4000,
+    activeProfiles: { claude: null, codex: null },
+    profiles: {
+      router: { tool: 'claude', apiKey: 'sk-1', baseURL: 'https://r/v1', defaultModels: { opus: 'o' } },
+      codexOnly: { tool: 'codex', apiKey: 'sk-2', baseURL: 'https://c/v1', defaultModels: { main: 'gpt-main' } }
+    }
+  };
+  assert.equal(needsMigration(cfg), false, 'fixture is already migrated');
+  assert.equal(activateProfile(cfg, 'router'), null);
+  assert.equal(setTargetProfile(cfg, 'codex', 'codexOnly'), null);
+  assert.equal(Object.hasOwn(cfg, 'activeProfile'), false);
+  assert.equal(needsMigration(cfg), false);
+});
+
+test('hasPlaceholder spots the example config values', () => {
+  assert.equal(hasPlaceholder({ baseURL: 'https://YOUR-ROUTER-HOST/v1', apiKey: 'sk-real' }), true);
+  assert.equal(hasPlaceholder({ baseURL: 'https://r/v1', apiKey: 'REPLACE-ME' }), true);
+  assert.equal(hasPlaceholder({ apiKey: 'sk-real' }), true, 'no baseURL');
+  assert.equal(hasPlaceholder({ baseURL: 'https://r/v1', apiKey: 'sk-real' }), false);
+  assert.equal(hasPlaceholder({ baseURL: 'http://127.0.0.1:11434/v1' }), false, 'a keyless local backend is fine');
+});
+
+test('deleteProfile does not make a migrated config need migration again', () => {
+  // Reachable from the dashboard Delete Profile button via POST /api/delete-profile, which
+  // persists. A legacy pointer written here revives the backup leak the switch path just lost.
+  const cfg = {
+    port: 4000,
+    activeProfiles: { claude: null, codex: 'codexOnly' },
+    profiles: {
+      router: { tool: 'claude', apiKey: 'sk-1', baseURL: 'https://r/v1', defaultModels: { opus: 'o' } },
+      codexOnly: { tool: 'codex', apiKey: 'sk-2', baseURL: 'https://c/v1', defaultModels: { main: 'gpt-main' } }
+    }
+  };
+  assert.equal(needsMigration(cfg), false, 'fixture is already migrated');
+  assert.equal(deleteProfile(cfg, 'codexOnly'), null);
+  assert.equal(Object.hasOwn(cfg, 'activeProfile'), false);
+  assert.equal(needsMigration(cfg), false);
 });
 
 test('deleteProfile unassigns targets that pointed at it', () => {
