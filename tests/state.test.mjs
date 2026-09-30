@@ -78,6 +78,33 @@ test('hasPlaceholder spots the example config values', () => {
   assert.equal(hasPlaceholder({ baseURL: 'http://127.0.0.1:11434/v1' }), false, 'a keyless local backend is fine');
 });
 
+test('the interceptor port follows LLM_SWITCHER_BLINDFOLD_PORT and never lands on the gateway port', () => {
+  // The gateway reads --port and LLM_SWITCHER_PORT through resolvePort. The interceptor read only
+  // config.json, so a second instance collided and HTTPS_PROXY named a port nothing listened on.
+  const saved = process.env.LLM_SWITCHER_BLINDFOLD_PORT;
+  delete process.env.LLM_SWITCHER_BLINDFOLD_PORT;
+  const cfg = {
+    port: 4000,
+    activeProfiles: { claude: 'router', codex: null },
+    profiles: { router: { tool: 'claude', apiKey: 'sk-1', baseURL: 'https://r/v1', defaultModels: { opus: 'o' } } }
+  };
+  try {
+    assert.equal(computeLaunchState(cfg, 4000).blindfold.port, 3457, 'the default');
+    assert.equal(computeLaunchState({ ...cfg, blindfold: { port: 4444 } }, 4000).blindfold.port, 4444, 'the file');
+    process.env.LLM_SWITCHER_BLINDFOLD_PORT = '5555';
+    assert.equal(computeLaunchState({ ...cfg, blindfold: { port: 4444 } }, 4000).blindfold.port, 5555, 'the environment wins');
+    delete process.env.LLM_SWITCHER_BLINDFOLD_PORT;
+    // A gateway moved onto 3457 by --port or by the environment must push the interceptor off it.
+    const st = computeLaunchState(cfg, 3457);
+    assert.notEqual(st.blindfold.port, 3457, 'the interceptor moved off the gateway port');
+    const proxy = st.envClaude.find(([k]) => k === 'HTTPS_PROXY');
+    assert.equal(proxy[1], `http://127.0.0.1:${st.blindfold.port}`, 'HTTPS_PROXY names the real port');
+  } finally {
+    if (saved === undefined) delete process.env.LLM_SWITCHER_BLINDFOLD_PORT;
+    else process.env.LLM_SWITCHER_BLINDFOLD_PORT = saved;
+  }
+});
+
 test('deleteProfile does not make a migrated config need migration again', () => {
   // Reachable from the dashboard Delete Profile button via POST /api/delete-profile, which
   // persists. A legacy pointer written here revives the backup leak the switch path just lost.
@@ -645,15 +672,21 @@ test('isSafeModelName refuses names that TOML reads as something other than a st
 test('launch-file writers take turns through a lock, and a dead holder does not block them', async (t) => {
   const { dir, env } = tmpDirs(t);
   const lock = path.join(dir, '.launch.lock');
+  const startedFile = path.join(dir, 'writer.started');
   // A live holder: this test process. The child must wait until the lock is gone.
   fs.writeFileSync(lock, String(process.pid));
-  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
-  const started = Date.now();
-  const r = await new Promise((resolve, reject) => {
+  const done = new Promise((resolve, reject) => {
     execFileCb(process.execPath, ['--input-type=module', '-e',
-      `const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT_DIR, 'state.mjs')).href)}); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
+      `const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT_DIR, 'state.mjs')).href)}); (await import('node:fs')).writeFileSync(${JSON.stringify(startedFile)}, ''); const t0 = Date.now(); s.applyLaunchState(s.loadConfig(), 4000); console.log(Date.now() - t0);`],
     { env: { ...process.env, LLM_SWITCHER_PORT: '', ...env }, encoding: 'utf8' }, (err, out) => (err ? reject(err) : resolve(Number(out.trim()))));
   });
+  // The 400 ms count from the writer's start, the same way the next test does it. A spawn plus an
+  // import measured 163 to 541 ms on Node 18, so a fixed timer left under 100 ms of wait and the
+  // assertion below failed on a loaded machine.
+  for (let i = 0; i < 1000 && !fs.existsSync(startedFile); i++) await new Promise(r => setTimeout(r, 10));
+  const started = Date.now();
+  setTimeout(() => fs.rmSync(lock, { force: true }), 400);
+  const r = await done;
   // Without the lock the write takes a few ms; with it the child waits for the release at 400 ms.
   assert.ok(r >= 100, `the writer waited ${r} ms for the live holder`);
   assert.ok(Date.now() - started >= 380);

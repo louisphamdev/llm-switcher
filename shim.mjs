@@ -375,10 +375,13 @@ export function shimStatus(names = SHIMMED) {
 /** Line to add to the shell rc so the shim comes before the real binary. */
 // Windows: setx truncates at 1024 characters and would copy the merged system+user PATH into the
 // user key, and PowerShell does not expand %PATH%. Prepend to the User-scope Path only.
-export function pathExportLine(platform = process.platform) {
+export function pathExportLine(platform = process.platform, shell = currentShell()) {
   if (platform === 'win32') {
     return `powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', '${SHIM_DIR};' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')"`;
   }
+  // fish has no `export`, and it prepends through the fish_user_paths universal variable.
+  // `-m` moves the directory to the front when it is on the path already.
+  if (shell === 'fish') return `fish_add_path -m "${SHIM_DIR}"`;
   return `export PATH="${SHIM_DIR}:$PATH"`;
 }
 
@@ -386,10 +389,17 @@ export function pathExportLine(platform = process.platform) {
 export function suggestedRcFiles(platform = process.platform) {
   if (platform === 'win32') return [];
   const home = os.homedir();
-  const shell = path.basename(process.env.SHELL || '');
+  const shell = currentShell();
   if (shell === 'zsh') return [path.join(home, '.zshrc'), path.join(home, '.zprofile')];
   if (shell === 'bash') return [path.join(home, '.bashrc'), path.join(home, '.bash_profile')];
+  // fish reads neither .profile nor any POSIX rc file.
+  if (shell === 'fish') return [path.join(home, '.config', 'fish', 'config.fish')];
   return [path.join(home, '.profile')];
+}
+
+/** The basename of the login shell, which decides both the file to edit and the syntax of the line. */
+function currentShell() {
+  return path.basename(process.env.SHELL || '');
 }
 
 // The shim is on PATH but behind the real binary: a line that runs later prepends another directory

@@ -1329,7 +1329,15 @@ export function computeLaunchState(cfg, port) {
 
   // One interceptor serves both tools (R3) and its port lives at the top level of config.json
   // (R3b). The per-profile port went with the per-profile host and prefix.
-  const bfPort = parsePort(cfg?.blindfold?.port) || DEFAULT_BLINDFOLD_PORT;
+  // Precedence mirrors resolvePort for the gateway: the environment, then the file, then the
+  // default. Without the variable a second instance could not move the interceptor, and a gateway
+  // sent to 3457 by --port or by LLM_SWITCHER_PORT landed on the interceptor's own port.
+  let bfPort = parsePort(process.env.LLM_SWITCHER_BLINDFOLD_PORT)
+    || parsePort(cfg?.blindfold?.port)
+    || DEFAULT_BLINDFOLD_PORT;
+  if (bfPort === port) {
+    bfPort = port === DEFAULT_BLINDFOLD_PORT ? DEFAULT_BLINDFOLD_PORT + 1 : DEFAULT_BLINDFOLD_PORT;
+  }
   const interceptor = `http://127.0.0.1:${bfPort}`;
   const loopbackOnly = '127.0.0.1,localhost';
   const proxyPairs = () => [

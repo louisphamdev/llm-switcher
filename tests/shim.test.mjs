@@ -282,6 +282,22 @@ test('the POSIX shims source launch files only when this account owns them', () 
 
 // ISS-CC-LS-002: on zsh a later line in .zshrc or .zprofile can prepend npm-global or Homebrew
 // ahead of the shim. The hint names both files and says the line must come last.
+test('pathOrderHint gives a fish user the fish file and fish syntax', () => {
+  // `export PATH=...` is not fish syntax. A fish user who pasted the old hint got an error, and
+  // the hint named ~/.profile, which fish does not read.
+  const shell = process.env.SHELL;
+  process.env.SHELL = '/usr/bin/fish';
+  try {
+    assert.deepEqual(suggestedRcFiles('linux'), [path.join(os.homedir(), '.config', 'fish', 'config.fish')]);
+    const text = pathOrderHint('linux').join(' ');
+    assert.ok(text.includes('config.fish'), text);
+    assert.ok(text.includes('fish_add_path'), text);
+    assert.ok(!text.includes('export PATH='), text);
+  } finally {
+    if (shell === undefined) delete process.env.SHELL; else process.env.SHELL = shell;
+  }
+});
+
 test('pathOrderHint tells a zsh user to put the export last in .zshrc and .zprofile', () => {
   const shell = process.env.SHELL;
   process.env.SHELL = '/bin/zsh';
