@@ -1,6 +1,6 @@
 # Changelog — LLM Switcher
 
-## Unreleased
+## Release 1.2.8
 
 - **Launch notice:** A person opened `claude` or `codex`, and nothing on screen said that the switcher took the traffic. The shim now raises a notice at launch. On Windows it is a desktop toast, because both tools can claim the whole screen and hide a printed line. On Linux and macOS it is one line on stderr. The notice names the profile, the host, the model, and the 1M window.
 - **Only a routed tool:** The notice appears only while that tool has a profile. A tool on its official endpoint stays silent. `switch off codex` empties `route-codex.txt`, and the codex shim then says nothing.
@@ -22,6 +22,20 @@ set through the page's own JavaScript. Each item below has a browser test that r
 - **A double-click on Save sent two saves:** One double-click sent two `POST /api/save-profile`. The button is disabled while the request runs, the same way the catalog sync button already was.
 - **A model search with no match looked broken:** Every row was hidden while the headers kept the counts of the full list, and nothing said why the list was empty. The count follows the filter now, and an empty result says so in words.
 - **Tests:** Eight new browser tests, one for each finding. Two more findings from that pass did not reproduce under a real click and are kept as guards rather than reported as bugs.
+
+### Linux and Node 18
+
+- **Tests on Node 18 and 20:** `engines` accepts Node 18.17 and later, but four tests failed on Node 18 and Node 20. A global `WebSocket` client arrived in Node 22, and `zlib.zstdCompressSync` arrived in Node 22.15. The runtime code already tested for zstd before it used it, so only the tests assumed the newer runtime. The three WebSocket tests and the zstd assertion now skip when the runtime does not hold those APIs.
+- **A zstd capture on an older runtime:** `DECODERS` mapped `zstd` to `zlib.zstdDecompressSync`, which is `undefined` before Node 22.15. The capture then wrote the compressed bytes as UTF-8 noise, and that noise is what the decoder table exists to prevent. The capture now holds `[capture: cannot decode zstd body of N bytes: zstd is not supported by this Node.js version]`.
+- **`LLM_SWITCHER_HOME` and the background service:** The README gives `LLM_SWITCHER_HOME` as the override for the data folder, but `switch service install` did not copy it into the systemd unit or the launchd plist. The service then read a different `config.json` and a different `admin.token` than the command that installed it. The variable now goes into the unit with the other three.
+- **Mode of the data folder:** The Quick Start created the data folder with `mkdir -p`, so a common umask left it readable by the group and by everyone. `state.mjs` applies mode 700 only when it creates the folder itself. The README now uses `mkdir -p -m 700`.
+- **Notes for the Linux service:** The unit is a systemd user service, so it starts at login and not at boot. On a headless host, run `loginctl enable-linger $USER` first. `ExecStart` holds the path of the running Node binary. After you remove that Node version, run `switch service install` again.
+
+### The profile switch
+
+- **A backup with the API keys on every switch:** `setTargetProfile` and `activateProfile` still wrote the legacy `activeProfile` pointer. `needsMigration` reports any configuration that holds that key, so the next load migrated the file again and wrote another `config.json.bak-*`. Each backup is a full copy of `config.json`, with every provider API key, and the backups stayed after a success. Neither function writes the pointer now. `ensureActiveMap` already folds a legacy pointer into `activeProfiles`, and a load still migrates an old file once. Four switches left three backups before this change and none after it.
+- **A placeholder profile activated without a warning:** With the unedited `config.example.json`, `switch on` printed `[SUCCESS]` and routed to `https://YOUR-ROUTER-HOST/v1`. Only `switch doctor` gave a warning. Activation now uses the same `hasPlaceholder` test as `doctor`, and it names the file to edit. Activation only warns and does not refuse, so a scripted setup still works.
+- **Tests:** New tests cover the service environment keys, `hasPlaceholder`, and a migrated configuration that does not need migration again after a switch. One test pins the same invariant on `deleteProfile`, the third place that can write the legacy pointer.
 
 ## Release 1.2.7
 
