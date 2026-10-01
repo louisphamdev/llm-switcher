@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.9
+
+- **Bifrost:** Claude Code that reaches a Claude Code account on intact now goes through unchanged. Only the key changes. Before, a `convert` profile, or a `hybrid` profile with a `claude/...` model, changed the request to OpenAI Chat. The `direct` route also ran the healer and `thinkingMode`. Now the gateway asks intact for `bifrost_ua` of the mapped model. If the `User-Agent` of the client starts with this value, the gateway sends every client header, the body bytes, and the query string. There is no setting. intact 0.1.10 or newer gives `bifrost_ua`.
+
 ## Release 1.2.8
 
 - **Launch notice:** A person opened `claude` or `codex`, and nothing on screen said that the switcher took the traffic. The shim now raises a notice at launch. On Windows it is a desktop toast, because both tools can claim the whole screen and hide a printed line. On Linux and macOS it is one line on stderr. The notice names the profile, the host, the model, and the 1M window.

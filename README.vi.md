@@ -400,6 +400,19 @@ Thêm server vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_co
 
 ---
 
+## Bifrost: Claude Code tới tài khoản Claude Code trên intact
+
+Bifrost gửi request của Claude Code tới intact nguyên vẹn. Chỉ key thay đổi. Healer, `thinkingMode` và bước chuyển định dạng không chạy.
+
+Bifrost không có cấu hình. Gateway tự bật Bifrost cho từng request khi đủ hai điều kiện:
+
+1. intact trả `bifrost_ua` cho model đã map trong `GET /v1/models/{model}`. intact chỉ trả trường này cho model của tài khoản Claude Code.
+2. `User-Agent` của client bắt đầu bằng giá trị `bifrost_ua`.
+
+Gateway giữ câu trả lời của intact 10 phút cho mỗi model. Nếu intact không trả lời, gateway giữ kết quả 30 giây và dùng đường thường.
+
+Gateway gửi mọi header của client, nguyên byte body và query string. Gateway bỏ credential của client và các header hop-by-hop, rồi đặt `x-api-key` bằng key của profile. Nếu profile map model, gateway đổi thêm trường `model`. Client khác, hoặc model không thuộc tài khoản Claude Code, đi đường thường của profile.
+
 ## Bảng Tra cứu Lệnh CLI (`switch`)
 
 ```bash

@@ -403,6 +403,19 @@ Add the server to your MCP configuration (for example `opencode.jsonc`, `claude_
 
 ---
 
+## Bifrost: Claude Code to a Claude Code account on intact
+
+Bifrost sends a Claude Code request to intact without a change. Only the key changes. The healer, `thinkingMode`, and the format conversion do not run.
+
+Bifrost has no setting. The gateway turns it on for each request when two conditions are true:
+
+1. intact gives `bifrost_ua` for the mapped model in `GET /v1/models/{model}`. intact gives it only for a model of a Claude Code account.
+2. The `User-Agent` of the client starts with the `bifrost_ua` value.
+
+The gateway keeps the answer from intact for 10 minutes for each model. If intact does not answer, the gateway keeps the result for 30 seconds and uses the normal route.
+
+The gateway sends every client header, the body bytes, and the query string. It removes the credentials of the client and the hop-by-hop headers, and it sets `x-api-key` to the profile key. If the profile maps the model, the gateway also changes the `model` field. A different client, or a model that is not a Claude Code account, uses the normal route of the profile.
+
 ## CLI Reference
 
 ```bash

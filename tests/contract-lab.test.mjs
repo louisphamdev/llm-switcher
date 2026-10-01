@@ -260,6 +260,11 @@ function startUpstream() {
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', () => {
+      // The Bifrost lookup reads one model entry; it is not a probe request.
+      if (req.method === 'GET' && req.url.includes('/models/')) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end('{}');
+      }
       const json = body ? JSON.parse(body) : {};
       received.push({ url: req.url, headers: req.headers, body: json });
       if (JSON.stringify(json.messages || '').includes('ERR_400')) {

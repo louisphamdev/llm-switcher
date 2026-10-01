@@ -68,9 +68,23 @@ function startUpstream() {
     req.on('data', c => { body += c; });
     req.on('end', () => {
       const json = body ? JSON.parse(body) : {};
-      received.push({ url: req.url, headers: req.headers, body: json });
+      received.push({ url: req.url, headers: req.headers, body: json, raw: body });
       const lastUser = JSON.stringify(json.messages?.at(-1) ?? json.contents?.at(-1) ?? '');
 
+      // A stand-in intact: claude/* is a Claude Code account, the rest is not.
+      if (req.method === 'GET' && req.url.startsWith('/intact/v1/models/')) {
+        const id = decodeURIComponent(req.url.slice('/intact/v1/models/'.length));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ id, owned_by: id.split('/')[0], ...(id.startsWith('claude/') ? { bifrost_ua: 'claude-cli/' } : {}) }));
+      }
+      if (req.url.startsWith('/intact/v1/messages')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ id: 'msg_n', type: 'message', role: 'assistant', model: json.model, content: [{ type: 'text', text: 'bifrost ok' }], stop_reason: 'end_turn', usage: { input_tokens: 3, output_tokens: 2 } }));
+      }
+      if (req.url.startsWith('/intact/v1/chat/completions')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ id: 'c1', object: 'chat.completion', model: json.model, choices: [{ index: 0, message: { role: 'assistant', content: 'converted ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+      }
       if (req.url.startsWith('/chat/v1/chat/completions')) {
         if (lastUser.includes('RATE_LIMIT')) {
           res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '7' });
@@ -202,6 +216,7 @@ before(async () => {
       pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' }, model1M: { main: true } },
       roles: { name: 'Mock Public Roles', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-roles', publicModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       native: { name: 'Mock Strict OpenAI', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', thinkingMode: 'native', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-native', defaultModels: models },
+      intactcc: { name: 'Mock intact', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', thinkingMode: 'off', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact-user', defaultModels: { opus: 'claude/claude-opus-5', sonnet: 'gem/flash', haiku: 'claude/claude-haiku-4-5', fable: 'gem/flash' } },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
     }
   };
@@ -575,6 +590,40 @@ test('Direct Anthropic passthrough strips hop-by-hop headers and blocks client c
   assert.equal(up.headers['x-goog-api-key'], undefined);
   assert.equal(up.headers['x-request-id'], 'trace-1');
   assert.equal(up.body.model, 'up-opus');
+});
+
+test('Bifrost: Claude Code to a Claude Code account on intact changes only the key', async () => {
+  // Orphaned tool_result and a thinking block: the healer and thinkingMode=off would both change these.
+  const body = { model: 'claude-opus-4-6', max_tokens: 10, thinking: { type: 'adaptive' }, metadata: { user_id: 'u1' },
+    messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'gone', content: 'x' }] }] };
+  const res = await post('/v1/messages?beta=true', body, {
+    'x-llm-profile': 'intactcc', 'user-agent': 'claude-cli/2.1.300 (external, cli)', 'x-api-key': 'client-own-key',
+    authorization: 'Bearer client-oauth', 'anthropic-beta': 'oauth-2025-04-20,new-beta', 'anthropic-dangerous-direct-browser-access': 'true', 'x-app': 'cli'
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).content[0].text, 'bifrost ok');
+  const up = received.at(-1);
+  assert.equal(up.url, '/intact/v1/messages?beta=true');
+  assert.equal(up.headers['x-api-key'], 'sk-intact-user');
+  assert.equal(up.headers.authorization, undefined);
+  assert.equal(up.headers['user-agent'], 'claude-cli/2.1.300 (external, cli)');
+  assert.equal(up.headers['anthropic-beta'], 'oauth-2025-04-20,new-beta');
+  assert.equal(up.headers['anthropic-dangerous-direct-browser-access'], 'true');
+  assert.equal(up.headers['x-app'], 'cli');
+  assert.equal(up.raw, JSON.stringify({ ...body, model: 'claude/claude-opus-5' }));
+});
+
+test('Bifrost stays off for a model that is not a Claude Code account', async () => {
+  const res = await post('/v1/messages', { model: 'claude-sonnet-5', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+    { 'x-llm-profile': 'intactcc', 'user-agent': 'claude-cli/2.1.300 (external, cli)' });
+  assert.equal(res.status, 200);
+  assert.equal(received.at(-1).url, '/intact/v1/chat/completions');
+});
+
+test('Bifrost stays off for a client that is not Claude Code', async () => {
+  await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+    { 'x-llm-profile': 'intactcc', 'user-agent': 'some-sdk/1.0' });
+  assert.equal(received.at(-1).url, '/intact/v1/chat/completions');
 });
 
 test('Healer: orphaned tool_result and missing tool_result produce a valid chat history', async () => {

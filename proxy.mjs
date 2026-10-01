@@ -500,7 +500,54 @@ function previewOf(ir) {
 // ----------------------------------------------------
 const HOP_BY_HOP = new Set(['content-length', 'content-encoding', 'transfer-encoding', 'connection', 'keep-alive']);
 
-async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, mappedModel, signal, profile) {
+// Bifrost: intact names, per model, the User-Agent prefix of the provider's own client (bifrost_ua).
+// When the caller is that client, the request crosses as it is: only the key changes.
+const bifrostUACache = new Map();
+async function bifrostUAFor(profile, model) {
+  const base = String(profile.baseURL || '').replace(/\/+$/, '');
+  if (!base || !model) return '';
+  const key = `${base}\n${model}`;
+  const hit = bifrostUACache.get(key);
+  if (hit && hit.until > Date.now()) return hit.ua;
+  let ua = '';
+  let ttl = 10 * 60 * 1000;
+  try {
+    const r = await fetch(`${base}/models/${model.split('/').map(encodeURIComponent).join('/')}`, {
+      headers: { authorization: `Bearer ${profile.apiKey || ''}` }, signal: AbortSignal.timeout(3000)
+    });
+    if (r.ok) ua = String((await r.json())?.bifrost_ua || '');
+  } catch {
+    ttl = 30 * 1000; // an unreachable list must not pin the decision for long
+  }
+  bifrostUACache.set(key, { ua, until: Date.now() + ttl });
+  return ua;
+}
+
+async function crossesBifrost(req, profile, model) {
+  const clientUA = String(req.headers['user-agent'] || '');
+  if (!clientUA) return false;
+  const ua = await bifrostUAFor(profile, model);
+  return Boolean(ua) && clientUA.startsWith(ua);
+}
+
+// Every client header except its own credentials, the switcher's control headers and hop-by-hop.
+function bifrostHeaders(req, profile) {
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (BLOCKED_PASSTHROUGH.has(lk) || HOP_BY_HOP.has(lk) || lk === 'host' || lk === 'authorization' || lk === 'accept-encoding') continue;
+    headers[lk] = v;
+  }
+  headers['x-api-key'] = profile.apiKey || '';
+  return headers;
+}
+
+function withClientQuery(url, req) {
+  const q = String(req.url || '').indexOf('?');
+  return q < 0 ? url : url + (url.includes('?') ? '&' : '?') + req.url.slice(q + 1);
+}
+
+async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, mappedModel, signal, profile, bifrost = false) {
   debugLog('Direct forward to native Anthropic endpoint:', url);
 
   // Only re-serialize when a fix is actually needed; otherwise forward the client's original bytes.
@@ -510,13 +557,13 @@ async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, ma
     json = { ...json, model: mappedModel };
     modified = true;
   }
-  const healed = healAnthropicPayload(json);
+  const healed = bifrost ? { changed: false, notes: [] } : healAnthropicPayload(json);
   if (healed.changed) {
     json = healed.payload;
     modified = true;
     debugLog('Healer (direct):', healed.notes.join('; '));
   }
-  if (profile?.thinkingMode === 'off' && json.thinking) {
+  if (!bifrost && profile?.thinkingMode === 'off' && json.thinking) {
     json = { ...json };
     delete json.thinking;
     modified = true;
@@ -752,6 +799,25 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   let answered = false; // set only after a complete 2xx answer; the half upload depends on it
 
   try {
+    // Bifrost: the provider's own client reaching its own account through intact. Bytes and headers
+    // go as sent, only the key changes: no healer, no thinkingMode, no conversion.
+    if (clientFormat === 'anthropic' && await crossesBifrost(req, profile, mappedModel)) {
+      const { url } = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
+      const headers = bifrostHeaders(req, profile);
+      if (traceId) headers['x-intact-trace'] = traceId;
+      try {
+        const r = await forwardAnthropicDirect(res, payload, bodyBuffer, withClientQuery(url, req), headers, mappedModel, ac.signal, profile, true);
+        answered = !r.error && r.status >= 200 && r.status < 300;
+        log({ outFormat: 'anthropic', status: r.status, tokens: r.tokens, responsePreview: '(bifrost)', error: r.error || undefined });
+      } catch (err) {
+        if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+        console.error(`[${profileKey}] Bifrost forward error:`, err.message);
+        sendClientError(res, clientFormat, 502, `Bifrost forward error: ${err.message}`);
+        log({ status: 502, error: err.message });
+      }
+      return;
+    }
+
     // Fast path: anthropic in/out goes straight through, preserving original bytes (including thinking signatures).
     // Note: this branch skips the Healer Engine because it bypasses the IR.
     if (clientFormat === 'anthropic' && outFormat === 'anthropic') {
@@ -889,11 +955,14 @@ async function handleCountTokens(req, res, buf) {
   const { profile } = getActiveProfile('anthropic', req);
   if (profile) {
     const mappedModel = mapModel(payload.model || '', profile, 'anthropic');
-    if (resolveOutFormat(profile, mappedModel) === 'anthropic') {
-      const { url, headers } = upstreamEndpoint(profile, 'anthropic', mappedModel, false, req);
-      const countUrl = profile.endpoints?.countTokens || url.replace(/\/messages$/, '/messages/count_tokens');
+    const bifrost = await crossesBifrost(req, profile, mappedModel);
+    if (bifrost || resolveOutFormat(profile, mappedModel) === 'anthropic') {
+      const ep = upstreamEndpoint(profile, 'anthropic', mappedModel, false, req);
+      const headers = bifrost ? bifrostHeaders(req, profile) : ep.headers;
+      let countUrl = profile.endpoints?.countTokens || ep.url.replace(/\/messages$/, '/messages/count_tokens');
+      if (bifrost) countUrl = withClientQuery(countUrl, req);
       try {
-        const body = healAnthropicPayload({ ...payload, model: mappedModel }).payload;
+        const body = bifrost ? { ...payload, model: mappedModel } : healAnthropicPayload({ ...payload, model: mappedModel }).payload;
         const r = await fetch(countUrl, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
         if (r.ok) {
           const j = await r.json();
