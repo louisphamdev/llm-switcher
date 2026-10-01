@@ -126,6 +126,17 @@ test('an npm install behind the registry installs that exact version globally', 
   assert.deepEqual(calls[0].slice(-3), ['install', '-g', 'llm-switcher@1.0.1']);
 });
 
+// launchd and systemd --user start the gateway with a short PATH that has no Homebrew or nvm npm.
+test('npm runs with the directory of the running node first on PATH', async (t) => {
+  const root = npmInstall(t, '1.0.0');
+  let env = null;
+  const run = async (cmd, args, opts) => { env = opts.env; writeVersion(root, '1.0.1'); return ''; };
+  await applyUpdate({ root, registryUrl: await registry(t, '1.0.1'), run });
+  const keys = Object.keys(env).filter(k => k.toUpperCase() === 'PATH');
+  assert.equal(keys.length, 1, `one PATH key, got ${keys.join(', ')}`);
+  assert.equal(env[keys[0]].split(path.delimiter)[0], path.dirname(process.execPath));
+});
+
 test('an unreachable registry is not an update', async (t) => {
   const root = npmInstall(t, '1.0.0');
   const r = await applyUpdate({ root, registryUrl: 'http://127.0.0.1:9/' });

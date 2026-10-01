@@ -6,6 +6,7 @@
 - **Safe for a git checkout:** A git checkout updates with `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing.
 - **Open requests:** Open requests on the gateway finish on the old code. The Codex interceptor stops and the new gateway starts it again, so a Codex request that is open at that moment fails one time. The old process stays as the parent of the new process, so a service manager keeps the process that it started.
 - **Update at logon:** `switch service install` adds `--autoupdate` to the service. The gateway then installs the newest release before it starts. `--no-autoupdate` installs the service without the flag. Run `switch service install` again to add the flag to a service that is already installed. `switch port` keeps the choice of the installed service.
+- **macOS and Linux:** launchd and `systemd --user` start the gateway with a short `PATH`, and an npm from Homebrew or nvm is not on it. The update now runs npm with the directory of the running `node` first on `PATH`.
 
 ## Release 1.2.11
 

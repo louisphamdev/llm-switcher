@@ -28,6 +28,13 @@ function readVersion(root) {
   try { return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || '0.0.0'; } catch { return '0.0.0'; }
 }
 
+// launchd and systemd --user give the gateway a short PATH without a Homebrew or nvm npm. The npm
+// next to the running node is the right one, and its launcher finds node on the same PATH.
+function envWithNodeFirst(env = process.env) {
+  const key = Object.keys(env).find(k => k.toUpperCase() === 'PATH') || 'PATH';
+  return { ...env, [key]: [path.dirname(process.execPath), env[key]].filter(Boolean).join(path.delimiter) };
+}
+
 const failure = (what, err) => new Error(`${what} failed: ${String(err.stderr || err.message).trim()}`);
 const noUpdate = (from, reason) => ({ updated: false, from, to: from, reason });
 
@@ -63,11 +70,12 @@ async function updateNpmInstall(root, run, log, registryUrl) {
   if (!latest) return noUpdate(from, 'Could not reach the npm registry.');
   if (!isNewer(latest, from)) return noUpdate(from, `Already on the latest version (v${from}).`);
   log(`Installing llm-switcher@${latest} from npm...`);
-  // npm.cmd is a batch file, and Node runs one only through a shell. The cwd is the home directory,
+  // npm.cmd is a batch file, and Node runs one only through cmd.exe. The cwd is the home directory,
   // because Windows cannot replace a package directory that a process holds as its cwd.
-  const win = process.platform === 'win32';
+  const npmArgs = ['install', '-g', `llm-switcher@${latest}`];
+  const [cmd, args] = process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...npmArgs]] : ['npm', npmArgs];
   try {
-    await run(win ? 'npm.cmd' : 'npm', ['install', '-g', `llm-switcher@${latest}`], { shell: win, cwd: os.homedir(), timeout: 300000 });
+    await run(cmd, args, { cwd: os.homedir(), timeout: 300000, env: envWithNodeFirst() });
   } catch (err) {
     throw failure('npm install', err);
   }
