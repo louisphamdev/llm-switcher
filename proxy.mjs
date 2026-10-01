@@ -1123,6 +1123,14 @@ async function testUpstream(body, cfg) {
   const apiKey = resolveApiKey(cfg, body.key, body.apiKey, baseURL);
   const model = body.model || 'default';
   const profile = { baseURL, apiKey, mode: body.mode, outFormat: body.outFormat || undefined };
+  // A Bifrost model answers only its own client: a plain test request would draw a fake 429.
+  // The model lookup itself proves the key and the model, so it is the test.
+  const lookupStart = Date.now();
+  const bifrostUA = await bifrostUAFor(profile, model);
+  if (bifrostUA) {
+    return { status: 200, json: { ok: true, latency: Date.now() - lookupStart, outFormat: 'bifrost',
+      sample: `Bifrost: the key works and ${model} is served. Only the real client (${bifrostUA}) can call it, so no test message was sent.` } };
+  }
   const outFormat = resolveOutFormat(profile, model);
   const { url, headers } = upstreamEndpoint(profile, outFormat, model, false, null);
   const ir = { model, system: '', messages: [{ role: 'user', content: 'ping' }], tools: [], toolChoice: null, params: { maxTokens: 16, temperature: null, topP: null, topK: null, stop: [] }, thinking: { type: 'disabled' }, stream: false };

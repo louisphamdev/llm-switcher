@@ -1251,6 +1251,17 @@ test('Codex WS: conversation.item.create is echoed and response.cancel stops the
   ws.socket.destroy();
 });
 
+test('Test connection on a Bifrost model checks the model and the key, and sends no fake request', async () => {
+  const before = received.length;
+  const r = await post('/api/test-upstream', { baseURL: `http://127.0.0.1:${upstreamPort}/intact/v1`, apiKey: 'k', model: 'claude/claude-opus-5', mode: 'convert' });
+  const j = await r.json();
+  assert.equal(j.ok, true);
+  assert.equal(j.outFormat, 'bifrost');
+  assert.match(j.sample, /claude-cli\//);
+  const sent = received.slice(before).map(x => x.url);
+  assert.ok(!sent.some(u => u.includes('/messages') || u.includes('/chat/completions')), `sent ${sent}`);
+});
+
 test('Admin test-upstream reports latency and a sample from the upstream', async () => {
   const r = await post('/api/test-upstream', { baseURL: `http://127.0.0.1:${upstreamPort}/chat/v1`, apiKey: 'k', model: 'm', mode: 'convert' });
   assert.equal(r.status, 200);

@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Unreleased
+
+- **Test connection on a Bifrost model:** The test sent a plain `ping` request, and Anthropic answers that with a fake 429 for a Claude Code account. Now, when intact names `bifrost_ua` for the model, the test reports that the key works and the model is served, and it sends no message.
+
 ## Release 1.2.10
 
 - **Bifrost in the log:** The log line and the request inspector showed `anthropic -> openai-chat` for a Bifrost request, because the gateway logged the profile's `outFormat` before it checked Bifrost. Now both show `bifrost`.
