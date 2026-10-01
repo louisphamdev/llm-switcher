@@ -40,3 +40,6 @@ ui-open.html
 *.log.1
 *.tmp
 version-check.json
+
+# design hook cache; .git/info/exclude hides it from git, but npm reads only this file
+.impeccable/
