@@ -1,6 +1,6 @@
 # Changelog — LLM Switcher
 
-## Unreleased
+## Release 1.2.12
 
 - **Update now:** The update notice on the dashboard has an **Update now** button. The gateway installs the release, and a new gateway process starts on the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
 - **Safe for a git checkout:** A git checkout updates with `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing.
