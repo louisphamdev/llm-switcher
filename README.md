@@ -134,6 +134,7 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
 - **Bi-Directional Protocol Conversion:**
   - **4 Client Inbound Formats:** Anthropic Messages, OpenAI Chat Completions, Codex Responses API, Vertex `generateContent`.
   - **3 Upstream Outbound Formats:** OpenAI Chat, Anthropic Native, Vertex Native.
+- **Bifrost:** Claude Code on a Claude Code account of intact goes through unchanged. Only the key changes. No conversion, no healer, no filter. The gateway turns it on by itself. [Bifrost](#bifrost-claude-code-to-a-claude-code-account-on-intact)
 - **Multi-Active CLI Routing:** Run Claude Code on Profile A, Codex on Profile B, and Cursor on Profile C simultaneously on a single gateway instance.
 - **Deep Thinking & Reasoning Extraction:** Tested on 48 live response combinations. Accurately extracts `reasoning_content`, `<think>` tags, Vertex `thought` parts, and signatures into native `thinking_delta` blocks.
 - **Edge Healer Engine (Anti-Collision for Token Optimizers):**

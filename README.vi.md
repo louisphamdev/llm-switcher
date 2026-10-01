@@ -134,6 +134,7 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
 - **Chuyển đổi Giao thức 2 Chiều Đối xứng:**
   - **4 Định dạng đầu vào (Client):** Anthropic Messages, OpenAI Chat Completions, Codex Responses API, Vertex `generateContent`.
   - **3 Định dạng đầu ra (Upstream):** OpenAI Chat, Anthropic Native, Vertex Native.
+- **Bifrost:** Claude Code tới tài khoản Claude Code trên intact đi nguyên vẹn. Chỉ key thay đổi. Không chuyển định dạng, không healer, không lọc. Gateway tự bật. [Bifrost](#bifrost-claude-code-tới-tài-khoản-claude-code-trên-intact)
 - **Multi-Active CLI Routing:** Kích hoạt cùng lúc Claude Code dùng Profile A, Codex dùng Profile B, Cursor dùng Profile C trên cùng 1 gateway mà không tranh chấp cấu hình.
 - **Trích xuất Thinking & Reasoning Chuyên sâu:** Kiểm chứng thực tế qua 48 tổ hợp mẫu response live. Tự động bóc tách `reasoning_content`, thẻ `<think>`, các block `thought` của Vertex và thought signature thành các `thinking_delta` chuẩn của Anthropic.
 - **Edge Healer Engine (Tự chữa lành tin nhắn):**
