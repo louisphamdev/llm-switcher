@@ -611,6 +611,9 @@ test('Bifrost: Claude Code to a Claude Code account on intact changes only the k
   assert.equal(up.headers['anthropic-dangerous-direct-browser-access'], 'true');
   assert.equal(up.headers['x-app'], 'cli');
   assert.equal(up.raw, JSON.stringify({ ...body, model: 'claude/claude-opus-5' }));
+  // The inspector and the log name the route that ran, not the profile's outFormat.
+  const logs = (await (await fetch(url('/api/logs'), { headers: withToken('/api/logs', {}) })).json()).logs;
+  assert.equal(logs[0].outFormat, 'bifrost');
 });
 
 test('Bifrost stays off for a model that is not a Claude Code account', async () => {

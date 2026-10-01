@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.2.10
+
+- **Bifrost in the log:** The log line and the request inspector showed `anthropic -> openai-chat` for a Bifrost request, because the gateway logged the profile's `outFormat` before it checked Bifrost. Now both show `bifrost`.
+- **Bifrost and the contract lab:** A sampled Bifrost exchange went to intact labeled with the profile's `outFormat`. intact then compared an Anthropic request with an OpenAI conversion that never ran. Now the label is `anthropic`.
+
 ## Release 1.2.9
 
 - **Bifrost:** Claude Code that reaches a Claude Code account on intact now goes through unchanged. Only the key changes. Before, a `convert` profile, or a `hybrid` profile with a `claude/...` model, changed the request to OpenAI Chat. The `direct` route also ran the healer and `thinkingMode`. Now the gateway asks intact for `bifrost_ua` of the mapped model. If the `User-Agent` of the client starts with this value, the gateway sends every client header, the body bytes, and the query string. There is no setting. intact 0.1.10 or newer gives `bifrost_ua`.

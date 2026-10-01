@@ -775,10 +775,12 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   const requestPreview = previewOf(ir);
   const requestedModel = ir.model || payload.model || '';
   const mappedModel = mapModel(requestedModel, profile, clientFormat);
+  const bifrost = clientFormat === 'anthropic' && await crossesBifrost(req, profile, mappedModel);
   const outFormat = resolveOutFormat(profile, mappedModel);
-  console.log(`[llm-switcher] ${clientFormat} -> ${outFormat} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
+  const route = bifrost ? 'bifrost' : outFormat;
+  console.log(`[llm-switcher] ${clientFormat} -> ${route} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
 
-  const logBase = { clientFormat, outFormat, profile: profileKey, model: mappedModel, stream: ir.stream, requestPreview };
+  const logBase = { clientFormat, outFormat: route, profile: profileKey, model: mappedModel, stream: ir.stream, requestPreview };
   const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
 
   // Contract lab: a sampled request carries a trace id to intact, and the bytes this gateway
@@ -801,14 +803,14 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   try {
     // Bifrost: the provider's own client reaching its own account through intact. Bytes and headers
     // go as sent, only the key changes: no healer, no thinkingMode, no conversion.
-    if (clientFormat === 'anthropic' && await crossesBifrost(req, profile, mappedModel)) {
+    if (bifrost) {
       const { url } = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
       const headers = bifrostHeaders(req, profile);
       if (traceId) headers['x-intact-trace'] = traceId;
       try {
         const r = await forwardAnthropicDirect(res, payload, bodyBuffer, withClientQuery(url, req), headers, mappedModel, ac.signal, profile, true);
         answered = !r.error && r.status >= 200 && r.status < 300;
-        log({ outFormat: 'anthropic', status: r.status, tokens: r.tokens, responsePreview: '(bifrost)', error: r.error || undefined });
+        log({ status: r.status, tokens: r.tokens, responsePreview: '(bifrost)', error: r.error || undefined });
       } catch (err) {
         if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
         console.error(`[${profileKey}] Bifrost forward error:`, err.message);
@@ -936,7 +938,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
         toolResponse: halfTap?.text() || '',
         toolVersion: toolVersionFromUA(req.headers['user-agent']),
         inFormat: clientFormat,
-        outFormat,
+        outFormat: bifrost ? 'anthropic' : outFormat, // Bifrost converts nothing
         openerKey: profile.apiKey || ''
       });
     }
