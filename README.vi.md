@@ -421,12 +421,13 @@ switch ui                      # Mở giao diện Web UI trên trình duyệt
 switch status                  # Xem trạng thái kích hoạt của tất cả các CLI
 switch version                 # Xem version đang chạy và báo khi npm có bản mới
 switch doctor                  # Quét & thanh tra toàn bộ môi trường, settings và định tuyến
+switch update                  # Cài bản mới nhất và khởi động lại gateway trên bản đó
 switch on [profile]            # Khởi động gateway và kích hoạt một profile
 switch <profile>               # Kích hoạt một profile cho cả hai công cụ
 switch claude <profile>        # Đặt profile kích hoạt riêng cho Claude Code
 switch codex <profile>         # Đặt profile kích hoạt riêng cho Codex
 switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
-switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy
+switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy; tự update mỗi lần đăng nhập
 switch service uninstall       # Gỡ bỏ service chạy ngầm
 switch shim install            # Route phiên Claude và Codex mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
@@ -450,6 +451,20 @@ các route đầu vào mà chúng đại diện đã bị gỡ.
 Service không chạy trong shell của bạn. Vì vậy `switch service install` chép `LLM_SWITCHER_HOME`, `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` và `LLM_SWITCHER_BLINDFOLD_CERTS` vào unit systemd hoặc plist launchd khi các biến này có giá trị. Task Windows không mang được các biến này; hãy đặt chúng thành biến môi trường User. Nếu file định nghĩa đã cài khác file mới (ví dụ đã sửa tay), file cũ được giữ lại thành `<file>.bak`. Trên Windows, task được tạo từ file XML, nên đường dẫn có dấu cách không cần quote thêm và task không bị giới hạn thời gian chạy. Đường Windows này chưa được test trên Windows.
 
 Trên Linux, unit là service systemd *của user*: nó khởi động khi bạn đăng nhập. Muốn nó chạy ngay khi máy boot mà không cần đăng nhập (ví dụ server truy cập qua SSH), chạy một lần `loginctl enable-linger $USER`. Unit ghi đường dẫn tuyệt đối của `node` hiện tại; nếu bạn quản lý Node bằng nvm và gỡ phiên bản đó, hãy chạy lại `switch service install`.
+
+### Cập nhật
+
+Khi npm có bản mới, dashboard hiện một thông báo. Bấm **Update now** trong thông báo này. Gateway cài bản mới và chạy code mới. Sau đó dashboard tự tải lại. `switch update` làm việc tương tự từ terminal.
+
+Gateway cài bản mới theo một trong hai cách:
+
+- Bản git checkout chạy `git pull --ff-only`. Nếu checkout có thay đổi cục bộ, hoặc có commit không nằm trên nhánh upstream, việc cập nhật dừng lại và không đổi gì.
+- Bản cài bằng npm chạy `npm install -g llm-switcher@<latest>`.
+
+Các request đang chạy trên gateway lúc cập nhật sẽ chạy xong trên code cũ. Request mới đi vào code mới. Interceptor của Codex dừng lại, và gateway mới khởi động nó lại. Vì vậy một request Codex đang chạy đúng lúc đó sẽ lỗi một lần. Tiến trình cũ ở lại làm tiến trình cha của tiến trình mới cho tới khi gateway dừng. Nhờ vậy service manager vẫn giữ đúng tiến trình mà nó đã khởi động.
+
+`switch service install` thêm `--autoupdate` vào dòng lệnh của service. Với cờ này, gateway cài bản mới nhất trước khi khởi động, ở mỗi lần đăng nhập. Muốn cài service không có cờ này, chạy `switch service install --no-autoupdate`. Nếu service đã cài từ phiên bản cũ, chạy lại `switch service install` để thêm cờ.
+
 ### Phiên mở lại (`--resume`) và cơ chế shim — quan trọng
 
 `switch on` ghi `env-claude.*` và `env-codex.*`, và **không ghi gì** vào

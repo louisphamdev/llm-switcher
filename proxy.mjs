@@ -4,6 +4,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
@@ -21,10 +22,11 @@ import {
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
   ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
   codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
-  contractLabSettings, STATE_DIR
+  contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { checkForUpdate } from './version.mjs';
+import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +48,7 @@ if (missingNoProxy.length > 0) {
 // Fixed port for the process lifetime: changing "port" in config.json at runtime has no effect
 // env.cmd / flags would point at a port the server is not listening on.
 const PORT = resolvePort();
+let updateInProgress = false;
 
 // In-memory Request / Response Inspector Ring Buffer (up to 40 most recent requests)
 const requestLogs = [];
@@ -1416,6 +1419,28 @@ async function routeApi(req, res, method, pathname) {
     return sendJson(res, 200, { success: true, catalog: updated });
   }
 
+  // POST /api/update: progress as SSE; after a successful update the gateway hands over to the new code.
+  if (pathname === '/api/update') {
+    if (updateInProgress) return sendJson(res, 409, { error: 'An update is already in progress' });
+    updateInProgress = true;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    let result = null;
+    try {
+      result = await applyUpdate({ logger: (text) => sendSSE(res, 'log', { text }) });
+      sendSSE(res, 'result', result);
+    } catch (err) {
+      sendSSE(res, 'error', { message: err.message });
+    }
+    res.end();
+    if (result?.updated) {
+      console.log(`[llm-switcher:update] v${result.from} -> v${result.to}. Handing over to the new code.`);
+      handOver();
+    } else {
+      updateInProgress = false;
+    }
+    return;
+  }
+
   // POST /api/logs/clear
   if (pathname === '/api/logs/clear') {
     requestLogs.length = 0;
@@ -1969,7 +1994,36 @@ if (getMigrationCollision()) {
   console.error(`[llm-switcher:ERROR] Configuration migration collision: ${JSON.stringify(getMigrationCollision().clashingKeys)}. Fix config.json; it is not being rewritten.`);
 }
 
-server.listen(PORT, '127.0.0.1', () => {
+// The new code starts as a child that binds the port as soon as this listener closes. This process
+// finishes its open streams and then waits as the parent, so a service manager keeps the pid it
+// started, and `switch off` still stops the gateway by the pid that listens.
+async function handOver() {
+  server.close();
+  server.closeIdleConnections?.();
+  // The new gateway starts its own interceptor, so new interceptor code runs too.
+  await stopRecordedBlindfold().catch(() => {});
+  const args = process.argv.slice(2).filter(a => a !== '--autoupdate');
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], { stdio: 'inherit', windowsHide: true });
+  child.on('exit', (code) => process.exit(code ?? 1));
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { child.kill(sig); process.exit(0); });
+}
+
+// --autoupdate is on the service command line: each logon starts the newest release.
+let handedOver = false;
+if (process.argv.includes('--autoupdate')) {
+  try {
+    const r = await applyUpdate({ logger: (msg) => console.log(`[llm-switcher:autoupdate] ${msg}`) });
+    console.log(`[llm-switcher:autoupdate] ${r.reason}`);
+    if (r.updated) {
+      handedOver = true;
+      await handOver();
+    }
+  } catch (err) {
+    console.warn(`[llm-switcher:autoupdate] ${err.message} Starting the installed version.`);
+  }
+}
+
+if (!handedOver) server.listen(PORT, '127.0.0.1', () => {
   // A service start or a restart on a new port finds env-codex.* already pointing at the interceptor.
   const cfg = loadConfig();
   if (getMigrationCollision()) {

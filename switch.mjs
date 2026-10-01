@@ -20,7 +20,7 @@ import {
   suggestedRcFiles, auditRunningProcesses
 } from './shim.mjs';
 import {
-  serviceEnv, systemdUnit, launchdPlist, scheduledTaskXml, decodeConsoleText, portFromServiceText, writeServiceFile
+  serviceEnv, systemdUnit, launchdPlist, scheduledTaskXml, decodeConsoleText, portFromServiceText, autoupdateFromServiceText, writeServiceFile
 } from './service.mjs';
 
 const proxyScript = path.join(ROOT_DIR, 'proxy.mjs');
@@ -272,6 +272,9 @@ async function changePort(newPortStr) {
   const target = await probeGateway(p);
   if (isHeld(target)) refuseForeignPort(p, 'this switcher', target);
   const svc = installedService();
+  // The unit is rewritten below. It keeps the choice that `service install --no-autoupdate` made.
+  const svcText = svc ? serviceText(svc) : null;
+  const autoupdate = svcText === null || autoupdateFromServiceText(svcText);
   const wasRunning = await checkProxyRunning(oldPort);
   // Stop the old gateway even when a service is installed: it may be a copy started outside the unit.
   if (wasRunning) {
@@ -301,7 +304,7 @@ async function changePort(newPortStr) {
     } catch (err) {
       console.error(`[Error] Failed to restore config.json during rollback: ${err.message}`);
     }
-    if (svc) installService(oldPort);
+    if (svc) installService(oldPort, { autoupdate });
     else if (wasRunning) startProxyBackground(oldPort);
     let up = !svc && !wasRunning;
     for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(oldPort); }
@@ -311,7 +314,7 @@ async function changePort(newPortStr) {
   if (svc) {
     // The unit fixes the port on its command line, so it is rewritten and restarted, not fought.
     console.log(`Reinstalling the ${svc} service on port ${p}...`);
-    if (!installService(p)) await rollBack(`The ${svc} service could not be installed for port ${p}.`);
+    if (!installService(p, { autoupdate })) await rollBack(`The ${svc} service could not be installed for port ${p}.`);
     let up = false;
     for (let i = 0; i < 20 && !up; i++) { await sleep(250); up = await checkProxyRunning(p); }
     if (!up) await rollBack(`The ${svc} service did not come up on port ${p}. See ${proxyLogPath}.`);
@@ -669,14 +672,20 @@ function serviceStart(kind) {
   } catch {}
 }
 
-/** The port on the service's command line, or null when it cannot be read. */
-function servicePort(kind) {
+/** The installed service definition, or null when it cannot be read. */
+function serviceText(kind) {
   try {
-    if (kind === 'systemd') return portFromServiceText(fs.readFileSync(SYSTEMD_UNIT, 'utf8'));
-    if (kind === 'launchd') return portFromServiceText(fs.readFileSync(LAUNCHD_PLIST, 'utf8'));
-    if (kind === 'schtasks') return portFromServiceText(decodeConsoleText(execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher', '/XML'])));
+    if (kind === 'systemd') return fs.readFileSync(SYSTEMD_UNIT, 'utf8');
+    if (kind === 'launchd') return fs.readFileSync(LAUNCHD_PLIST, 'utf8');
+    if (kind === 'schtasks') return decodeConsoleText(execFileSync('schtasks', ['/Query', '/TN', 'LLMSwitcher', '/XML']));
   } catch {}
   return null;
+}
+
+/** The port on the service's command line, or null when it cannot be read. */
+function servicePort(kind) {
+  const text = serviceText(kind);
+  return text === null ? null : portFromServiceText(text);
 }
 
 function reportBackup(backup) {
@@ -693,7 +702,7 @@ function serviceStop(kind) {
 }
 
 // Writes the service for `port` and (re)starts it, so a running unit picks up the new command line.
-function installService(port) {
+function installService(port, { autoupdate = true } = {}) {
   const nodeBin = process.execPath;
   const env = serviceEnv();
   if (process.platform === 'win32') {
@@ -702,12 +711,12 @@ function installService(port) {
       const userId = process.env.USERDOMAIN && process.env.USERNAME ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : os.userInfo().username;
       const xmlPath = path.join(dir, 'task.xml');
       // Task Scheduler reads the XML as UTF-16, the encoding it declares.
-      fs.writeFileSync(xmlPath, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(scheduledTaskXml({ nodeBin, script: proxyScript, port, userId }), 'utf16le')]));
+      fs.writeFileSync(xmlPath, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(scheduledTaskXml({ nodeBin, script: proxyScript, port, userId, autoupdate }), 'utf16le')]));
       execFileSync('schtasks', ['/Create', '/TN', 'LLMSwitcher', '/XML', xmlPath, '/F'], { stdio: 'inherit' });
       try { execFileSync('schtasks', ['/End', '/TN', 'LLMSwitcher'], { stdio: 'ignore' }); } catch {}
       execFileSync('schtasks', ['/Run', '/TN', 'LLMSwitcher'], { stdio: 'ignore' });
       if (env.length) console.log(`[WARN] The scheduled task does not receive ${env.map(([k]) => k).join(', ')}. Set them as User environment variables.`);
-      console.log('[SUCCESS] Installed and started Windows Scheduled Task "LLMSwitcher" (auto-starts on logon).');
+      console.log(`[SUCCESS] Installed and started Windows Scheduled Task "LLMSwitcher" (${autoupdate ? 'auto-updates on logon and starts' : 'auto-starts on logon'}).`);
       return true;
     } catch (err) {
       console.error('[Error] Failed to register the scheduled task:', err.message);
@@ -718,7 +727,7 @@ function installService(port) {
   }
   if (process.platform === 'darwin') {
     try {
-      reportBackup(writeServiceFile(LAUNCHD_PLIST, launchdPlist({ nodeBin, script: proxyScript, port, logPath: proxyLogPath, env })));
+      reportBackup(writeServiceFile(LAUNCHD_PLIST, launchdPlist({ nodeBin, script: proxyScript, port, logPath: proxyLogPath, env, autoupdate })));
       try { execFileSync('launchctl', ['unload', LAUNCHD_PLIST], { stdio: 'ignore' }); } catch {}
       execFileSync('launchctl', ['load', LAUNCHD_PLIST], { stdio: 'inherit' });
       console.log('[SUCCESS] Installed and started macOS launchd service.');
@@ -729,7 +738,7 @@ function installService(port) {
     }
   }
   try {
-    reportBackup(writeServiceFile(SYSTEMD_UNIT, systemdUnit({ nodeBin, script: proxyScript, port, env })));
+    reportBackup(writeServiceFile(SYSTEMD_UNIT, systemdUnit({ nodeBin, script: proxyScript, port, env, autoupdate })));
     systemctlUser(['daemon-reload'], { stdio: 'inherit' });
     systemctlUser(['enable', 'llm-switcher'], { stdio: 'inherit' });
     systemctlUser(['restart', 'llm-switcher'], { stdio: 'inherit' });
@@ -745,7 +754,8 @@ async function manageService(action) {
   const port = getTargetPort();
 
   if (action === 'install') {
-    if (!installService(port)) process.exit(1);
+    const autoupdate = !process.argv.includes('--no-autoupdate');
+    if (!installService(port, { autoupdate })) process.exit(1);
     return;
   }
 
@@ -1106,6 +1116,78 @@ async function showVersion() {
   else console.log('This is the latest version.');
 }
 
+async function gatewayPid(port) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/health?challenge=update`, { signal: AbortSignal.timeout(2000) });
+    return (await r.json()).pid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// A running gateway updates itself and hands over to the new code, so the CLI and the dashboard
+// share one update path. With no gateway up, the files are updated here and the next start runs them.
+async function runUpdate() {
+  const port = getTargetPort();
+  if (!(await checkProxyRunning(port))) {
+    const { applyUpdate } = await import('./update.mjs');
+    try {
+      const r = await applyUpdate({ logger: (text) => console.log(`  ${text}`) });
+      console.log(r.updated ? `[SUCCESS] Updated v${r.from} -> v${r.to}.` : r.reason);
+    } catch (err) {
+      console.error(`[Error] ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+  const oldPid = await gatewayPid(port);
+  const res = await fetch(`http://127.0.0.1:${port}/api/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-llm-switcher-token': readAdminToken() || '' },
+    body: '{}'
+  });
+  if (!res.ok) {
+    console.error(`[Error] ${(await res.json().catch(() => ({}))).error || `HTTP ${res.status}`}`);
+    process.exit(1);
+  }
+  let result = null;
+  let failed = null;
+  let buf = '';
+  const decoder = new TextDecoder();
+  for await (const chunk of res.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const event = /^event: (.*)$/m.exec(block)?.[1];
+      const data = JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || 'null');
+      if (event === 'log') console.log(`  ${show(data.text)}`);
+      else if (event === 'result') result = data;
+      else if (event === 'error') failed = data.message;
+    }
+  }
+  if (failed || !result) {
+    console.error(`[Error] ${show(failed || 'The gateway closed the update stream without a result.')}`);
+    process.exit(1);
+  }
+  if (!result.updated) {
+    console.log(show(result.reason));
+    return;
+  }
+  console.log(`Updated v${show(result.from)} -> v${show(result.to)}. Waiting for the new gateway...`);
+  for (let i = 0; i < 60; i++) {
+    await sleep(250);
+    const pid = await gatewayPid(port);
+    if (pid && pid !== oldPid && (await checkProxyRunning(port))) {
+      console.log(`[SUCCESS] The gateway on port ${port} runs v${show(result.to)}.`);
+      return;
+    }
+  }
+  console.error(`[Error] The new gateway did not answer on port ${port}. See ${proxyLogPath}.`);
+  process.exit(1);
+}
+
 async function showModels(target) {
   const { syncLocalCatalog, refreshCatalog } = await import('./catalog.mjs');
   if (optionValue('--refresh') || process.argv.includes('--refresh')) {
@@ -1169,6 +1251,8 @@ if (cmd === 'off' || cmd === 'stop') {
   await showModels(subArg);
 } else if (cmd === 'status' || cmd === 'st') {
   await showStatus();
+} else if (cmd === 'update' || cmd === 'upgrade') {
+  await runUpdate();
 } else if (cmd === 'on' || cmd === 'start') {
   await turnOn(subArg);
 } else if (cmd && findProfileKey(config, rawCmd)) {
@@ -1179,12 +1263,13 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch status                  # Show multi-CLI active status');
   console.log('  switch version                 # Show the version and check for a newer one');
   console.log('  switch doctor                  # Audit environment, settings & routing');
+  console.log('  switch update                  # Install the newest release and restart the gateway');
   console.log('  switch on [profile]            # Start gateway & activate profile for all compatible targets');
   console.log('  switch <profile>               # Activate profile for all compatible targets');
   console.log('  switch claude <profile>        # Set active profile for Claude Code');
   console.log('  switch codex <profile>         # Set active profile for Codex');
   console.log('  switch port <number>           # Change gateway port');
-  console.log('  switch service install         # Install OS background autostart service');
+  console.log('  switch service install         # Install OS background autostart service (auto-updates on logon)');
   console.log('  switch service uninstall       # Uninstall background autostart service');
   console.log('  switch shim install            # Auto-inject env into resumed sessions (claude --resume)');
   console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');

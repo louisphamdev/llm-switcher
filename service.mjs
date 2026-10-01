@@ -14,13 +14,14 @@ export function serviceEnv(env = process.env) {
 const xmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const systemdQuote = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"`;
 
-export function systemdUnit({ nodeBin, script, port, env = [] }) {
+export function systemdUnit({ nodeBin, script, port, env = [], autoupdate = false }) {
+  const args = autoupdate ? `${systemdQuote(script)} --port ${port} --autoupdate` : `${systemdQuote(script)} --port ${port}`;
   return `[Unit]
 Description=LLM Switcher Local Gateway
 After=network.target
 
 [Service]
-ExecStart=${systemdQuote(nodeBin)} ${systemdQuote(script)} --port ${port}
+ExecStart=${systemdQuote(nodeBin)} ${args}
 ${env.map(([k, v]) => `Environment=${systemdQuote(`${k}=${v}`)}\n`).join('')}Restart=always
 
 [Install]
@@ -28,7 +29,7 @@ WantedBy=default.target
 `;
 }
 
-export function launchdPlist({ nodeBin, script, port, logPath, env = [] }) {
+export function launchdPlist({ nodeBin, script, port, logPath, env = [], autoupdate = false }) {
   const envBlock = env.length
     ? `  <key>EnvironmentVariables</key>
   <dict>
@@ -48,7 +49,7 @@ ${env.map(([k, v]) => `    <key>${xmlEscape(k)}</key>\n    <string>${xmlEscape(v
     <string>${xmlEscape(script)}</string>
     <string>--port</string>
     <string>${port}</string>
-  </array>
+${autoupdate ? '    <string>--autoupdate</string>\n' : ''}  </array>
 ${envBlock}  <key>StandardOutPath</key>
   <string>${xmlEscape(logPath)}</string>
   <key>StandardErrorPath</key>
@@ -65,7 +66,8 @@ ${envBlock}  <key>StandardOutPath</key>
 // Task Scheduler reads the command and its arguments from two elements, so no path goes through
 // the quoting rules of a /TR command line. A task made with /TR also stops after 72 hours by
 // default; PT0S removes that limit.
-export function scheduledTaskXml({ nodeBin, script, port, userId }) {
+export function scheduledTaskXml({ nodeBin, script, port, userId, autoupdate = false }) {
+  const args = autoupdate ? `"${script}" --port ${port} --autoupdate` : `"${script}" --port ${port}`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -94,7 +96,7 @@ export function scheduledTaskXml({ nodeBin, script, port, userId }) {
   <Actions Context="Author">
     <Exec>
       <Command>${xmlEscape(nodeBin)}</Command>
-      <Arguments>${xmlEscape(`"${script}" --port ${port}`)}</Arguments>
+      <Arguments>${xmlEscape(args)}</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -113,6 +115,10 @@ export function portFromServiceText(text) {
   const flat = String(text).replace(/<\/?string>\s*/g, ' ');
   const n = parseInt(/--port\s+(\d+)/.exec(flat)?.[1], 10);
   return Number.isInteger(n) && n > 0 && n <= 65535 ? n : null;
+}
+
+export function autoupdateFromServiceText(text) {
+  return /--autoupdate\b/.test(String(text));
 }
 
 /** Writes a service definition. Returns the backup path when it replaced different content. */

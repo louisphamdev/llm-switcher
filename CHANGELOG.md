@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Unreleased
+
+- **Update now:** The update notice on the dashboard has an **Update now** button. The gateway installs the release, and a new gateway process starts on the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
+- **Safe for a git checkout:** A git checkout updates with `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing.
+- **Open requests:** Open requests on the gateway finish on the old code. The Codex interceptor stops and the new gateway starts it again, so a Codex request that is open at that moment fails one time. The old process stays as the parent of the new process, so a service manager keeps the process that it started.
+- **Update at logon:** `switch service install` adds `--autoupdate` to the service. The gateway then installs the newest release before it starts. `--no-autoupdate` installs the service without the flag. Run `switch service install` again to add the flag to a service that is already installed. `switch port` keeps the choice of the installed service.
+
 ## Release 1.2.11
 
 - **Test connection on a Bifrost model:** The test sent a plain `ping` request, and Anthropic answers that with a fake 429 for a Claude Code account. Now, when intact names `bifrost_ua` for the model, the test reports that the key works and the model is served, and it sends no message.

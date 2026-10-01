@@ -184,6 +184,8 @@
     .update-notice[hidden] { display: none; }
     .update-notice b { color: var(--warn); font-weight: 600; }
     .update-notice code { font-family: var(--font-mono); font-size: 0.72rem; overflow-wrap: anywhere; color: var(--muted); }
+    .update-notice .update-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .update-notice #update-status { color: var(--muted); overflow-wrap: anywhere; }
 
     aside nav { display: grid; gap: 0.25rem; }
     aside a.nav-link {
@@ -886,7 +888,11 @@
     <div id="update-notice" class="update-notice" role="status" hidden>
       <b>Update available: v<span id="update-latest"></span></b>
       <code id="update-command"></code>
-      <button type="button" class="btn btn-outline btn-sm" onclick="copyUpdateCommand()">Copy command</button>
+      <div class="update-actions">
+        <button type="button" id="update-now" class="btn btn-primary btn-sm" onclick="runUpdate()">Update now</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="copyUpdateCommand()">Copy command</button>
+      </div>
+      <span id="update-status" aria-live="polite" hidden></span>
     </div>
 
     <nav id="sideNav">
@@ -2676,6 +2682,69 @@
     function copyUpdateCommand() {
       const cmd = document.getElementById('update-command').textContent;
       navigator.clipboard.writeText(cmd).then(() => showToast('Copied: ' + cmd), () => showToast('Copy failed. Select the command and copy it by hand.', true));
+    }
+
+    async function gatewayPid() {
+      try {
+        return (await (await fetch('/health?challenge=ui', { cache: 'no-store' })).json()).pid ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    // The gateway streams the update as SSE, then hands over to the new code. A new pid on /health
+    // means the new gateway answers; the reload then loads the new dashboard too.
+    async function runUpdate() {
+      const btn = document.getElementById('update-now');
+      const status = document.getElementById('update-status');
+      const say = (text) => { status.textContent = text; status.hidden = false; };
+      const reset = () => { btn.disabled = false; btn.textContent = 'Update now'; };
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+      say('Checking for the new release...');
+      try {
+        const before = await gatewayPid();
+        const res = await api('/api/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
+        let result = null, failed = null, buf = '';
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) !== -1) {
+            const block = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            const event = /^event: (.*)$/m.exec(block)?.[1];
+            const data = JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || 'null');
+            if (event === 'log') say(data.text);
+            else if (event === 'result') result = data;
+            else if (event === 'error') failed = data.message;
+          }
+        }
+        if (failed || !result) throw new Error(failed || 'The gateway closed the update without a result.');
+        if (!result.updated) {
+          say(result.reason);
+          reset();
+          return;
+        }
+        say('Installed v' + result.to + '. Restarting the gateway...');
+        for (let n = 0; n < 60; n++) {
+          await new Promise(r => setTimeout(r, 500));
+          const pid = await gatewayPid();
+          if (pid && pid !== before) {
+            location.reload();
+            return;
+          }
+        }
+        throw new Error('The new gateway did not answer. Read proxy.log.');
+      } catch (err) {
+        say(err.message);
+        showToast('Update failed: ' + err.message, true);
+        reset();
+      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {

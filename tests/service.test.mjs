@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
-  systemdUnit, launchdPlist, scheduledTaskXml, portFromServiceText, decodeConsoleText, serviceEnv, writeServiceFile
+  systemdUnit, launchdPlist, scheduledTaskXml, portFromServiceText, autoupdateFromServiceText, decodeConsoleText, serviceEnv, writeServiceFile
 } from '../service.mjs';
 
 const HAS_XMLLINT = (() => { try { execFileSync('xmllint', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -56,6 +56,32 @@ test('the port is read back from UTF-16 console output, as schtasks /Query /XML 
   assert.equal(portFromServiceText(decodeConsoleText(Buffer.from(xml, 'utf16le'))), 4567);
   assert.equal(portFromServiceText(decodeConsoleText(Buffer.from(xml, 'utf8'))), 4567);
   assert.equal(portFromServiceText('no port here'), null);
+});
+
+test('autoupdate flag is placed into task XML, systemd unit, and launchd plist', () => {
+  const xml = scheduledTaskXml({ nodeBin: 'node.exe', script: 'proxy.mjs', port: 3456, userId: 'u', autoupdate: true });
+  assert.match(xml, /<Arguments>&quot;proxy\.mjs&quot; --port 3456 --autoupdate<\/Arguments>/);
+  assert.equal(portFromServiceText(xml), 3456);
+
+  const unit = systemdUnit({ nodeBin: '/usr/bin/node', script: '/opt/proxy.mjs', port: 3456, autoupdate: true });
+  assert.match(unit, /ExecStart="\/usr\/bin\/node" "\/opt\/proxy\.mjs" --port 3456 --autoupdate/);
+  assert.equal(portFromServiceText(unit), 3456);
+
+  const plistText = launchdPlist({ nodeBin: '/node', script: '/proxy.mjs', port: 3456, logPath: '/log', autoupdate: true });
+  assert.match(plistText, /<string>--autoupdate<\/string>/);
+  assert.equal(portFromServiceText(plistText), 3456);
+});
+
+// `switch port` rewrites the service. It must keep the choice that `service install --no-autoupdate` made.
+test('the autoupdate flag is read back from each service definition', () => {
+  for (const autoupdate of [true, false]) {
+    const texts = [
+      scheduledTaskXml({ nodeBin: 'node.exe', script: 'proxy.mjs', port: 3456, userId: 'u', autoupdate }),
+      systemdUnit({ nodeBin: '/usr/bin/node', script: '/opt/proxy.mjs', port: 3456, autoupdate }),
+      launchdPlist({ nodeBin: '/node', script: '/proxy.mjs', port: 3456, logPath: '/log', autoupdate })
+    ];
+    for (const text of texts) assert.equal(autoupdateFromServiceText(text), autoupdate);
+  }
 });
 
 test('writeServiceFile keeps a hand-edited definition as .bak before it replaces it', (t) => {

@@ -424,12 +424,13 @@ switch ui                      # Open the Web UI dashboard in your browser
 switch status                  # Display status for all active CLI targets
 switch version                 # Show the version and tell you when npm has a newer one
 switch doctor                  # Audit environment, settings & routing
+switch update                  # Install the newest release and restart the gateway on it
 switch on [profile]            # Start the gateway and activate a profile
 switch <profile>               # Activate a profile for both tools
 switch claude <profile>        # Set the active profile for Claude Code only
 switch codex <profile>         # Set the active profile for Codex only
 switch port <number>           # Change the gateway port (restarts it if running)
-switch service install         # Install OS background autostart service (Windows / macOS / Linux)
+switch service install         # Install OS background autostart service (Windows / macOS / Linux); updates at each logon
 switch service uninstall       # Remove background autostart service
 switch shim install            # Route new Claude and Codex sessions through the gateway
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
@@ -452,6 +453,19 @@ target any more — the input routes those names stood for are gone.
 The service runs without your shell. `switch service install` therefore copies `LLM_SWITCHER_HOME`, `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
 
 On Linux the unit is a systemd *user* service: it starts when you log in. To start it at boot without a login (a server reached over SSH), run `loginctl enable-linger $USER` once. The unit records the absolute path of the current `node`; if you manage Node with nvm and remove that version, run `switch service install` again.
+
+### Updates
+
+When npm has a newer release, the dashboard shows a notice. Click **Update now** in this notice. The gateway installs the release and starts the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
+
+The gateway installs a release in one of two ways:
+
+- A git checkout runs `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing.
+- An npm install runs `npm install -g llm-switcher@<latest>`.
+
+Requests that are open on the gateway when the update starts finish on the old code. New requests go to the new code. The Codex interceptor stops, and the new gateway starts it again. Thus a Codex request that is open at that moment fails one time. The old process stays as the parent of the new process until the gateway stops. Thus a service manager keeps the process that it started.
+
+`switch service install` adds `--autoupdate` to the service command line. With this flag, the gateway installs the newest release before it starts, at each logon. To install the service without this flag, run `switch service install --no-autoupdate`. If a service from an older version is installed, run `switch service install` again to add the flag.
 
 ### Resumed sessions & the shim (important)
 
