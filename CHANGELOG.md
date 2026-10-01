@@ -1,6 +1,6 @@
 # Changelog — LLM Switcher
 
-## Unreleased
+## Release 1.2.11
 
 - **Test connection on a Bifrost model:** The test sent a plain `ping` request, and Anthropic answers that with a fake 429 for a Claude Code account. Now, when intact names `bifrost_ua` for the model, the test reports that the key works and the model is served, and it sends no message.
 
