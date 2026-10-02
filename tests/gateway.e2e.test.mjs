@@ -616,6 +616,24 @@ test('Bifrost: Claude Code to a Claude Code account on intact changes only the k
   assert.equal(logs[0].outFormat, 'bifrost');
 });
 
+// intact pins a conversation to one account by this header, so its prompt cache hits and a
+// compacted conversation can move. Every route that reaches intact must carry it.
+test('The Claude Code session id reaches the upstream on every route', async () => {
+  const routes = [
+    { name: 'direct', model: 'claude-opus-4-6', profile: 'ant', ua: 'claude-cli/2.1.300 (external, cli)', url: '/ant/' },
+    { name: 'convert', model: 'claude-sonnet-5', profile: 'intactcc', ua: 'claude-cli/2.1.300 (external, cli)', url: '/intact/v1/chat/completions' },
+    { name: 'bifrost', model: 'claude-opus-4-6', profile: 'intactcc', ua: 'claude-cli/2.1.300 (external, cli)', url: '/intact/v1/messages' }
+  ];
+  for (const r of routes) {
+    const res = await post('/v1/messages', { model: r.model, max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
+      { 'x-llm-profile': r.profile, 'user-agent': r.ua, 'x-claude-code-session-id': `sess-${r.name}` });
+    assert.equal(res.status, 200, r.name);
+    const up = received.at(-1);
+    assert.ok(up.url.startsWith(r.url), `${r.name} went to ${up.url}`);
+    assert.equal(up.headers['x-claude-code-session-id'], `sess-${r.name}`, `${r.name} dropped the session id`);
+  }
+});
+
 test('Bifrost stays off for a model that is not a Claude Code account', async () => {
   const res = await post('/v1/messages', { model: 'claude-sonnet-5', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] },
     { 'x-llm-profile': 'intactcc', 'user-agent': 'claude-cli/2.1.300 (external, cli)' });
