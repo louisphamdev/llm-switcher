@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Zero-dependency, multi-protocol edge gateway & provider switcher</b><br>
-  Bridge <b>Claude Code</b> and <b>Codex</b> to any upstream LLM API: OpenAI-compatible, Anthropic, or Vertex.<br>
+  Bridge <b>Claude Code</b>, <b>Codex</b> and the <b>Antigravity CLI</b> to any upstream LLM API: OpenAI-compatible, Anthropic, or Vertex.<br>
   Full bi-directional protocol conversion, official-model context windows, thinking protocol extraction, and edge message healing.
 </p>
 
@@ -27,7 +27,7 @@
 > **LLM Switcher solves this at the local network edge:**
 > - **100% Native Emulation:** Normalizes upstream APIs (intact, 9Router, Vertex, DeepSeek) into genuine Anthropic SSE (`thinking_delta` + `tool_use`) for Claude Code, and genuine Responses API events for Codex.
 > - **Client-Side Edge Companion:** Intentionally offloads heavy account pooling and key rotation to **[intact](https://github.com/louisphamdev/intact)** (recommended) or 9Router (basic alternative), keeping LLM Switcher zero-dependency and bloat-free.
-> - **Targeted Tool Scope:** Built specifically for **Claude Code** and **OpenAI Codex** (OpenCode natively supports custom models without shims; refer to intact for account pooling; and Antigravity isn't worth building for 😏).
+> - **Targeted Tool Scope:** Built specifically for **Claude Code**, **OpenAI Codex** and the **Antigravity CLI** (`agy`). OpenCode supports custom models without shims; refer to intact for account pooling.
 
 ---
 
@@ -132,9 +132,9 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
 
 - **Zero-Dependency Architecture:** Built 100% on Node.js standard libraries (`http`, `fs`, `os`, `path`, `fetch`). No npm dependencies, no bundled runtime bloat, cold-start under 50ms.
 - **Bi-Directional Protocol Conversion:**
-  - **4 Client Inbound Formats:** Anthropic Messages, OpenAI Chat Completions, Codex Responses API, Vertex `generateContent`.
+  - **3 Client Inbound Formats:** Anthropic Messages (Claude Code), Codex Responses API (Codex), Code Assist (Antigravity CLI).
   - **3 Upstream Outbound Formats:** OpenAI Chat, Anthropic Native, Vertex Native.
-- **Bifrost:** Claude Code on a Claude Code account of intact goes through unchanged. Only the key changes. No conversion, no healer, no filter. The gateway turns it on by itself. [Bifrost](#bifrost-claude-code-to-a-claude-code-account-on-intact)
+- **Bifrost:** A coding tool on an account of its own provider in intact goes through unchanged. Only the key changes. No conversion, no healer, no filter. This works for Claude Code, Codex and the Antigravity CLI. The gateway turns it on by itself. [Bifrost](#bifrost-a-coding-tool-to-its-own-account-on-intact)
 - **Multi-Active CLI Routing:** Run Claude Code on Profile A, Codex on Profile B, and Cursor on Profile C simultaneously on a single gateway instance.
 - **Deep Thinking & Reasoning Extraction:** Tested on 48 live response combinations. Accurately extracts `reasoning_content`, `<think>` tags, Vertex `thought` parts, and signatures into native `thinking_delta` blocks.
 - **Edge Healer Engine (Anti-Collision for Token Optimizers):**
@@ -148,7 +148,12 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
 
 ---
 
-## Recent Highlights (v1.2.0)
+## Recent Highlights (v1.3.0)
+
+- **Antigravity CLI (`agy`):** A third tool with its own profile. `switch agy <profile>` routes it. agy reaches the gateway through `CLOUD_CODE_URL`, so it needs no proxy and no certificate. Remote control keeps working, because it uses its own host. [Antigravity CLI setup](#antigravity-cli-agy-setup)
+- **Bifrost for agy and Codex:** On an intact pool, agy and Codex requests cross unchanged, as Claude Code requests already did.
+
+## Earlier Highlights (v1.2.0)
 
 - **Zero-Mutation Interceptor:** All traffic routes via `HTTPS_PROXY` without editing client configs (`~/.claude/settings.json`, `~/.codex/config.toml`).
 - **Concurrent Multi-Tool Support:** Simultaneously configures `{ claude, codex }` profiles with dynamic, zero-downtime switching (`POST /_control/active-tools`).
@@ -224,12 +229,14 @@ Each tool gets its own file instead, and only the matching shim loads it:
 | --- | --- |
 | `env-claude.sh` / `env-claude.cmd` | the `claude` shim |
 | `env-codex.sh` / `env-codex.cmd` | the `codex` shim |
+| `env-agy.sh` / `env-agy.cmd` | the `agy` shim |
 | `env.sh` / `env.cmd` | nobody. Neutral stub, kept only so an old rc line stays silent |
 
 An empty per-tool file means that tool is off: the shim then leaves the environment alone and the
 tool reaches its official endpoint. Before it loads anything, the shim also scrubs a stale
 `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `ANTHROPIC_DEFAULT_<TIER>_MODEL` inherited from an older
-release or from your own shell, so `switch off` really is off.
+release or from your own shell, so `switch off` really is off. The `agy` shim removes a
+`CLOUD_CODE_URL` that points at the gateway while agy is off.
 
 In practice you never call these files. `switch shim install` puts `~/.llm-switcher/bin` on `PATH`,
 and every `claude` and `codex` invocation — including `claude --resume` in a brand-new terminal —
@@ -272,6 +279,63 @@ codex
 On Windows, add `%USERPROFILE%\.llm-switcher\bin` before the real Codex directory in `PATH`. Open a new terminal after the change.
 
 The shim never edits `~/.codex/config.toml`. Codex reaches the gateway cleanly through `HTTPS_PROXY` and the interceptor, retaining its own model names and context windows. Model catalog entries are served dynamically at `/v1/models`.
+
+### Antigravity CLI (agy) setup
+
+agy is the command-line client of Google Antigravity. It reads the variable `CLOUD_CODE_URL` and
+sends every Code Assist call to that address. The `agy` shim sets this variable to the gateway,
+so agy needs no proxy and no certificate.
+
+1. Sign in to agy with your Google account. agy needs this sign-in for its own calls.
+2. Create a profile with `"tool": "agy"`. The dashboard has a template, **agy on intact**.
+3. Run these commands, then open a new terminal:
+   ```bash
+   switch shim install
+   switch agy <profile>
+   agy
+   ```
+
+The gateway routes the calls of agy as follows:
+
+| Call | Where it goes |
+| --- | --- |
+| An agent turn (`requestType: "agent"`) | The profile of agy: Bifrost on intact, or a conversion to any upstream |
+| A checkpoint summary, the model list, quota, sign-in state, analytics | Google, with your own token |
+| Any call while agy is off | Google |
+
+A call to Google keeps its headers and its bytes. The gateway removes only its own headers
+(`x-llm-profile`, `x-profile`, `x-llm-switcher-token`, and the contract-lab headers `x-intact-probe`
+and `x-intact-trace`) and the headers of a proxy in front of it (`proxy-authorization`,
+`x-forwarded-*`, `x-real-ip`).
+
+While agy is routed, the gateway refuses an agent turn that it cannot route. It never sends that
+turn to Google instead:
+
+| Condition | Answer to agy |
+| --- | --- |
+| `config.json` never loaded | 503 |
+| The request names a profile that does not exist (`x-llm-profile`, `?profile=`) | 400 |
+| The request body does not parse | 400 |
+| The request names no model, and the `main` slot holds a `*` | 400 |
+
+The profile has one model slot, `main`. A `*` in the value stands for the model that agy picked:
+
+- `antigravity/*` sends `gemini-3.8-flash-high` to intact as `antigravity/gemini-3.8-flash-high`.
+  intact names agy as the own client of its Antigravity pool, so the request crosses through
+  Bifrost.
+- `claude/claude-opus-5` sends every agent turn to that model. The gateway converts the Code
+  Assist request, and converts the answer back to the Code Assist shape.
+
+Remote control of agy uses its own host (`jetski-webchannel.googleapis.com`). It does not use
+`CLOUD_CODE_URL`, so it works while the switcher routes agy.
+
+The Google token of agy goes only to Google. A Bifrost or converted request carries the key of the
+profile, never this token.
+
+agy sends this token in clear text to `CLOUD_CODE_URL`. For this reason, the `agy` shim asks the
+gateway for its identity proof before it gives agy the variable. If the port does not answer with
+the proof of this install within 3 seconds, the shim removes the variable, prints one line, and agy
+uses its official endpoint.
 
 ### Blindfold mode (optional)
 
@@ -404,18 +468,27 @@ Add the server to your MCP configuration (for example `opencode.jsonc`, `claude_
 
 ---
 
-## Bifrost: Claude Code to a Claude Code account on intact
+## Bifrost: a coding tool to its own account on intact
 
-Bifrost sends a Claude Code request to intact without a change. Only the key changes. The healer, `thinkingMode`, and the format conversion do not run.
+Bifrost sends a request of a coding tool to intact without a change. Only the key changes. The healer, `thinkingMode`, and the format conversion do not run.
 
 Bifrost has no setting. The gateway turns it on for each request when two conditions are true:
 
-1. intact gives `bifrost_ua` for the mapped model in `GET /v1/models/{model}`. intact gives it only for a model of a Claude Code account.
+1. intact gives `bifrost_ua` for the mapped model in `GET /v1/models/{model}`. intact gives it only for a model of an account that belongs to the provider of the tool.
 2. The `User-Agent` of the client starts with the `bifrost_ua` value.
 
-The gateway keeps the answer from intact for 10 minutes for each model. If intact does not answer, the gateway keeps the result for 30 seconds and uses the normal route.
+| Tool | `bifrost_ua` | Path on intact |
+| --- | --- | --- |
+| Claude Code | `claude-cli/` | `/v1/messages` |
+| Codex (HTTP) | `codex_cli_rs/` | `/v1/responses` |
+| Antigravity CLI | `antigravity/cli/` | `/v1/v1internal:streamGenerateContent`, `/v1/v1internal:generateContent` |
 
-The gateway sends every client header, the body bytes, and the query string. It removes the credentials of the client and the hop-by-hop headers, and it sets `x-api-key` to the profile key. If the profile maps the model, the gateway also changes the `model` field. A different client, or a model that is not a Claude Code account, uses the normal route of the profile.
+For agy, intact also writes the project of the chosen account into the request. Codex over its
+WebSocket transport still uses the normal route.
+
+The gateway keeps the answer from intact for 10 minutes for each model. Only a 2xx answer is kept that long. If intact does not answer, or answers with an error (a 404 too), the gateway uses the normal route. It asks again after 30 seconds (`LLM_SWITCHER_BIFROST_RETRY_MS`), and it prints one line for each series of failures.
+
+The gateway sends every client header, the body bytes, and the query string. It removes the credentials of the client and the hop-by-hop headers, and it sets `x-api-key` to the profile key. If the profile maps the model, the gateway also changes the `model` field. A different client, or a model of an account that does not belong to the provider of the tool, uses the normal route of the profile.
 
 ## CLI Reference
 
@@ -429,25 +502,27 @@ switch on [profile]            # Start the gateway and activate a profile
 switch <profile>               # Activate a profile for both tools
 switch claude <profile>        # Set the active profile for Claude Code only
 switch codex <profile>         # Set the active profile for Codex only
+switch agy <profile>           # Set the active profile for the Antigravity CLI only
 switch port <number>           # Change the gateway port (restarts it if running)
 switch service install         # Install OS background autostart service (Windows / macOS / Linux); updates at each logon
 switch service uninstall       # Remove background autostart service
-switch shim install            # Route new Claude and Codex sessions through the gateway
+switch shim install            # Route new Claude, Codex and agy sessions through the gateway
 switch shim status             # Verify shims + detect running sessions that bypass the gateway
 switch shim uninstall          # Remove the launcher shims
-switch plugin install          # Optional: a launch notice inside Claude Code and Codex
+switch plugin install          # Optional: a launch notice inside Claude Code, Codex and agy
 switch plugin status           # Report whether that notice is installed
 switch plugin uninstall        # Remove that notice
 switch off                     # Stop everything and restore the official endpoints
 switch off claude              # Turn Claude Code off; Codex keeps running
-switch off codex               # Turn Codex off; Claude Code keeps running
+switch off codex               # Turn Codex off; the other tools keep running
+switch off agy                 # Turn the Antigravity CLI off; the other tools keep running
 switch contract-probe [--model m] # Drive the contract-lab variants through the gateway
 switch contract-check          # Turn the open contract findings into failing tests
 ```
 
-Targets are `claude` and `codex`, and they are the only two. A profile is one tool: `tool` is
-either `"claude"` or `"codex"` (or `null` for a profile that is switched off), so `switch claude` and
-`switch codex` can never point at the same profile by accident. There is no `openai` or `vertex`
+Targets are `claude`, `codex` and `agy`. A profile is one tool: `tool` is `"claude"`, `"codex"` or
+`"agy"` (or `null` for a profile that is switched off), so two targets can never point at the same
+profile by accident. There is no `openai` or `vertex`
 target any more — the input routes those names stood for are gone.
 
 The service runs without your shell. `switch service install` therefore copies `LLM_SWITCHER_HOME`, `CLAUDE_CONFIG_DIR`, `LLM_SWITCHER_CONFIG`, `LLM_SWITCHER_STATE_DIR` and `LLM_SWITCHER_BLINDFOLD_CERTS` into the systemd unit or the launchd plist when they are set. The Windows task cannot carry them; set them as User environment variables instead. If the installed definition differs from the new one, for example after a hand edit, the old file is kept as `<file>.bak`. On Windows the task is created from an XML definition, so paths with spaces need no extra quoting and the task has no run-time limit. This Windows path is not tested on Windows yet.
@@ -546,6 +621,7 @@ This writes one file for each tool, and it opens no configuration file of either
 | --- | --- | --- |
 | Claude Code | `~/.claude/skills/llm-switcher-status/` | A folder with `.claude-plugin/plugin.json` under a skills directory loads as a plugin on the next session. There is no marketplace and no install step. |
 | Codex | `~/.codex/hooks.json` | Codex reads this file by itself. `config.toml` stays closed. |
+| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy reads this file at the start. agy 1.2.7 loads it, but it does not run global hooks yet. Only `.agents/hooks.json` in a workspace runs. Until a release runs global hooks, the shim toast is the notice for agy. agy cannot run a quoted path, so if the path of `hook-status.mjs` holds a space, the install skips agy and prints `[Skip]`. |
 
 An existing `~/.codex/hooks.json` is merged. Your own hooks stay, and `switch plugin uninstall` takes
 only ours away. If the file does not parse, the install refuses it and changes nothing, because that
@@ -576,14 +652,15 @@ of the routing.
   "port": 3456,
   "activeProfiles": {
     "claude": "claude-default",      // Active profile for Claude Code (/v1/messages)
-    "codex": "codex-default"         // Active profile for Codex (/v1/responses)
+    "codex": "codex-default",        // Active profile for Codex (/v1/responses)
+    "agy": "agy-default"              // Active profile for the Antigravity CLI (/v1internal:*)
   },
   "blindfold": { "port": 3457 },     // Interceptor port. Top-level, optional, default 3457
   "profiles": {
     "claude-default": {
       "name": "Intact Gateway",
       "mode": "convert",             // hybrid | convert | direct
-      "tool": "claude",              // claude | codex | null (profile is off)
+      "tool": "claude",              // claude | codex | agy | null (profile is off)
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
       "thinkingMode": "auto",        // auto | native | off (see Advanced Options)
       "baseURL": "https://intact.example.com/v1", // or https://api.9router.com/v1
@@ -613,6 +690,16 @@ of the routing.
       "codexRoles": { "review": "gpt-5.6-sol" }, // optional: pair one role with another public name
       "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
       "model1M": { "main": false, "review": false, "subagent": false }
+    },
+    "agy-default": {
+      "name": "agy via intact",
+      "mode": "convert",
+      "tool": "agy",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.example.com/v1",
+      "apiKey": "sk-...",
+      // One slot. * stands for the model that agy picked; antigravity/* crosses Bifrost on intact.
+      "defaultModels": { "main": "antigravity/*" }
     }
   },
   "debug": false,
@@ -663,6 +750,9 @@ Because of this split, a provider fingerprint is never a rule in this gateway. I
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Use a config file outside the data folder (the proxy, `switch` and `mcp.mjs` all honour it). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Override the listening port of the gateway (priority: flag > env > `config.port`). |
 | `LLM_SWITCHER_BLINDFOLD_PORT` | Override the listening port of the interceptor (priority: env > `config.blindfold.port` > 3457). Set it together with `LLM_SWITCHER_PORT` to run a second instance. |
+| `LLM_SWITCHER_CODE_ASSIST_URL` | The Code Assist host that receives the agy calls the gateway does not route (default `https://daily-cloudcode-pa.googleapis.com`). |
+| `LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS` | Idle time of such a call, from 1000 to 2147483647 ms (default 300000). Before the answer starts, agy gets a 504. After it starts, the connection is cut. |
+| `LLM_SWITCHER_BIFROST_RETRY_MS` | Time before the gateway asks intact again after a failed Bifrost lookup (default 30000 ms). |
 | `x-llm-profile: <key>` header (alias `x-profile`) or `?profile=<key>` | Route a single request through a specific profile. An unknown key returns HTTP 400 instead of silently falling back. |
 | `profile.thinkingMode` | `auto` (default, for gateways like intact or 9Router): restore stripped thinking, inject a `<think>` guide for non-reasoning models, send `thinking` + `reasoning_effort`. `native` (strict OpenAI APIs): send only `reasoning_effort` when the client asks, never touch the prompt, use `max_completion_tokens`. `off`: never send reasoning parameters. |
 | `profile.endpoints.countTokens` | Override the Anthropic `count_tokens` URL. |

@@ -1,5 +1,28 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.0
+
+- **Antigravity CLI (`agy`):** A third tool, beside Claude Code and Codex. A profile with `"tool": "agy"` routes it, and `switch agy <profile>` turns it on. `switch off agy` turns it off and leaves the other tools alone. The dashboard has an agy row and an **agy on intact** template.
+- **No proxy and no certificate for agy:** The `agy` shim sets `CLOUD_CODE_URL` to the gateway. agy is a Go program, and Go on Windows trusts only the system store, so an interceptor would need a certificate in that store. `CLOUD_CODE_URL` needs none. agy also ignores `HTTPS_PROXY`.
+- **What agy sends where:** Only the agent turns of agy go to its profile. Checkpoint summaries, the model list, quota, sign-in state and analytics go to Google with the token of the person, unchanged. While agy is off, every call goes to Google.
+- **Remote control:** agy reaches its remote control through `jetski-webchannel.googleapis.com`, not through `CLOUD_CODE_URL`. It stays connected while the switcher routes agy.
+- **Model slot:** An agy profile has one slot, `main`. A `*` in the value stands for the model that agy picked, so `antigravity/*` keeps the choice of agy on an intact pool.
+- **Conversion:** An agent turn on any other upstream is converted from Code Assist and back. Each answer chunk is wrapped as `{"response": …, "traceId": …}`, and each function call keeps its id, so agy matches the tool result.
+- **Bifrost for agy and Codex:** When intact names the client of a model (`bifrost_ua`), the request crosses unchanged. agy goes to `/v1/v1internal:<method>` and Codex (HTTP) to `/v1/responses`. Only the key changes. The Google token of agy never reaches intact. Codex over the WebSocket transport keeps the normal route.
+- **Usage of a passthrough:** The usage tap reads Gemini `usageMetadata`, so a Bifrost answer of agy reports its tokens in the inspector.
+- **Launch notice:** `switch plugin install` also writes an entry into `~/.gemini/antigravity-cli/hooks.json`. agy 1.2.7 loads this file but does not run global hooks yet, so the shim toast is the notice for agy today. `switch plugin status` says so.
+- **The agy shim proves the gateway first:** agy sends its Google token in clear text to `CLOUD_CODE_URL`, so the shim asks the gateway for its identity proof (`verify-gateway.mjs`). If no proof comes within 3 seconds, the shim removes the variable and agy keeps its official endpoint.
+- **Passthrough limits:** A Code Assist call that the gateway does not route has an idle limit (`LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS`, default 5 minutes). A broken upstream answer cuts the connection to agy instead of ending it as if it were complete.
+- **Passthrough headers:** A call to Google keeps every header of agy, `x-goog-*` included. Only the headers of the gateway (`x-llm-profile`, `x-profile`, `x-llm-switcher-token`, `x-intact-*`) and the proxy headers (`proxy-authorization`, `x-forwarded-*`, `x-real-ip`) are removed.
+- **No silent fallback to Google:** While agy is routed, an agent turn that the gateway cannot route gets an error. A config that never loaded gives 503. A named profile that does not exist gives 400. A body that does not parse gives 400. A request with no model on a `*` slot gives 400.
+- **Bifrost lookup:** A failed lookup (no answer, or any answer that is not 2xx, a 404 too) keeps the normal route for 30 seconds only (`LLM_SWITCHER_BIFROST_RETRY_MS`), and the gateway prints one line for each series of failures. Before, an error answer held the normal route for 10 minutes without a word.
+- **Broken Bifrost stream:** If a Bifrost or direct stream breaks, the gateway cuts the connection. Before, the client got a clean end of a half answer.
+- **`switch plugin`:** Each tool installs on its own, so a fault in one hooks file does not stop the others. If the path of `hook-status.mjs` holds a space, agy is skipped (`[Skip]`), not failed. An agy `hooks.json` whose root is not an object is never changed. `switch plugin status` names an agy `hooks.json` that does not parse.
+- **Migration:** The migration of an old `config.json` keeps `activeProfiles.agy`, and a pointer to a profile renamed because its key became a command word (`agy` becomes `agy-profile`) follows the rename.
+- **`switch shim status` on Windows:** It now finds the command the way Windows does, by directory and then by `PATHEXT`. Before, an `agy.exe` earlier on `PATH` than the shim was reported as "shim active".
+- **The launch files of agy** (`env-agy.*`, `route-agy.txt`) are ignored by git and npm, like those of the other tools.
+- **Needs intact 0.1.14 or newer** for Bifrost of agy and Codex.
+
 ## Release 1.2.12
 
 - **Update now:** The update notice on the dashboard has an **Update now** button. The gateway installs the release, and a new gateway process starts on the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
