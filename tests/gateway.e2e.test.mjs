@@ -1297,7 +1297,7 @@ test('/api/switch deactivate: the dashboard payload works, the CLI payload works
     // What the dashboard sends: the profile in `profile`, a boolean in `deactivate`.
     const dash = await post('/api/switch', { profile: 'chat', deactivate: true });
     assert.equal(dash.status, 200);
-    assert.deepEqual((await dash.json()).activeProfiles, { claude: null, codex: null });
+    assert.deepEqual((await dash.json()).activeProfiles, { claude: null, codex: null, agy: null });
 
     // The same profile is now inactive, so asking again must not report success.
     const again = await post('/api/switch', { profile: 'chat', deactivate: true });
@@ -1308,7 +1308,7 @@ test('/api/switch deactivate: the dashboard payload works, the CLI payload works
     assert.equal((await post('/api/switch', { profile: 'chat' })).status, 200);
     const cli = await post('/api/switch', { deactivate: 'chat' });
     assert.equal(cli.status, 200);
-    assert.deepEqual((await cli.json()).activeProfiles, { claude: null, codex: null });
+    assert.deepEqual((await cli.json()).activeProfiles, { claude: null, codex: null, agy: null });
 
     // `deactivate: true` with no profile names nothing.
     assert.equal((await post('/api/switch', { deactivate: true })).status, 400);

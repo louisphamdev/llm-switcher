@@ -80,7 +80,7 @@ async function postSwitch(port, target, profile) {
 const TOOLS = [
   {
     name: 'switcher_status',
-    description: 'Get live status of LLM Switcher gateway: port, the two tool targets (Claude Code, Codex), and the active profile of each.',
+    description: 'Get live status of LLM Switcher gateway: port, the three tool targets (Claude Code, Codex, Antigravity CLI), and the active profile of each.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -98,14 +98,14 @@ const TOOLS = [
   },
   {
     name: 'switcher_switch_profile',
-    description: 'Programmatically change the active profile for one tool: Claude Code (claude) or Codex (codex).',
+    description: 'Programmatically change the active profile for one tool: Claude Code (claude), Codex (codex) or the Antigravity CLI (agy).',
     inputSchema: {
       type: 'object',
       properties: {
         target: {
           type: 'string',
-          description: 'Tool to switch: "claude" (Claude Code) or "codex" (Codex)',
-          enum: ['claude', 'codex']
+          description: 'Tool to switch: "claude" (Claude Code), "codex" (Codex) or "agy" (Antigravity CLI)',
+          enum: ['claude', 'codex', 'agy']
         },
         profile: {
           type: 'string',
@@ -165,6 +165,7 @@ async function handleToolCall(name, args) {
       `Active Profiles by tool:`,
       `  - Claude Code (/v1/messages)  : [${activeMap.claude || 'OFF'}]`,
       `  - Codex CLI   (/v1/responses) : [${activeMap.codex || 'OFF'}]`,
+      `  - agy CLI     (/v1internal:*) : [${activeMap.agy || 'OFF'}]`,
       '',
       `Available Profiles in config: ${Object.keys(cfg.profiles || {}).join(', ')}`,
       `Dashboard Web UI: http://127.0.0.1:${port}/ui`
@@ -217,7 +218,7 @@ async function handleToolCall(name, args) {
     if (args?.verbose) {
       findings.push('');
       findings.push('--- Routing variables of this process ---');
-      const names = Object.keys(process.env).filter(k => /^(ANTHROPIC_BASE_URL|OPENAI_BASE_URL|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|CODEX_CA_CERTIFICATE|LLM_SWITCHER_[A-Z0-9_]+)$/.test(k)).sort();
+      const names = Object.keys(process.env).filter(k => /^(ANTHROPIC_BASE_URL|OPENAI_BASE_URL|CLOUD_CODE_URL|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|CODEX_CA_CERTIFICATE|LLM_SWITCHER_[A-Z0-9_]+)$/.test(k)).sort();
       for (const k of names) findings.push(`${k}=${withoutCredentials(process.env[k])}`);
       if (!names.length) findings.push('(none set)');
     }

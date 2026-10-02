@@ -3,16 +3,17 @@
 //
 // The shim toast fires only when the shim runs, and that needs the shim directory first on PATH.
 // This runs inside the tool, so it reports even when the launcher is the person's own script. Claude
-// Code and Codex both read one JSON object from stdout and show `systemMessage` to the person.
+// Code, Codex and agy each read one JSON object from stdout and take `systemMessage` from it.
 //
 // Two rules hold, whatever happens:
 //   - It prints exactly one JSON object and exits 0. A hook must never fail a session.
 //   - A tool with no profile gets an empty object. Silence for a tool on its official endpoint.
 //
-// Usage: node hook-status.mjs <claude|codex>
+// Usage: node hook-status.mjs <claude|codex|agy>
 import fs from 'node:fs';
 
-const TOOLS = ['claude', 'codex'];
+const TOOLS = ['claude', 'codex', 'agy'];
+const ROUTE_FILE = { claude: 'routeClaude', codex: 'routeCodex', agy: 'routeAgy' };
 
 const readOrEmpty = (file) => {
   try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
@@ -25,7 +26,7 @@ async function message(tool) {
 
   // The route file is written with the env file of the same tool, so it is empty exactly when that
   // tool is not routed. One read answers both "is the switcher on" and "is this tool on".
-  const route = readOrEmpty(tool === 'codex' ? s.paths.routeCodex : s.paths.routeClaude).trim();
+  const route = readOrEmpty(s.paths[ROUTE_FILE[tool]]).trim();
   if (!route || !fs.existsSync(s.paths.activeFlag)) return {};
 
   const port = s.resolvePort([], s.loadConfig() || {});

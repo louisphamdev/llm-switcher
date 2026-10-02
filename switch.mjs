@@ -44,7 +44,7 @@ if (!config) {
 }
 
 // R5: two commands, one per tool. The openai and vertex commands went with their input routes.
-const TARGET_ALIASES = { claude: 'claude', codex: 'codex' };
+const TARGET_ALIASES = { claude: 'claude', codex: 'codex', agy: 'agy' };
 
 // Strip --port/-p and their value from positional args. -p is the global option everywhere, as in
 // resolvePort; `switch port <n>` is the command that changes the port.
@@ -337,7 +337,7 @@ async function changePort(newPortStr) {
 }
 
 function printProfile(profile) {
-  console.log(`Input Target: ${show(profile.inFormat || 'auto').toUpperCase()}`);
+  console.log(`Input Target: ${show(profile.tool || profile.inFormat || 'auto').toUpperCase()}`);
   console.log(`Routing:      ${profile.outFormat ? `out=${show(profile.outFormat)}` : `mode=${show(profile.mode || 'hybrid')}`}`);
   console.log(`Upstream:     ${show(profile.baseURL || '(not set)')}`);
   for (const slot of modelSlotsForProfile(profile)) {
@@ -347,7 +347,7 @@ function printProfile(profile) {
 }
 
 function printTargets(activeMap) {
-  const labels = { claude: 'Claude Code', codex: 'Codex' };
+  const labels = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity' };
   for (const t of TOOLS) {
     console.log(`  ${labels[t].padEnd(12)} (${t.padEnd(11)}) -> ${activeMap[t] ? show(activeMap[t]) : 'OFF (official)'}`);
   }
@@ -529,7 +529,7 @@ async function turnOff(targetArg) {
   if (targetArg) {
     const target = TARGET_ALIASES[targetArg.toLowerCase()];
     if (!target) {
-      console.error(`[Error] Unknown target "${targetArg}". Use one of: claude, codex`);
+      console.error(`[Error] Unknown target "${targetArg}". Use one of: claude, codex, agy`);
       process.exit(1);
     }
     if (refused) {
@@ -564,7 +564,7 @@ async function turnOff(targetArg) {
   console.log('Deactivating Proxy and restoring official endpoints...');
   if (refused) {
     // Both pointers through the same writer. Nothing below runs until those bytes are on disk (R7b).
-    casOff(['claude', 'codex']);
+    casOff(TOOLS);
     reportSettings(clearLaunchState(port));
     const result = await stopProxy(port);
     reportStopped(result, port);
@@ -591,7 +591,7 @@ async function turnOff(targetArg) {
 // Only a CLI whose target is active is expected to go through the gateway.
 function auditActiveClis() {
   const map = getActiveMap(config);
-  return auditRunningProcesses([map.claude && 'claude', map.codex && 'codex'].filter(Boolean));
+  return auditRunningProcesses(TOOLS.filter(t => map[t]));
 }
 
 // settings.json edits are never silent: name every value the switcher removed.
@@ -799,13 +799,15 @@ async function managePlugin(action = 'status') {
 
   if (act === 'install' || act === 'on') {
     const { CURRENT_VERSION } = await import('./version.mjs');
-    const { installed, failed, paths } = installPlugin({}, CURRENT_VERSION);
+    const { installed, skipped, failed, paths } = installPlugin({}, CURRENT_VERSION);
     for (const tool of installed) console.log(`[OK] ${tool}: ${paths[tool]}`);
+    for (const k of skipped) console.log(`[Skip] ${k.tool}: ${k.reason}`);
     for (const f of failed) console.error(`[Error] ${f.tool}: ${f.reason}`);
     if (installed.length) {
       console.log('\nNeither settings.json nor config.toml was opened. Each tool reads a file of its own.');
       console.log(`Claude Code loads it on the next session as ${PLUGIN_NAME}@skills-dir.`);
       console.log('Codex asks you once to trust a new hook. Accept it, or the hook stays off.');
+      if (installed.includes('agy')) console.log(`agy: ${pluginStatus().agy.note}.`);
       console.log('\nTo remove it:  switch plugin uninstall');
     }
     if (failed.length) process.exit(1);
@@ -826,7 +828,10 @@ async function managePlugin(action = 'status') {
   console.log(`             ${st.claude.path}`);
   console.log(`Codex      : ${st.codex.installed ? 'INSTALLED' : 'not installed'}`);
   console.log(`             ${st.codex.path}`);
-  if (!st.claude.installed || !st.codex.installed) {
+  console.log(`Antigravity: ${st.agy.installed ? 'INSTALLED' : 'not installed'}`);
+  console.log(`             ${st.agy.path}${st.agy.error ? ` (${st.agy.error})` : ''}`);
+  console.log(`             ${st.agy.note}`);
+  if (!st.claude.installed || !st.codex.installed || !st.agy.installed) {
     console.log(`\nThe notice is optional. Without it the gateway still routes every request,`);
     console.log(`and the shim still raises its own notice at launch.`);
     console.log(`To add it:  switch plugin install`);
@@ -1268,13 +1273,14 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch <profile>               # Activate profile for all compatible targets');
   console.log('  switch claude <profile>        # Set active profile for Claude Code');
   console.log('  switch codex <profile>         # Set active profile for Codex');
+  console.log('  switch agy <profile>           # Set active profile for the Antigravity CLI (agy)');
   console.log('  switch port <number>           # Change gateway port');
   console.log('  switch service install         # Install OS background autostart service (auto-updates on logon)');
   console.log('  switch service uninstall       # Uninstall background autostart service');
   console.log('  switch shim install            # Auto-inject env into resumed sessions (claude --resume)');
   console.log('  switch shim status             # Check shims + detect sessions bypassing the gateway');
   console.log('  switch shim uninstall          # Remove launcher shims');
-  console.log('  switch plugin install          # Optional launch notice inside Claude Code & Codex');
+  console.log('  switch plugin install          # Optional launch notice inside Claude Code, Codex & agy');
   console.log('  switch plugin status           # Is that notice installed');
   console.log('  switch plugin uninstall        # Remove that notice');
   console.log('  switch off [target]            # Restore official endpoints (all, or one target)');

@@ -5,7 +5,7 @@
 //
 //   client --parse--> IR --emit--> upstream --events--> client
 //
-// Client (input)  : anthropic | openai-chat | responses (Codex) | vertex
+// Client (input)  : anthropic (Claude Code) | responses (Codex) | codeassist (Antigravity CLI)
 // Upstream (out)  : openai-chat | anthropic | vertex
 //
 // IR shape:
@@ -663,16 +663,111 @@ function responsesToIR(payload) {
   return ir;
 }
 
-// R5: two inputs, one per tool — `anthropic` for Claude Code, `responses` for Codex. The
-// openai-chat and vertex routes were removed with their parsers; a format that reaches here
-// anyway is an error, never a silent fallback to another protocol (a different API key!).
-// The UPSTREAM formats are a different axis and are untouched: emitUpstreamBody still speaks
-// openai-chat, anthropic and vertex to whatever provider the profile points at.
+// The Antigravity CLI (agy) wraps a Gemini request in a Code Assist envelope:
+// {project, requestId, request: {contents, systemInstruction, tools, generationConfig}, model}.
+// The CLI names every function call, and gives a tool result back as {"output": "<text>"} in a
+// turn of either role, so the result is matched by id, never by its position.
+function codeAssistToIR(envelope) {
+  const req = envelope?.request || {};
+  const ir = baseIR();
+  ir.model = envelope?.model || '';
+
+  const sys = req.systemInstruction?.parts;
+  if (Array.isArray(sys)) ir.system = sys.map(p => p.text || '').filter(Boolean).join('\n\n');
+
+  // An id the CLI omitted is made up per name, and its result takes the oldest open id of that name.
+  // A result that names its id closes that id, so a later id-less result never takes it again.
+  const pendingByName = new Map();
+  let callSeq = 0;
+  let orphanSeq = 0;
+  for (const c of Array.isArray(req.contents) ? req.contents : []) {
+    const parts = Array.isArray(c?.parts) ? c.parts : [];
+    const texts = [];
+    const toolCalls = [];
+    for (const p of parts) {
+      if (!p || typeof p !== 'object') continue;
+      if (typeof p.text === 'string' && p.text && p.thought !== true) texts.push(p.text);
+      if (p.functionCall) {
+        const name = p.functionCall.name || '';
+        const id = p.functionCall.id || `call_agy_${callSeq++}_${name}`;
+        if (!pendingByName.has(name)) pendingByName.set(name, []);
+        pendingByName.get(name).push(id);
+        const sig = p.thoughtSignature || null;
+        rememberToolSignature(id, sig);
+        toolCalls.push({ id, name, args: p.functionCall.args ?? {}, sig });
+      }
+      if (p.functionResponse) {
+        const fr = p.functionResponse;
+        const name = fr.name || '';
+        const queue = pendingByName.get(name) || [];
+        let id = fr.id;
+        if (id) {
+          const at = queue.indexOf(id);
+          if (at >= 0) queue.splice(at, 1);
+        } else {
+          id = queue.length ? queue.shift() : `call_agy_orphan_${orphanSeq++}_${name}`;
+        }
+        const out = fr.response?.output ?? fr.response;
+        ir.messages.push({ role: 'tool', toolCallId: id, name: name || null, content: typeof out === 'string' ? out : JSON.stringify(out ?? '') });
+      }
+    }
+    if (c.role === 'model') {
+      const msg = { role: 'assistant' };
+      if (texts.length) msg.content = texts.join('');
+      if (toolCalls.length) msg.toolCalls = toolCalls;
+      if (msg.content !== undefined || msg.toolCalls) ir.messages.push(msg);
+    } else if (texts.length) {
+      ir.messages.push({ role: 'user', content: texts.join('') });
+    }
+  }
+
+  const fns = (req.tools || []).flatMap(t => t.functionDeclarations || []);
+  if (fns.length) {
+    ir.tools = fns.filter(f => f.name).map(f => ({
+      name: f.name, description: f.description || '',
+      parameters: sanitizeJsonSchema(lowerSchemaTypes(f.parameters || {}))
+    }));
+  }
+
+  const gc = req.generationConfig || {};
+  if (typeof gc.maxOutputTokens === 'number') ir.params.maxTokens = gc.maxOutputTokens;
+  if (typeof gc.temperature === 'number') ir.params.temperature = gc.temperature;
+  if (typeof gc.topP === 'number') ir.params.topP = gc.topP;
+  if (Array.isArray(gc.stopSequences)) ir.params.stop = stopList(gc.stopSequences);
+  const th = gc.thinkingConfig;
+  if (th && typeof th === 'object') {
+    if (th.thinkingBudget === 0) ir.thinking = { type: 'disabled' };
+    else if (th.thinkingBudget > 0) ir.thinking = { type: 'enabled', budget: clampBudget(th.thinkingBudget) };
+    else if (th.thinkingLevel) ir.thinking = { type: 'enabled', budget: effortToBudget(String(th.thinkingLevel).toLowerCase()), effort: String(th.thinkingLevel).toLowerCase() };
+    else if (th.includeThoughts) ir.thinking = { type: 'enabled', budget: 2048 };
+  }
+  return ir;
+}
+
+// The CLI writes Gemini schema types in upper case (OBJECT, STRING); JSON Schema wants lower case.
+function lowerSchemaTypes(schema) {
+  if (Array.isArray(schema)) return schema.map(lowerSchemaTypes);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    out[k] = k === 'type' && typeof v === 'string' ? v.toLowerCase()
+      : k === 'properties' && v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, lowerSchemaTypes(pv)]))
+        : (k === 'items' || k === 'anyOf' || k === 'oneOf' || k === 'allOf') ? lowerSchemaTypes(v) : v;
+  }
+  return out;
+}
+
+// R5: one input per tool — `anthropic` for Claude Code, `responses` for Codex, `codeassist` for
+// the Antigravity CLI. The openai-chat and vertex routes were removed with their parsers; a format
+// that reaches here anyway is an error, never a silent fallback to another protocol (a different
+// API key!). The UPSTREAM formats are a different axis: emitUpstreamBody still speaks openai-chat,
+// anthropic and vertex to whatever provider the profile points at.
 function parseToIR(clientFormat, payload) {
   switch (clientFormat) {
     case 'anthropic': return anthropicToIR(payload);
     case 'responses': return responsesToIR(payload);
-    default: throw new Error(`Unsupported input format: ${clientFormat}. Only anthropic (Claude Code) and responses (Codex) accept requests.`);
+    case 'codeassist': return codeAssistToIR(payload);
+    default: throw new Error(`Unsupported input format: ${clientFormat}. Only anthropic (Claude Code), responses (Codex) and codeassist (agy) accept requests.`);
   }
 }
 
@@ -2119,7 +2214,7 @@ function vertexUsage(prompt, completion, cached, reasoning) {
   return u;
 }
 
-function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig }) {
+function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig, ids = false }) {
   const parts = [];
   const thinking = (think || []).join('');
   if (thinking) {
@@ -2130,7 +2225,7 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
   const body = (text || []).join('');
   if (body) parts.push({ text: body });
   for (const tc of (tools || [])) {
-    const part = { functionCall: { name: tc.name || 'tool', args: parseArgs(tc.args) } };
+    const part = { functionCall: { ...(ids && tc.id ? { id: tc.id } : {}), name: tc.name || 'tool', args: parseArgs(tc.args) } };
     const tsig = tc.sig || lookupToolSignature(tc.id);
     if (tsig) part.thoughtSignature = tsig;
     parts.push(part);
@@ -2143,7 +2238,8 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
   };
 }
 
-function createVertexStream(emit, model) {
+// ids: name each functionCall, as Code Assist does. Plain Vertex has no call id.
+function createVertexStream(emit, model, { ids = false } = {}) {
   const cand = (parts) => emit(null, { candidates: [{ content: { role: 'model', parts }, index: 0 }], modelVersion: model });
   // Tool args arrive from OpenAI/Anthropic as deltas; Vertex needs complete functionCalls -> buffer them, emit at the end.
   const tools = new Map();
@@ -2170,7 +2266,7 @@ function createVertexStream(emit, model) {
       const parts = [...tools.values()]
         .filter(t => t.name)
         .map(t => {
-          const part = { functionCall: { name: t.name, args: parseArgs(t.args || '{}') } };
+          const part = { functionCall: { ...(ids && t.id ? { id: t.id } : {}), name: t.name, args: parseArgs(t.args || '{}') } };
           const tsig = t.sig || lookupToolSignature(t.id);
           if (tsig) part.thoughtSignature = tsig;
           return part;
@@ -2187,12 +2283,31 @@ function createVertexStream(emit, model) {
   };
 }
 
+// --- Code Assist (Antigravity CLI) ---
+// The same Gemini chunks, each inside {"response": ..., "traceId": ...}, with call ids. An error is
+// sent bare, as Code Assist sends one.
+// An id to tell answers apart in a log, not a secret: this module imports nothing.
+function codeAssistTrace() {
+  return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+}
+
+function createCodeAssistStream(emit, model) {
+  const traceId = codeAssistTrace();
+  const responseId = `agy-${traceId}`;
+  return createVertexStream((e, d) => emit(e, d?.error ? d : { response: { ...d, responseId }, traceId }), model, { ids: true });
+}
+
+function buildCodeAssistMessage(args) {
+  const traceId = codeAssistTrace();
+  return { response: { ...buildVertexMessage({ ...args, ids: true }), responseId: `agy-${traceId}` }, traceId };
+}
+
 export {
   canonFinish, chatFinish, anthropicStopReason,
   smartReasoning, smartText, smartToolCalls, smartUsage, smartFinish,
   firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
   budgetToEffort, effortToBudget, clampBudget, parseArgs, stringifyArgs,
-  anthropicToIR, responsesToIR, parseToIR,
+  anthropicToIR, responsesToIR, codeAssistToIR, parseToIR,
   healToolPairs, healAnthropicPayload, rememberToolSignature, lookupToolSignature, estimateTokens, irToChatBody, irToAnthropicBody, irToVertexBody, emitUpstreamBody,
   normalizeUpstream, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags,
@@ -2200,5 +2315,6 @@ export {
   createChatStream, buildChatMessage,
   createResponsesStream, buildResponsesMessage,
   vertexFinish, createVertexStream, buildVertexMessage,
+  createCodeAssistStream, buildCodeAssistMessage,
   isAntigravityModel
 };

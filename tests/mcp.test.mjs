@@ -115,15 +115,15 @@ test('routeEvidence does not take the shim --config arguments for an environment
 
 // ==================== Task 5 ====================
 
-// The gateway stands between two tools and nothing else. An agent that is offered the retired
+// The gateway stands between three tools and nothing else. An agent that is offered the retired
 // names would be told they worked, then fail at the gateway.
-test('R6: switcher_switch_profile accepts claude and codex targets and rejects legacy targets', async (t) => {
+test('R6: switcher_switch_profile accepts claude, codex and agy targets and rejects legacy targets', async (t) => {
   const [list] = await mcpCall(t, {}, [{ method: 'tools/list' }]);
   const def = list.result.tools.find(x => x.name === 'switcher_switch_profile');
   assert.ok(def, 'the tool is advertised');
-  assert.deepEqual(def.inputSchema.properties.target.enum, ['claude', 'codex']);
-  assert.match(def.inputSchema.properties.target.description, /"claude" \(Claude Code\) or "codex" \(Codex\)/);
-  assert.match(def.description, /Claude Code \(claude\) or Codex \(codex\)/);
+  assert.deepEqual(def.inputSchema.properties.target.enum, ['claude', 'codex', 'agy']);
+  assert.match(def.inputSchema.properties.target.description, /"claude" \(Claude Code\), "codex" \(Codex\) or "agy" \(Antigravity CLI\)/);
+  assert.match(def.description, /Claude Code \(claude\), Codex \(codex\) or the Antigravity CLI \(agy\)/);
   // openai and vertex are not tools a caller may name, so they are not in the schema at all.
   assert.ok(!JSON.stringify(def).includes('openai'), 'no retired target in the schema');
   assert.ok(!JSON.stringify(def).includes('vertex'), 'no retired target in the schema');

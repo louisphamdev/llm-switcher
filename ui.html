@@ -936,7 +936,7 @@
     <div class="ph">
       <div class="title-box">
         <h1 id="page-title">Routes & Profiles</h1>
-        <p id="status-sub">Route Claude Code and Codex independently.</p>
+        <p id="status-sub">Route Claude Code, Codex and the Antigravity CLI independently.</p>
       </div>
       <div class="ph-actions" id="ph-actions">
         <!-- Rendered dynamically per route -->
@@ -982,6 +982,21 @@
                 </select>
               </div>
               <span id="badge-slot-codex" class="badge outline">OFF</span>
+            </div>
+
+            <!-- Antigravity CLI Target Row -->
+            <div class="row" id="card-slot-agy">
+              <span class="av logo" title="Antigravity CLI"><img src="/icons/antigravity.png" alt="Antigravity"></span>
+              <div class="who">
+                <div class="l">Antigravity CLI (agy)</div>
+                <div class="meta">Code Assist over <code>CLOUD_CODE_URL</code> · <code>/v1internal:*</code></div>
+              </div>
+              <div style="min-width:14rem;">
+                <select id="select-slot-agy" aria-label="Antigravity CLI route" onchange="switchCliTarget('agy', this.value)">
+                  <option value="">Official endpoint</option>
+                </select>
+              </div>
+              <span id="badge-slot-agy" class="badge outline">OFF</span>
             </div>
           </div>
 
@@ -1123,6 +1138,7 @@
               <span class="hint" style="font-weight:600; display:block; margin-bottom:0.4rem;">Template Quick-Fill:</span>
               <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('intact')">intact</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('agy-intact')">agy on intact</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('9router')">9Router</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('openrouter')">OpenRouter</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('vertex')">Vertex AI</button>
@@ -1156,6 +1172,7 @@
                   <option value="auto">All compatible tools (auto)</option>
                   <option value="claude">Claude Code only (claude)</option>
                   <option value="codex">Codex only (codex)</option>
+                  <option value="agy">Antigravity CLI only (agy)</option>
                 </select>
               </label>
               <label class="f">Outbound Format
@@ -1443,6 +1460,7 @@
           const parts = [];
           if (activeMap.claude) parts.push('Claude: ' + activeMap.claude);
           if (activeMap.codex) parts.push('Codex: ' + activeMap.codex);
+          if (activeMap.agy) parts.push('agy: ' + activeMap.agy);
           subEl.textContent = 'Port ' + state.port + ' · Active for ' + parts.join(' · ');
         } else {
           subEl.textContent = 'Gateway is idle. Clients connect directly to official endpoints.';
@@ -1503,7 +1521,10 @@
       let iconFile = 'openai.png';
       let brandName = 'AI Provider';
 
-      if (k.includes('claude') || n.includes('claude') || t === 'claude' || t === 'anthropic' || u.includes('anthropic')) {
+      if (t === 'agy') {
+        iconFile = 'antigravity.png';
+        brandName = 'Antigravity CLI';
+      } else if (k.includes('claude') || n.includes('claude') || t === 'claude' || t === 'anthropic' || u.includes('anthropic')) {
         iconFile = 'claude.png';
         brandName = 'Anthropic Claude';
       } else if (k.includes('codex') || n.includes('codex') || t === 'codex' || t === 'responses') {
@@ -1574,12 +1595,21 @@
           { id: 'review', name: 'Review Model', placeholder: 'gpt-5.6-terra' },
           { id: 'subagent', name: 'Subagent Model', placeholder: 'gpt-5.6-luna' }
         ]
+      },
+      agy: {
+        title: 'Antigravity CLI Agent Model (Code Assist)',
+        // agy sizes its own window; * stands for the model agy picked (antigravity/* keeps it on intact).
+        no1m: true,
+        slots: [
+          { id: 'main', name: 'Agent Model (* = the model agy picked)', placeholder: 'antigravity/* or claude/claude-opus-5' }
+        ]
       }
     };
 
     function getActiveSlotConfig(fmt) {
       if (fmt === 'claude' || fmt === 'anthropic') return SLOT_CONFIGS.claude;
       if (fmt === 'codex' || fmt === 'responses') return SLOT_CONFIGS.codex;
+      if (fmt === 'agy') return SLOT_CONFIGS.agy;
       return SLOT_CONFIGS.auto;
     }
 
@@ -1612,10 +1642,10 @@
         slotRow.innerHTML = `
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <label for="p-${s.id}" style="font-size:0.82rem; font-weight:500;">${escapeHtml(s.name)}</label>
-            <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:var(--accent); cursor:pointer;">
+            ${cfg.no1m ? '' : `<label style="display:flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:var(--accent); cursor:pointer;">
               <input type="checkbox" id="p-${s.id}-1m" aria-label="1M context for ${escapeHtml(s.name)}" aria-describedby="p-${s.id}-1m-note" style="width:13px; height:13px; min-height:0;" onchange="update1mWarnings()" ${checked ? 'checked' : ''}>
               1M context
-            </label>
+            </label>`}
           </div>
           <div class="combo">
             <input type="text" id="p-${s.id}" oninput="update1mWarnings()" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="p-${s.id}-list" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
@@ -1784,7 +1814,8 @@
       // Render CLI Targets Rows
       const slots = [
         { id: 'claude', name: 'Claude Code', key: 'claude' },
-        { id: 'codex', name: 'Codex', key: 'codex' }
+        { id: 'codex', name: 'Codex', key: 'codex' },
+        { id: 'agy', name: 'Antigravity CLI', key: 'agy' }
       ];
 
       for (const slot of slots) {
@@ -1796,7 +1827,8 @@
           select.innerHTML = '<option value="">Official endpoint</option>';
           for (const [key, p] of profilesList) {
             const tool = p.tool || 'auto';
-            if (tool === 'auto' || tool === slot.key) {
+            // agy has no auto profile: only a profile made for it can serve it.
+            if (tool === slot.key || (tool === 'auto' && slot.key !== 'agy')) {
               const opt = document.createElement('option');
               opt.value = key;
               opt.textContent = p.name + ' (' + key + ')';
@@ -1826,6 +1858,7 @@
         const activeCLIs = [];
         if (activeMap.claude === key) activeCLIs.push('Claude');
         if (activeMap.codex === key) activeCLIs.push('Codex');
+        if (activeMap.agy === key) activeCLIs.push('agy');
         const isActiveAny = activeCLIs.length > 0;
         const isEditing = (key === currentlyEditingKey);
 
@@ -1836,7 +1869,7 @@
         const toolAv = getToolAvatar(key, p);
         const routeBadge = (p.tool || 'auto') + ' → ' + (p.outFormat || p.mode || 'chat');
 
-        const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
+        const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : p.tool === 'agy' ? 'agy' : 'auto';
         const pCfg = getActiveSlotConfig(slotFmt);
         const modelChips = pCfg.slots.map(s => {
           const val = valueForSlot(p.defaultModels, s.id);
@@ -2001,6 +2034,17 @@
         mode: 'convert',
         thinkingMode: 'auto',
         defaultModels: { default: 'gpt-4o', sonnet: 'claude-3-7-sonnet', opus: 'claude-3-opus', haiku: 'claude-3-5-haiku' }
+      },
+      // agy on an intact Antigravity pool: antigravity/* keeps the model agy picked, and intact names
+      // the CLI as its own client (bifrost_ua), so the request crosses unchanged.
+      'agy-intact': {
+        name: 'Antigravity CLI on intact',
+        baseURL: 'http://127.0.0.1:8080/v1',
+        tool: 'agy',
+        outFormat: 'openai-chat',
+        mode: 'convert',
+        thinkingMode: 'auto',
+        defaultModels: { main: 'antigravity/*' }
       },
       '9router': {
         name: '9Router Client Proxy',

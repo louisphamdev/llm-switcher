@@ -30,7 +30,7 @@ const makeCfg = () => ({
 });
 
 test('legacy config without activeProfiles maps every target to activeProfile', () => {
-  assert.deepEqual(getActiveMap(makeCfg()), { claude: 'router', codex: 'router' });
+  assert.deepEqual(getActiveMap(makeCfg()), { claude: 'router', codex: 'router', agy: null });
 });
 
 test('setTargetProfile validates the target, existence (no prototype keys) and the tool', () => {
@@ -40,16 +40,16 @@ test('setTargetProfile validates the target, existence (no prototype keys) and t
   assert.match(setTargetProfile(cfg, 'anthropic', 'codexOnly'), /cannot serve/);
   assert.equal(setTargetProfile(cfg, 'responses', 'codexOnly'), null);
   // `anthropic` and `responses` are spellings of the two tools, and the map holds two keys.
-  assert.deepEqual(cfg.activeProfiles, { claude: 'router', codex: 'codexOnly' });
+  assert.deepEqual(cfg.activeProfiles, { claude: 'router', codex: 'codexOnly', agy: null });
 });
 
 test('activateProfile only assigns compatible tools; deactivateProfile leaves the other alone', () => {
   const cfg = makeCfg();
   setTargetProfile(cfg, 'claude', null);
   activateProfile(cfg, 'codexOnly');
-  assert.deepEqual(cfg.activeProfiles, { claude: null, codex: 'codexOnly' });
+  assert.deepEqual(cfg.activeProfiles, { claude: null, codex: 'codexOnly', agy: null });
   deactivateProfile(cfg, 'codexOnly');
-  assert.deepEqual(cfg.activeProfiles, { claude: null, codex: null });
+  assert.deepEqual(cfg.activeProfiles, { claude: null, codex: null, agy: null });
 });
 
 test('switching a migrated config does not make it need migration again', () => {
@@ -1315,15 +1315,15 @@ test('R1: rollBack proceeds to restore oldPort gateway even if saveConfig throws
   assert.equal(caught, false);
 });
 
-test('R5: getActiveMap returns exactly { claude, codex } and a present pointer wins over the legacy one', () => {
+test('R5: getActiveMap returns exactly { claude, codex, agy } and a present pointer wins over the legacy one', () => {
   const cfg = {
     activeProfiles: { claude: 'c-prof', codex: 'cdx-prof' },
     profiles: { 'c-prof': { tool: 'claude' }, 'cdx-prof': { tool: 'codex' } }
   };
-  assert.deepEqual(getActiveMap(cfg), { claude: 'c-prof', codex: 'cdx-prof' });
+  assert.deepEqual(getActiveMap(cfg), { claude: 'c-prof', codex: 'cdx-prof', agy: null });
   // An explicit "off" is a present pointer, not a missing one: it must not fall back to
   // activeProfile and switch the tool back on under another key.
-  assert.deepEqual(getActiveMap({ activeProfile: 'legacy', activeProfiles: { claude: null } }), { claude: null, codex: 'legacy' });
+  assert.deepEqual(getActiveMap({ activeProfile: 'legacy', activeProfiles: { claude: null } }), { claude: null, codex: 'legacy', agy: null });
 });
 
 test('R7e: saves work again after the file is fixed', (t) => {
@@ -1564,7 +1564,7 @@ test('A5: config.example.json loads and passes validation without requiring migr
   }
 
   assert.equal('activeProfile' in example, false, 'the retired top-level pointer is gone');
-  assert.deepEqual(Object.keys(example.activeProfiles).sort(), ['claude', 'codex'], 'exactly the two tools');
+  assert.deepEqual(Object.keys(example.activeProfiles).sort(), ['agy', 'claude', 'codex'], 'exactly the three tools');
   assert.deepEqual(example.blindfold, { port: 3457 }, 'the interceptor port is top-level, and it is only a port');
   for (const [key, p] of Object.entries(example.profiles)) {
     for (const retired of ['inFormat', 'blindfold', 'blindfoldPort', 'blindfoldHost', 'blindfoldPrefix']) {

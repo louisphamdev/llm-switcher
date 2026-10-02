@@ -25,6 +25,9 @@ env-claude.cmd
 env-claude.sh
 route-claude.txt
 route-codex.txt
+env-agy.cmd
+env-agy.sh
+route-agy.txt
 gateway.port
 # blindfold --capture writes request and response bodies verbatim
 captures/
