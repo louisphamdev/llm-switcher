@@ -196,7 +196,8 @@ test('the dashboard Update now button installs the release and reloads on the ne
     await page.waitFor(`document.getElementById('app-version')?.textContent === 'v9.9.12'`, 'the reloaded dashboard on the new version', 30000);
   } catch (err) {
     // A CI runner cannot be watched: put what the gateway and the page saw into the failure.
-    err.message += `\ngateway log:\n${fx.log()}\npage problems: ${JSON.stringify(page.problems)}`;
+    const stage = await page.evaluate(`document.getElementById('update-status')?.textContent || ''`).catch(() => '(page gone)');
+    err.message += `\nupdate status on the page: ${stage}\ngateway log:\n${fx.log()}\npage problems: ${JSON.stringify(page.problems)}`;
     throw err;
   }
   assert.equal(await page.evaluate(`document.getElementById('update-notice').hidden`), true);
