@@ -6,6 +6,7 @@
 - **Dashboard elevation:** The dialog, the toast and the model list used a wide 50 px shadow on top of their border. The shadow is now short and tight, so the border defines the edge, in both themes.
 - **Dialog tabs on a phone:** At 390 px wide, the profile dialog cut off the **Model Slots** tab, and the tab bar hides its scrollbar. On a narrow screen the tabs now have less padding, and they wrap if they still do not fit.
 - **API key field:** The field has `autocomplete="off"`, so a password manager does not offer to save the key.
+- **Update now that times out:** The message "The new gateway did not answer" now also says what the last check saw: the gateway from before the update, an HTTP status, or a network error.
 
 ## Release 1.3.4
 
