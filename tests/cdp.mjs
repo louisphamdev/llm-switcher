@@ -47,13 +47,25 @@ export async function launchBrowser() {
     ...(process.platform === 'linux' || process.getuid?.() === 0 ? ['--no-sandbox'] : []),
     'about:blank'
   ];
-  const child = spawn(findChromium(), args, { stdio: 'ignore', env: { ...process.env, HOME: dir } });
+  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir } });
+  // The tail of what Chromium printed: the only clue when it starts on a machine no one can watch.
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+  let exited = null;
+  child.once('exit', (code, signal) => { exited = signal || code; });
   let port = 0;
-  for (let i = 0; i < 150 && !port; i++) {
+  for (let i = 0; i < 300 && !port && exited === null; i++) {
     try { port = Number(fs.readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8').split('\n')[0]) || 0; } catch { /* not written yet */ }
     if (!port) await sleep(100);
   }
-  if (!port) { child.kill(); throw new Error('Chromium did not open a debugging port'); }
+  if (!port) {
+    // SIGKILL and a wait: a Chromium left running holds this test process open.
+    if (exited === null) {
+      child.kill('SIGKILL');
+      await new Promise(r => { child.once('exit', r); setTimeout(r, 3000); });
+    }
+    throw new Error(`Chromium did not open a debugging port (exit: ${exited ?? 'killed'})\n${stderr}`);
+  }
 
   const pages = [];
   return {
