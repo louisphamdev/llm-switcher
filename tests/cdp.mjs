@@ -47,7 +47,14 @@ export async function launchBrowser() {
     ...(process.platform === 'linux' || process.getuid?.() === 0 ? ['--no-sandbox'] : []),
     'about:blank'
   ];
-  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir } });
+  // POSIX: a process group of its own, so close() can stop the renderers and helpers too.
+  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir }, detached: process.platform !== 'win32' });
+  const stop = (signal) => {
+    try {
+      if (process.platform !== 'win32') process.kill(-child.pid, signal);
+      else child.kill(signal);
+    } catch { /* already gone */ }
+  };
   // The tail of what Chromium printed: the only clue when it starts on a machine no one can watch.
   let stderr = '';
   child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
@@ -61,7 +68,7 @@ export async function launchBrowser() {
   if (!port) {
     // SIGKILL and a wait: a Chromium left running holds this test process open.
     if (exited === null) {
-      child.kill('SIGKILL');
+      stop('SIGKILL');
       await new Promise(r => { child.once('exit', r); setTimeout(r, 3000); });
     }
     throw new Error(`Chromium did not open a debugging port (exit: ${exited ?? 'killed'})\n${stderr}`);
@@ -78,8 +85,10 @@ export async function launchBrowser() {
     },
     async close() {
       for (const p of pages) p.close();
-      child.kill();
+      // The whole group: a helper that outlives the main process keeps writing into the profile.
+      stop('SIGTERM');
       await new Promise(r => { child.once('exit', r); setTimeout(r, 2000); });
+      stop('SIGKILL');
       // On Windows a Chromium child process can hold a cache file for a moment after the exit (EBUSY).
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
