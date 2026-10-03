@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { openResponsesWs } from './ws-client.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGY_UA = 'antigravity/cli/1.2.14 (aidev_client; os_type=windows; arch=amd64; cl=990662481; auth_method=consumer)';
@@ -70,6 +71,16 @@ function startUpstream() {
           { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
         ]);
       }
+      if (req.method === 'GET' && req.url.startsWith('/cbroken/v1/models/')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ bifrost_ua: 'codex_cli_rs/' }));
+      }
+      if (req.url.startsWith('/cbroken/v1/responses')) {
+        // The first event, then the connection dies: no response.completed ever comes.
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(`event: response.created\ndata: ${JSON.stringify({ type: 'response.created', response: { id: 'resp_cut', status: 'in_progress' } })}\n\n`);
+        return setTimeout(() => res.socket.destroy(), 50);
+      }
       if (req.method === 'GET' && req.url.startsWith('/broken/v1/models/')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ bifrost_ua: 'antigravity/cli/' }));
@@ -127,8 +138,19 @@ function startUpstream() {
         ]);
       }
       if (req.url.startsWith('/intact/v1/responses')) {
+        // A Responses stream as the Codex account on intact sends it; each turn gets its own id.
+        // With store:false the real backend sends response.completed with an empty output: the
+        // items come only in response.output_item.done (measured 2026-10-03).
+        const id = `resp_${received.length}`;
+        const item = { type: 'message', id: `msg_${id}`, role: 'assistant', content: [{ type: 'output_text', text: 'codex pool' }] };
+        const events = [
+          { type: 'response.created', response: { id, status: 'in_progress' } },
+          { type: 'response.output_text.delta', delta: 'codex pool' },
+          { type: 'response.output_item.done', output_index: 0, item },
+          { type: 'response.completed', response: { id, status: 'completed', output: [], usage: { input_tokens: 5, output_tokens: 1 } } }
+        ];
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        res.write(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'r1', usage: { input_tokens: 5, output_tokens: 1 } } })}\n\n`);
+        for (const e of events) res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
         return res.end();
       }
       if (req.url.startsWith('/chat/v1/chat/completions')) {
@@ -170,6 +192,7 @@ before(async () => {
       agyf: { name: 'agy flaky lookup', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/flaky/v1`, apiKey: 'sk-flaky', defaultModels: { main: 'antigravity/*' } },
       agynf: { name: 'agy lookup 404', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/nf/v1`, apiKey: 'sk-nf', defaultModels: { main: 'antigravity/*' } },
       agyg: { name: 'agy broken stream', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/broken/v1`, apiKey: 'sk-broken', defaultModels: { main: 'antigravity/*' } },
+      cdxcut: { name: 'codex cut stream', mode: 'convert', tool: 'codex', outFormat: 'openai-chat', baseURL: `${base}/cbroken/v1`, apiKey: 'sk-cut', defaultModels: { main: 'codex/gpt-5.5' } },
       cdx: { name: 'codex on intact', mode: 'convert', tool: 'codex', outFormat: 'openai-chat', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact', defaultModels: { main: 'codex/gpt-5.5' } }
     }
   };
@@ -531,6 +554,73 @@ test('a Bifrost stream that breaks ends the answer to agy with an error, not a c
   const r = await answerIsComplete(url('/v1internal:streamGenerateContent?alt=sse'), { headers: agyHeaders({ 'x-llm-profile': 'agyg' }), body: JSON.stringify(envelope()) });
   assert.equal(r.status, 200);
   assert.equal(r.complete, false);
+});
+
+test('Codex on the WebSocket transport crosses Bifrost too, and its turn history reaches intact', async () => {
+  const ws = await openResponsesWs(proxyPort, { 'User-Agent': CODEX_UA, 'x-llm-profile': 'cdx', Authorization: 'Bearer chatgpt-user-token' });
+  try {
+    assert.match(ws.reply, /^HTTP\/1\.1 101/);
+    const before = received.length;
+    const turn1 = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }];
+    ws.send({ type: 'response.create', model: 'gpt-5.5', instructions: 'x', input: turn1, store: false });
+    const done = async (n) => {
+      for (let i = 0; i < 100 && ws.messages.filter(m => m.type === 'response.completed').length < n; i++) await new Promise(r => setTimeout(r, 30));
+      return ws.messages.filter(m => m.type === 'response.completed')[n - 1];
+    };
+    const first = await done(1);
+    assert.ok(first, `no response.completed: ${JSON.stringify(ws.messages).slice(0, 300)}`);
+    assert.ok(ws.messages.some(m => m.type === 'response.output_text.delta' && m.delta === 'codex pool'), 'the events of intact reach Codex');
+
+    const up1 = received.slice(before).find(x => x.url.startsWith('/intact/v1/responses'));
+    assert.ok(up1, 'the WS turn must reach intact /responses, not the convert route');
+    assert.equal(up1.method, 'POST');
+    assert.equal(up1.headers['x-api-key'], 'sk-intact');
+    assert.equal(up1.headers.authorization, undefined, 'the ChatGPT token never reaches intact');
+    assert.equal(up1.headers['user-agent'], CODEX_UA);
+    for (const h of ['upgrade', 'sec-websocket-key', 'sec-websocket-version', 'x-llm-profile']) assert.equal(up1.headers[h], undefined, `${h} is a WebSocket or switcher header`);
+    assert.equal(up1.body.model, 'codex/gpt-5.5');
+    assert.equal(up1.body.stream, true);
+    assert.equal(up1.body.type, undefined, 'the WS frame type is not part of a Responses request');
+    assert.deepEqual(up1.body.input, turn1);
+
+    // Turn 2 names turn 1; intact has no WS state, so it gets the whole conversation.
+    const turn2 = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'again' }] }];
+    ws.send({ type: 'response.create', model: 'gpt-5.5', previous_response_id: first.response.id, input: turn2, store: false });
+    assert.ok(await done(2), 'no second response.completed');
+    const up2 = received.slice(before).filter(x => x.url.startsWith('/intact/v1/responses'))[1];
+    const answer1 = ws.messages.find(m => m.type === 'response.output_item.done').item;
+    assert.deepEqual(up2.body.input, [...turn1, answer1, ...turn2], 'the answer of turn 1 is replayed, though response.completed had no output');
+    assert.equal(up2.body.previous_response_id, undefined);
+
+    const token = fs.readFileSync(path.join(tmpDir, 'admin.token'), 'utf8').trim();
+    const { logs } = await (await fetch(url('/api/logs'), { headers: { 'x-llm-switcher-token': token } })).json();
+    const entry = logs.find(l => l.clientFormat === 'responses-ws' && l.outFormat === 'bifrost');
+    assert.ok(entry, 'the inspector names the WS Bifrost route');
+    assert.deepEqual(entry.tokens, { prompt: 5, completion: 1 });
+  } finally {
+    ws.close();
+  }
+});
+
+test('codex exec (originator codex_exec) crosses Bifrost like the Codex TUI', async () => {
+  const before = received.length;
+  const body = { model: 'gpt-5.5', instructions: 'x', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true, store: false };
+  const r = await fetch(url('/v1/responses'), { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'codex_exec/0.160.0 (Windows 10.0.26300; x86_64) unknown', 'x-llm-profile': 'cdx' }, body: JSON.stringify(body) });
+  await r.text();
+  assert.ok(received.slice(before).some(x => x.url.startsWith('/intact/v1/responses')), 'codex_exec must reach intact /responses');
+  assert.equal(received.slice(before).some(x => x.url.startsWith('/intact/v1/chat/completions')), false, 'not the convert route');
+});
+
+test('a Codex WS Bifrost stream cut before its end still ends the turn with response.failed', async () => {
+  const ws = await openResponsesWs(proxyPort, { 'User-Agent': CODEX_UA, 'x-llm-profile': 'cdxcut' });
+  try {
+    ws.send({ type: 'response.create', model: 'gpt-5.5', input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] });
+    for (let i = 0; i < 150 && !ws.messages.some(m => m.type === 'response.failed'); i++) await new Promise(r => setTimeout(r, 30));
+    assert.ok(ws.messages.some(m => m.type === 'response.created' && m.response.id === 'resp_cut'), 'the events before the cut reach Codex');
+    assert.ok(ws.messages.some(m => m.type === 'response.failed'), `no terminal event: ${JSON.stringify(ws.messages).slice(0, 300)}`);
+  } finally {
+    ws.close();
+  }
 });
 
 test('with agy switched off, its agent turns go back to Google', async (t) => {

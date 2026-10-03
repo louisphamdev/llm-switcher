@@ -548,11 +548,17 @@ async function bifrostUAFor(profile, model) {
   return ua;
 }
 
+// Codex names its originator in the User-Agent: codex_cli_rs (TUI), codex_exec (`codex exec`),
+// codex_vscode, codex_sdk_ts. intact names one of them; each one is the same client.
+const BIFROST_UA_FAMILIES = [['codex_cli_rs/', 'codex_exec/', 'codex_vscode/', 'codex_sdk_ts/']];
+
 async function crossesBifrost(req, profile, model) {
   const clientUA = String(req.headers['user-agent'] || '');
   if (!clientUA) return false;
   const ua = await bifrostUAFor(profile, model);
-  return Boolean(ua) && clientUA.startsWith(ua);
+  if (!ua) return false;
+  const family = BIFROST_UA_FAMILIES.find(f => f.includes(ua)) || [ua];
+  return family.some(prefix => clientUA.startsWith(prefix));
 }
 
 // Every client header except its own credentials, the switcher's control headers and hop-by-hop.
@@ -1848,6 +1854,88 @@ function geminiSafeTools(tools) {
   });
 }
 
+// Bifrost on the WS transport. intact speaks HTTP and keeps no WS state, so the turn goes to
+// /responses as one streamed request with the whole conversation, and each SSE event goes back to
+// Codex as one text frame, unchanged.
+async function wsBifrostTurn({ socket, payload, req, ac, history, input, profile, profileKey, mappedModel }) {
+  const started = Date.now();
+  const log = (extra) => logInspection({
+    clientFormat: 'responses-ws', outFormat: 'bifrost', profile: profileKey, model: mappedModel, stream: true,
+    requestPreview: '(bifrost)', duration: Date.now() - started, tokens: { prompt: 0, completion: 0 }, ...extra
+  });
+  const headers = bifrostHeaders(req, profile);
+  for (const h of Object.keys(headers)) if (h === 'upgrade' || h.startsWith('sec-websocket-')) delete headers[h];
+  headers['content-type'] = 'application/json';
+  headers.accept = 'text/event-stream';
+  // `type` names the WS frame (response.create); it is not a field of a Responses request.
+  const { type: _type, ...body } = payload;
+
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(bifrostURL(profile, 'responses', req), {
+      method: 'POST', headers, body: JSON.stringify({ ...body, model: mappedModel, stream: true }), signal: ac.signal
+    });
+  } catch (err) {
+    if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+    sendWsFailed(socket, mappedModel, `Bifrost forward error: ${err.cause?.message || err.message}`, 502);
+    return log({ status: 502, error: err.message });
+  }
+  if (!upstreamRes.ok) {
+    const errText = await upstreamRes.text().catch(() => '');
+    sendWsFailed(socket, mappedModel, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, upstreamRes.status);
+    return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
+  }
+
+  let completed = null;
+  // With store:false the backend sends response.completed with an empty output; the items of the
+  // turn come only in response.output_item.done, and the next turn must replay them.
+  const items = [];
+  let ended = false; // a response.completed or response.failed reached Codex
+  let streamError = null;
+  const decoder = new TextDecoder();
+  let pending = '';
+  const reader = upstreamRes.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let cut;
+      while ((cut = pending.indexOf('\n\n')) >= 0) {
+        const data = pending.slice(0, cut).split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
+        pending = pending.slice(cut + 2);
+        if (!data || data === '[DONE]') continue;
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+        if (event.type === 'response.output_item.done' && event.item) items.push(event.item);
+        if (event.type === 'response.completed') completed = event.response;
+        if (event.type === 'response.completed' || event.type === 'response.failed') ended = true;
+        if (!socket.writable) continue;
+        socket.write(encodeWsFrame(data));
+        await drained(socket, ac.signal);
+      }
+    }
+  } catch (err) {
+    if (!ac.signal.aborted) streamError = `stream interrupted: ${err.cause?.message || err.message}`;
+  }
+  if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected mid-stream' });
+  // Codex ends a turn only on a terminal event: a stream cut before one must still end the turn.
+  if (!ended) {
+    streamError ||= 'the Bifrost stream ended before response.completed';
+    sendWsFailed(socket, mappedModel, streamError, 502);
+  }
+  if (completed) {
+    const output = Array.isArray(completed.output) && completed.output.length ? completed.output : items;
+    rememberWsTurn(history, { ...completed, output }, input);
+  }
+  const usage = completed?.usage || {};
+  log({
+    status: streamError ? 502 : 200,
+    tokens: { prompt: usage.input_tokens || 0, completion: usage.output_tokens || 0 },
+    ...(streamError ? { error: streamError } : {})
+  });
+}
+
 // One turn of the Codex WS transport. The socket loop runs turns one at a time and owns `ac`.
 async function handleWsResponseCreate(socket, payload, req, ac, history = null) {
   const clientFormat = 'responses';
@@ -1876,6 +1964,11 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
   }
   const { previous_response_id: _prev, ...rest } = payload;
   payload = { ...rest, input };
+
+  const bifrostModel = mapModel(payload.model || '', profile, clientFormat);
+  if (await crossesBifrost(req, profile, bifrostModel)) {
+    return wsBifrostTurn({ socket, payload, req, ac, history, input, profile, profileKey, mappedModel: bifrostModel });
+  }
 
   let ir;
   try {
