@@ -186,7 +186,7 @@ test('switch update asks the running gateway and waits for the new one', { timeo
 test('the dashboard Update now button installs the release and reloads on the new gateway', { timeout: 90000, skip: skipReason() }, async (t) => {
   const fx = await fixture(t, { registryUrl: await registry(t, '9.9.12') });
   await fx.start();
-  await fx.waitFor(fx.pid, 'the gateway');
+  const firstPid = await fx.waitFor(fx.pid, 'the gateway');
   fx.release('9.9.12');
   const browser = await launchBrowser();
   t.after(() => browser.close());
@@ -200,7 +200,8 @@ test('the dashboard Update now button installs the release and reloads on the ne
   } catch (err) {
     // A CI runner cannot be watched: put what the gateway and the page saw into the failure.
     const stage = await page.evaluate(`document.getElementById('update-status')?.textContent || ''`).catch(() => '(page gone)');
-    err.message += `\nupdate status on the page: ${stage}\ngateway log:\n${fx.log()}\npage problems: ${JSON.stringify(page.problems)}`;
+    // The pid seen from this process tells a gateway that does not answer from a page that cannot reach it.
+    err.message += `\nupdate status on the page: ${stage}\npid on /health from the test: ${await fx.pid()} (first gateway ${firstPid})\ngateway log:\n${fx.log()}\npage problems: ${JSON.stringify(page.problems)}`;
     throw err;
   }
   assert.equal(await page.evaluate(`document.getElementById('update-notice').hidden`), true);

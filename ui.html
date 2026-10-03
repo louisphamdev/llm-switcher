@@ -2786,15 +2786,22 @@
           return;
         }
         say('Installed v' + result.to + '. Restarting the gateway...');
+        let last = 'no check ran';
         for (let n = 0; n < 60; n++) {
           await new Promise(r => setTimeout(r, 500));
-          const pid = await gatewayPid();
-          if (pid && pid !== before) {
-            location.reload();
-            return;
+          try {
+            const r = await fetch('/health?challenge=ui', { cache: 'no-store' });
+            const pid = (await r.json()).pid ?? null;
+            if (pid && pid !== before) {
+              location.reload();
+              return;
+            }
+            last = pid ? 'the gateway from before the update (pid ' + pid + ')' : 'HTTP ' + r.status + ' with no pid';
+          } catch (err) {
+            last = err.message;
           }
         }
-        throw new Error('The new gateway did not answer. Read proxy.log.');
+        throw new Error('The new gateway did not answer (last check: ' + last + '). Read proxy.log.');
       } catch (err) {
         say(err.message);
         showToast('Update failed: ' + err.message, true);
