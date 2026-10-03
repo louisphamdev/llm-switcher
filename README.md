@@ -484,11 +484,17 @@ Bifrost has no setting. The gateway turns it on for each request when two condit
 | Tool | `bifrost_ua` | Path on intact |
 | --- | --- | --- |
 | Claude Code | `claude-cli/` | `/v1/messages` |
-| Codex (HTTP) | `codex_cli_rs/` | `/v1/responses` |
+| Codex (HTTP and WebSocket) | `codex_cli_rs/` | `/v1/responses` |
 | Antigravity CLI | `antigravity/cli/` | `/v1/v1internal:streamGenerateContent`, `/v1/v1internal:generateContent` |
 
-For agy, intact also writes the project of the chosen account into the request. Codex over its
-WebSocket transport still uses the normal route.
+For agy, intact also writes the project of the chosen account into the request.
+
+Codex names its client in the `User-Agent`: `codex_cli_rs` for the terminal UI, `codex_exec` for
+`codex exec`, `codex_vscode` and `codex_sdk_ts`. The gateway takes all four as the Codex client.
+
+Codex over its WebSocket transport crosses Bifrost too. intact keeps no WebSocket state, so the
+gateway sends each turn to `/v1/responses` as one HTTP request with the whole conversation. Each
+event of the answer goes back to Codex as one WebSocket frame, unchanged.
 
 The gateway keeps the answer from intact for 10 minutes for each model. Only a 2xx answer is kept that long. If intact does not answer, or answers with an error (a 404 too), the gateway uses the normal route. It asks again after 30 seconds (`LLM_SWITCHER_BIFROST_RETRY_MS`), and it prints one line for each series of failures.
 

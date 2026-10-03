@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.2
+
+- **Codex over WebSocket crosses Bifrost:** Codex uses its WebSocket transport by default. The gateway now sends each WebSocket turn to intact `/v1/responses` as one HTTP request with the whole conversation, and sends each event back as one frame. Before, these turns took the convert route. A stream that stops before `response.completed` ends the turn with `response.failed`.
+- **All Codex clients cross Bifrost:** `codex exec` sends `codex_exec/` in its `User-Agent`, not `codex_cli_rs/`. The gateway takes `codex_cli_rs`, `codex_exec`, `codex_vscode` and `codex_sdk_ts` as one client. Before, `codex exec` never crossed Bifrost.
+- **`make-certs.sh` and a Windows path:** The script read a lone argument such as `C:\Users\me\certs` as a host name and ignored it, so it rebuilt the certificates of the checkout instead. A running interceptor then served a leaf from the old CA, and Codex failed with `workspace routing discovery failed`. A backslash now marks a path.
+- **Tests:** `npm test` no longer rebuilds the certificates of the checkout. The suite runs on Linux, macOS and Windows in CI, and on Node 18.
+
 ## Release 1.3.1
 
 - **agy note:** `switch plugin status` now names agy 1.2.14. This release of agy also loads `~/.gemini/antigravity-cli/hooks.json` but does not run its hooks (measured 2026-10-03), so the shim toast is still the notice for agy.

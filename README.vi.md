@@ -479,11 +479,17 @@ Bifrost không có cấu hình. Gateway tự bật Bifrost cho từng request kh
 | Công cụ | `bifrost_ua` | Path trên intact |
 | --- | --- | --- |
 | Claude Code | `claude-cli/` | `/v1/messages` |
-| Codex (HTTP) | `codex_cli_rs/` | `/v1/responses` |
+| Codex (HTTP và WebSocket) | `codex_cli_rs/` | `/v1/responses` |
 | Antigravity CLI | `antigravity/cli/` | `/v1/v1internal:streamGenerateContent`, `/v1/v1internal:generateContent` |
 
-Với agy, intact ghi thêm project của tài khoản được chọn vào request. Codex qua WebSocket vẫn đi
-đường thường.
+Với agy, intact ghi thêm project của tài khoản được chọn vào request.
+
+Codex ghi tên client của nó trong `User-Agent`: `codex_cli_rs` cho giao diện terminal, `codex_exec`
+cho `codex exec`, `codex_vscode` và `codex_sdk_ts`. Gateway coi cả bốn là client Codex.
+
+Codex qua WebSocket cũng đi Bifrost. intact không giữ trạng thái WebSocket, nên gateway gửi mỗi lượt
+tới `/v1/responses` thành một request HTTP chứa toàn bộ hội thoại. Mỗi event của câu trả lời quay về
+Codex thành một frame WebSocket, giữ nguyên.
 
 Gateway giữ câu trả lời của intact 10 phút cho mỗi model. Chỉ câu trả lời 2xx được giữ lâu như vậy. Nếu intact không trả lời, hoặc trả lỗi (kể cả 404), gateway dùng đường thường. Gateway hỏi lại sau 30 giây (`LLM_SWITCHER_BIFROST_RETRY_MS`) và in một dòng cho mỗi chuỗi lỗi.
 
