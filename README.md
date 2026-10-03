@@ -337,9 +337,18 @@ gateway for its identity proof before it gives agy the variable. If the port doe
 the proof of this install within 3 seconds, the shim removes the variable, prints one line, and agy
 uses its official endpoint.
 
-The shim does this check only when agy starts. If the gateway stops while agy runs (`switch off`, a
-crash, an update), the port is free. Another account on this computer can then take the port and
-receive the token. To close this gap, close agy before you stop the gateway.
+The gateway can also stop while agy runs (`switch off`, a crash, an update). Its port is then free,
+and another program can take it. So a routed agy never talks to the gateway port directly. The shim
+starts agy behind a relay (`agy-relay.mjs`) that holds its own loopback port for as long as agy
+runs. For each connection from agy, the relay asks the gateway for its identity proof on the same
+socket, and sends the request on that socket only after the proof holds. If the proof fails, agy
+gets a 502, and its token stays in the relay.
+
+The relay accepts only a proof keyed by `gateway.secret`, a random key next to `admin.token`. No
+page and no route of the gateway serves this key. The dashboard page carries `admin.token`, so a
+proof keyed by `admin.token` could be made by any program that loads the page. If the running
+gateway is older than the relay, agy gets a 502 that says to restart it (`switch off`, then
+`switch on`).
 
 ### Blindfold mode (optional)
 

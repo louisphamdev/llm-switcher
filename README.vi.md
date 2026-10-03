@@ -337,9 +337,17 @@ agy gửi token này dạng rõ tới `CLOUD_CODE_URL`. Vì vậy shim `agy` h�
 trước khi giao biến này cho agy. Nếu cổng không trả lời đúng bằng chứng của bản cài này trong 3 giây,
 shim gỡ biến, in một dòng thông báo, và agy dùng endpoint chính thức.
 
-Shim chỉ kiểm tra việc này lúc agy khởi động. Nếu gateway dừng trong lúc agy đang chạy (`switch off`,
-crash, cập nhật), cổng bị bỏ trống. Khi đó một tài khoản khác trên máy có thể chiếm cổng và nhận token.
-Để không có khoảng hở này, hãy đóng agy trước khi dừng gateway.
+Gateway cũng có thể dừng trong lúc agy đang chạy (`switch off`, crash, cập nhật). Khi đó cổng của nó
+bỏ trống, và một chương trình khác có thể chiếm cổng. Vì vậy agy đã route không bao giờ nói chuyện
+trực tiếp với cổng gateway. Shim chạy agy sau một relay (`agy-relay.mjs`) giữ cổng loopback riêng
+suốt thời gian agy chạy. Với mỗi kết nối của agy, relay hỏi gateway bằng chứng danh tính trên chính
+socket đó, và chỉ gửi request trên socket ấy khi bằng chứng đúng. Nếu sai, agy nhận 502, và token
+vẫn nằm lại trong relay.
+
+Relay chỉ chấp nhận bằng chứng ký bằng `gateway.secret`, một khóa ngẫu nhiên nằm cạnh `admin.token`.
+Không trang và không route nào của gateway trả về khóa này. Trang dashboard chứa `admin.token`, nên
+bằng chứng ký bằng `admin.token` thì chương trình nào tải trang cũng làm giả được. Nếu gateway đang
+chạy cũ hơn relay, agy nhận 502 kèm hướng dẫn khởi động lại (`switch off`, rồi `switch on`).
 
 ### Chế độ blindfold (tùy chọn)
 

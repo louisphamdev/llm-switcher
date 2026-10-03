@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.3
+
+- **agy runs behind a relay:** A routed agy no longer gets the gateway port. The shim starts it behind `agy-relay.mjs`, which holds its own loopback port for as long as agy runs. For each connection, the relay asks the gateway for its identity proof on the same socket and sends agy's request only after the proof holds. Before, the shim checked the gateway only at launch, so a gateway that stopped during an agy session left its port free for another program to take, with agy's Google token sent to it. If the proof fails now, agy gets a 502 and the token stays in the relay.
+- **A relay key that no page serves:** The relay accepts only `relayProof`, an HMAC keyed by `gateway.secret`, a random file next to `admin.token`. The gateway makes it at startup and keeps no copy. The dashboard page carries `admin.token`, so a proof keyed by it could be made by any program that loads the page. A gateway older than the relay gets a 502 that says to restart it.
+- **A `.cmd` agy gets its arguments unchanged:** The relay starts a `.cmd` or `.bat` agy through `%SystemRoot%\System32\cmd.exe /e:ON /v:OFF /d /c` with the quoting of the Rust standard library since CVE-2024-24576. `%` cannot expand a variable, and `&` or `|` cannot start a second command. A line break, or a command line over 8191 characters, stops the relay before agy starts, with a hint to pipe the prompt on stdin.
+- **`switch off` and `switch port` leave another instance alone:** They stopped or rewrote the installed service even when it ran the gateway of another port. A second instance (`LLM_SWITCHER_PORT`) then stopped the first one. The service now counts only for the port its definition names. The test suite triggered the same fault and stopped the real gateway of the machine.
+
 ## Release 1.3.2
 
 - **Codex over WebSocket crosses Bifrost:** Codex uses its WebSocket transport by default. The gateway now sends each WebSocket turn to intact `/v1/responses` as one HTTP request with the whole conversation, and sends each event back as one frame. Before, these turns took the convert route. A stream that stops before `response.completed` ends the turn with `response.failed`.
