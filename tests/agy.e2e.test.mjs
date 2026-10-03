@@ -623,6 +623,20 @@ test('a Codex WS Bifrost stream cut before its end still ends the turn with resp
   }
 });
 
+test('no page or answer of the gateway carries the relay key', async () => {
+  const secret = fs.readFileSync(path.join(tmpDir, 'gateway.secret'), 'utf8').trim();
+  assert.match(secret, /^[0-9a-f]{64}$/, 'the gateway made its key at startup');
+  const token = fs.readFileSync(path.join(tmpDir, 'admin.token'), 'utf8').trim();
+  for (const p of ['/', '/ui', '/health?challenge=x', '/api/status']) {
+    const r = await fetch(url(p), { headers: { 'x-llm-switcher-token': token } });
+    assert.equal(r.status, 200, p);
+    const all = JSON.stringify([...r.headers]) + await r.text();
+    assert.equal(all.includes(secret), false, `${p} carries the relay key`);
+  }
+  const health = await (await fetch(url('/health?challenge=n9'))).json();
+  assert.match(health.relayProof, /^[0-9a-f]{64}$/, 'the gateway answers a relay proof');
+});
+
 test('with agy switched off, its agent turns go back to Google', async (t) => {
   const token = fs.readFileSync(path.join(tmpDir, 'admin.token'), 'utf8').trim();
   const switchAgy = (profile) => fetch(url('/api/switch'), { method: 'POST', headers: { 'content-type': 'application/json', 'x-llm-switcher-token': token }, body: JSON.stringify({ target: 'agy', profile }) });

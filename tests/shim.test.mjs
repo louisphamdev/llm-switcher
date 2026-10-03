@@ -534,7 +534,9 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
     const port = server.address().port;
     const { out, err, ms } = await runAgyWindowsShim(port);
     if (routed) {
-      assert.match(out, new RegExp(`CCU=\\[http://127\\.0\\.0\\.1:${port}\\]`));
+      // agy gets the port of its own relay, which proves the gateway on every connection.
+      const relayPort = Number((out.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
+      assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out}`);
       assert.doesNotMatch(err, NOTICE);
     } else {
       assert.match(out, /CCU=\[\]/, 'the token must not go to a port that did not prove itself');
@@ -562,7 +564,8 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
     });
     fs.rmSync(dir, { recursive: true, force: true });
     if (routed) {
-      assert.match(out.stdout, new RegExp(`CCU=\\[http://127\\.0\\.0\\.1:${port}\\]`));
+      const relayPort = Number((out.stdout.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
+      assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out.stdout}`);
       assert.doesNotMatch(out.stderr, NOTICE);
     } else {
       assert.match(out.stdout, /CCU=\[\]/);

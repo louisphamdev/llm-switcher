@@ -40,6 +40,9 @@ const ROUTE_NOTIFIER = path.join(path.dirname(fileURLToPath(import.meta.url)), '
 // agy sends its Google token in clear text to CLOUD_CODE_URL. Its shim asks this helper for the
 // gateway's identity proof first, so a process that took the port never receives the token.
 const GATEWAY_CHECK = path.join(path.dirname(fileURLToPath(import.meta.url)), 'verify-gateway.mjs');
+// The launch check covers the start only. A routed agy then runs behind this relay, which proves
+// the gateway on every connection, so a port freed later never receives the token.
+const AGY_RELAY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agy-relay.mjs');
 
 // CLIs to wrap. `claude` is the most important case (--resume); codex and agy have their own files.
 export const SHIMMED = ['claude', 'codex', 'agy'];
@@ -191,6 +194,13 @@ if [ -z "$REAL" ]; then
   exit 127
 fi
 
+${name !== 'agy' ? '' : `# A routed agy talks only to its relay, which lives as long as agy (agy-relay.mjs).
+if [ "$TOOL_ACTIVE" = "1" ] && [ -n "\${CLOUD_CODE_URL:-}" ]; then
+  GATEWAY_URL="$CLOUD_CODE_URL"
+  unset CLOUD_CODE_URL
+  exec node "${AGY_RELAY}" "$GATEWAY_URL" "$REAL" "$@"
+fi
+`}
 # No override of any kind: the tool keeps its own configuration and its own model names (F3, R1).
 exec "$REAL" "$@"
 `;
@@ -266,14 +276,26 @@ for /f "tokens=1 delims==" %%V in ('set LLM_SWITCHER_CODEX_ 2^>nul ^| findstr /b
 ${caBlock}
 
 REM Find the real binary: drop this shim's own directory so it never calls itself.
-for /f "delims=" %%i in ('where ${name}.cmd 2^>nul ^| findstr /v /i "\\.llm-switcher\\\\bin"') do (
+${name === 'agy' ? `set "REAL_BIN="
+for /f "delims=" %%i in ('where ${name}.cmd 2^>nul ^| findstr /v /i "\\.llm-switcher\\\\bin"') do if not defined REAL_BIN set "REAL_BIN=%%i"
+if not defined REAL_BIN for /f "delims=" %%i in ('where ${name}.exe 2^>nul ^| findstr /v /i "\\.llm-switcher\\\\bin"') do if not defined REAL_BIN set "REAL_BIN=%%i"
+if not defined REAL_BIN goto :NOT_FOUND
+REM A routed agy talks only to its relay, which lives as long as agy (agy-relay.mjs).
+if not "%TOOL_ACTIVE%"=="1" goto :RUN_PLAIN
+if not defined CLOUD_CODE_URL goto :RUN_PLAIN
+node "${AGY_RELAY}" "%CLOUD_CODE_URL%" "%REAL_BIN%" %*
+exit /b
+:RUN_PLAIN
+call "%REAL_BIN%" %*
+exit /b
+:NOT_FOUND` : `for /f "delims=" %%i in ('where ${name}.cmd 2^>nul ^| findstr /v /i "\\.llm-switcher\\\\bin"') do (
   call "%%i" %*
   exit /b
 )
 for /f "delims=" %%i in ('where ${name}.exe 2^>nul ^| findstr /v /i "\\.llm-switcher\\\\bin"') do (
   call "%%i" %*
   exit /b
-)
+)`}
 echo [llm-switcher] cannot find the real '${name}' on PATH.>&2
 exit /b 127
 

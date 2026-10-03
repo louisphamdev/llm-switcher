@@ -68,6 +68,9 @@ test('the agy shim reads only its own files, takes no CA, and scrubs a stale gat
   assert.match(posix, /if \[ "\$TOOL_ACTIVE" != "1" \] && \[ -n "\$_u" \]; then/);
   assert.match(shim.renderShim('claude', 'win32'), /NODE_EXTRA_CA_CERTS/, 'Claude keeps its CA block');
   assert.equal(shim.routeEvidence('agy', ' CLOUD_CODE_URL=http://127.0.0.1:3456 PATH=x'), true);
+  assert.match(win, /agy-relay\.mjs" "%CLOUD_CODE_URL%"/, 'a routed agy runs behind its relay');
+  assert.match(posix, /exec node "[^"]*agy-relay\.mjs" "\$GATEWAY_URL" "\$REAL" "\$@"/);
+  assert.doesNotMatch(shim.renderShim('codex', 'win32'), /agy-relay/);
 });
 
 test('the agy hook is merged into hooks.json, unquoted, and removed without touching other hooks', () => {

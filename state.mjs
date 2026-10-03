@@ -107,6 +107,38 @@ export function ensureAdminToken() {
   return token;
 }
 
+// The key of the proof that agy-relay.mjs checks. Random, never derived from admin.token: the
+// dashboard page carries admin.token, so a proof keyed by it can be made by anyone who loads /ui.
+export const gatewaySecretPath = path.join(path.dirname(configPath), 'gateway.secret');
+
+export function readGatewaySecret() {
+  try {
+    return fs.readFileSync(gatewaySecretPath, 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// A good secret is kept. A missing, empty or blank file is replaced through a rename, so a damaged
+// file never leaves agy without a key. Throws when it cannot write; never leaves a temporary file.
+export function ensureGatewaySecret() {
+  if (readGatewaySecret()) return;
+  const tmp = `${gatewaySecretPath}.${process.pid}.tmp`;
+  try {
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(tmp, crypto.randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, gatewaySecretPath);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw err;
+  }
+}
+
+export function relayProof(nonce, { port, pid }, secret = readGatewaySecret()) {
+  if (!secret) return '';
+  return crypto.createHmac('sha256', secret).update(['relay', port, pid, nonce].join('|')).digest('hex');
+}
+
 // `switch ui` must not put the token on a command line: /proc/<pid>/cmdline is readable by every
 // account. It opens this private file instead, which redirects to the dashboard with the token.
 export function writeDashboardLauncher(url) {

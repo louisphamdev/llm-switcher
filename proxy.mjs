@@ -22,7 +22,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
+  ensureAdminToken, ensureGatewaySecret, relayProof, identityProof, reconcileBlindfold, checkBlindfoldTarget,
   codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
@@ -116,6 +116,8 @@ function checkRequestOrigin(req) {
 // The Host/Origin guard stops browser pages only. A local process that is not the owner must
 // also present the token from admin.token (mode 0600) to use /api/*.
 const ADMIN_TOKEN = Buffer.from(ensureAdminToken());
+// The relay key. The gateway keeps no copy: relayProof() reads the file for each proof.
+ensureGatewaySecret();
 
 // `switch contract-probe` names the trace id of the exchange it drives, so it can print the id
 // before intact holds it. Only a process that can read admin.token is believed, and the marker
@@ -1315,7 +1317,9 @@ async function route(req, res) {
       proxy: 'llm-switcher',
       ...(challenge ? {
         pid: process.pid,
-        proof: identityProof(challenge, { role: 'gateway', port: PORT, pid: process.pid }, ADMIN_TOKEN.toString())
+        proof: identityProof(challenge, { role: 'gateway', port: PORT, pid: process.pid }, ADMIN_TOKEN.toString()),
+        // The only proof agy-relay.mjs accepts: its key is not on the dashboard page.
+        relayProof: relayProof(challenge, { port: PORT, pid: process.pid })
       } : {}),
       port: PORT,
       configLoaded: Boolean(loadConfig()),
