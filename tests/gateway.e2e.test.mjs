@@ -1149,6 +1149,8 @@ test('Direct passthrough waits for a slow client instead of buffering the whole 
     req.on('error', reject);
     req.end(JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 10, stream: true, messages: [{ role: 'user', content: 'DIRECT_BIG' }] }));
   });
+  // The end callback of the mock can run after the client's 'end' under load: 0 means not recorded yet.
+  assert.ok(await until(() => bigState.finishedAt, 2000), 'the upstream never finished');
   assert.ok(bigState.finishedAt >= resumedAt, `upstream finished ${resumedAt - bigState.finishedAt} ms before the client read anything`);
 });
 

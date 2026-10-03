@@ -11,6 +11,8 @@ jobs:
   test:
     name: Node ${{ matrix.node }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # A local run takes about 2 minutes. A hang must fail the job, not hold it for 6 hours.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

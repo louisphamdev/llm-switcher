@@ -237,6 +237,19 @@ const envelope = (over = {}) => ({
   },
   ...over
 });
+// Whether the gateway ended its answer as a whole one. Read from the HTTP framing, because fetch in
+// Node 18 takes a chunked body that a closed socket cut short as complete.
+function answerIsComplete(target, { method = 'POST', headers = {}, body = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(target, { method, headers: { ...headers, 'content-length': Buffer.byteLength(body) } }, (res) => {
+      res.on('error', () => {});
+      res.on('close', () => resolve({ status: res.statusCode, complete: res.complete }));
+      res.resume();
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
 const lastTo = (prefix) => [...received].reverse().find(r => r.url.startsWith(prefix));
 const dataLines = (text) => text.split('\n').filter(l => l.startsWith('data:')).map(l => JSON.parse(l.slice(5)));
 
@@ -383,16 +396,16 @@ test('a Code Assist host that never answers gives a 504 after the idle timeout',
 
 test('an upstream that stops in the middle of a body ends the answer to agy with an error', async () => {
   const started = Date.now();
-  const r = await fetch(url('/v1internal:breakMidway'), { method: 'POST', headers: agyHeaders(), body: '{}' });
-  await assert.rejects(r.text());
+  const r = await answerIsComplete(url('/v1internal:breakMidway'), { headers: agyHeaders(), body: '{}' });
+  assert.equal(r.complete, false);
   assert.ok(Date.now() - started < 10000);
 });
 
 test('an upstream that stalls after its headers is cut by the idle timeout', async () => {
   const port = await startGateway({ LLM_SWITCHER_CODE_ASSIST_URL: `${base}/google`, LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS: '1000' });
   const started = Date.now();
-  const r = await fetch(`http://127.0.0.1:${port}/v1internal:stallMidway`, { method: 'POST', headers: agyHeaders(), body: '{}' });
-  await assert.rejects(r.text());
+  const r = await answerIsComplete(`http://127.0.0.1:${port}/v1internal:stallMidway`, { headers: agyHeaders(), body: '{}' });
+  assert.equal(r.complete, false);
   assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
 });
 
@@ -515,9 +528,9 @@ test('an agent turn that names a profile that does not exist gets a 400, never G
 });
 
 test('a Bifrost stream that breaks ends the answer to agy with an error, not a clean end', async () => {
-  const r = await fetch(url('/v1internal:streamGenerateContent?alt=sse'), { method: 'POST', headers: agyHeaders({ 'x-llm-profile': 'agyg' }), body: JSON.stringify(envelope()) });
+  const r = await answerIsComplete(url('/v1internal:streamGenerateContent?alt=sse'), { headers: agyHeaders({ 'x-llm-profile': 'agyg' }), body: JSON.stringify(envelope()) });
   assert.equal(r.status, 200);
-  await assert.rejects(r.text());
+  assert.equal(r.complete, false);
 });
 
 test('with agy switched off, its agent turns go back to Google', async (t) => {

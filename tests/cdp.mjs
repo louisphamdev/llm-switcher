@@ -41,7 +41,10 @@ export async function launchBrowser() {
     '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${dir}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu',
     '--disable-background-networking', '--window-size=1280,900',
-    ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
+    // macOS: no keychain prompt, which would block a headless run with no one to answer it.
+    '--use-mock-keychain', '--password-store=basic',
+    // Ubuntu 24.04 blocks the user namespaces the Chrome sandbox needs. The page is a local test.
+    ...(process.platform === 'linux' || process.getuid?.() === 0 ? ['--no-sandbox'] : []),
     'about:blank'
   ];
   const child = spawn(findChromium(), args, { stdio: 'ignore', env: { ...process.env, HOME: dir } });
