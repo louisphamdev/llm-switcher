@@ -337,6 +337,10 @@ agy gửi token này dạng rõ tới `CLOUD_CODE_URL`. Vì vậy shim `agy` h�
 trước khi giao biến này cho agy. Nếu cổng không trả lời đúng bằng chứng của bản cài này trong 3 giây,
 shim gỡ biến, in một dòng thông báo, và agy dùng endpoint chính thức.
 
+Shim chỉ kiểm tra việc này lúc agy khởi động. Nếu gateway dừng trong lúc agy đang chạy (`switch off`,
+crash, cập nhật), cổng bị bỏ trống. Khi đó một tài khoản khác trên máy có thể chiếm cổng và nhận token.
+Để không có khoảng hở này, hãy đóng agy trước khi dừng gateway.
+
 ### Chế độ blindfold (tùy chọn)
 
 Khi có override base URL, Codex in một dòng ngay trên màn `/model` của nó:

@@ -337,6 +337,10 @@ gateway for its identity proof before it gives agy the variable. If the port doe
 the proof of this install within 3 seconds, the shim removes the variable, prints one line, and agy
 uses its official endpoint.
 
+The shim does this check only when agy starts. If the gateway stops while agy runs (`switch off`, a
+crash, an update), the port is free. Another account on this computer can then take the port and
+receive the token. To close this gap, close agy before you stop the gateway.
+
 ### Blindfold mode (optional)
 
 A base URL override makes Codex print one line on its own `/model` screen:
