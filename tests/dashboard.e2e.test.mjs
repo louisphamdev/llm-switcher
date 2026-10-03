@@ -20,6 +20,22 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     fx = await startDashboardFixture();
     browser = await launchBrowser();
     page = await browser.newPage();
+    // Once per tab, as the launcher of `switch ui` does; the tab keeps the token from then on.
+    await page.goto(fx.tokenUrl());
+  });
+
+  it('a tab opened without the launcher token says to open the dashboard with switch ui', async () => {
+    const fresh = await browser.newPage();
+    try {
+      await fresh.goto(fx.dashboardUrl);
+      await fresh.waitFor(`/switch ui/.test(document.getElementById('toast')?.textContent || '')`, 'the switch ui hint');
+    } finally {
+      // Close the tab itself, then raise the main one: a tab left in the background gets throttled
+      // timers and no animation frames, which stalls every later test.
+      await fresh.send('Page.close').catch(() => {});
+      fresh.close();
+      await page.send('Page.bringToFront');
+    }
   });
 
   after(async () => {

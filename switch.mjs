@@ -616,7 +616,7 @@ async function showStatus() {
   console.log('=== LLM Switcher Status ===');
   const held = { legacy: `OLD GATEWAY (< 1.1.1) ON PORT ${port}: stop it, then run \`switch on\``, foreign: `PORT ${port} HELD BY ANOTHER PROCESS`, silent: `PORT ${port} DOES NOT ANSWER (hung gateway or another program)` };
   console.log(`Proxy Service:  ${isRunning ? `RUNNING (port ${port})` : held[gateway] || 'STOPPED'}`);
-  console.log(`Web UI:         http://127.0.0.1:${port}/ui`);
+  console.log(`Web UI:         http://127.0.0.1:${port}/ui  (open it with \`switch ui\`)`);
   console.log(`Launcher Flag:  ${flagged ? 'active.flag present' : 'absent (launchers use official endpoints)'}`);
   if (flagged && !isRunning) {
     console.log(`[WARN] active.flag exists but proxy is STOPPED -> launched CLIs will fail to connect. Run 'switch on' or 'switch off'.`);

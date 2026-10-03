@@ -1247,10 +1247,12 @@
   <script>
     // State & Globals
     const ADMIN_TOKEN_KEY = 'llm-switcher-admin-token';
-    const servedToken = document.querySelector('meta[name="llm-switcher-token"]')?.content;
+    // The token comes only in the #token of the private launcher that `switch ui` opens, and stays in
+    // this tab. The page itself never carries it: any process on the machine can load /ui.
+    const NO_TOKEN_HINT = 'This tab has no access token. Open the dashboard with `switch ui`.';
     const hashTokenMatch = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
-    if (servedToken || hashTokenMatch) {
-      sessionStorage.setItem(ADMIN_TOKEN_KEY, servedToken || hashTokenMatch[1]);
+    if (hashTokenMatch) {
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, hashTokenMatch[1]);
     }
     if (hashTokenMatch) {
       history.replaceState(null, '', location.pathname + location.search + '#/routes');
@@ -1278,13 +1280,13 @@
 
     // API Helper
     async function api(path, opts = {}) {
-      const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || document.querySelector('meta[name="llm-switcher-token"]')?.content || '';
+      const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
       const headers = {
         ...opts.headers,
         'x-llm-switcher-token': token
       };
       const res = await fetch(path, { ...opts, headers });
-      if (res.status === 401) showToast('Unauthorized: check admin.token in server directory', true);
+      if (res.status === 401) showToast(NO_TOKEN_HINT, true);
       if (res.status === 409) setTimeout(loadStatus, 0);
       return res;
     }
@@ -2792,6 +2794,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      if (!sessionStorage.getItem(ADMIN_TOKEN_KEY)) showToast(NO_TOKEN_HINT, true);
       // Setup initial theme buttons state
       const currentTheme = document.documentElement.dataset.theme || 'dark';
       document.getElementById('btn-theme-dark')?.setAttribute('aria-pressed', currentTheme === 'dark');

@@ -213,7 +213,8 @@ node "$(npm root -g)/llm-switcher/proxy.mjs"
 Khác biệt giữa các nền tảng, và hai tính năng không chạy ở mọi nơi, nằm trong
 [📖 `docs/cross-platform.md`](docs/cross-platform.md).
 
-Mở Bảng điều khiển Web Dashboard tại: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
+Mở Bảng điều khiển Web Dashboard bằng `switch ui`. Lệnh này mở `http://127.0.0.1:3456/ui` kèm token truy
+cập của bản cài này, và tab trình duyệt giữ token trong lúc tab còn mở.
 
 ---
 
@@ -345,8 +346,8 @@ socket đó, và chỉ gửi request trên socket ấy khi bằng chứng đúng
 vẫn nằm lại trong relay.
 
 Relay chỉ chấp nhận bằng chứng ký bằng `gateway.secret`, một khóa ngẫu nhiên nằm cạnh `admin.token`.
-Không trang và không route nào của gateway trả về khóa này. Trang dashboard chứa `admin.token`, nên
-bằng chứng ký bằng `admin.token` thì chương trình nào tải trang cũng làm giả được. Nếu gateway đang
+Không trang và không route nào của gateway trả về khóa này, và không chương trình nào suy ra được nó từ
+`admin.token`. Nếu gateway đang
 chạy cũ hơn relay, agy nhận 502 kèm hướng dẫn khởi động lại (`switch off`, rồi `switch on`).
 
 ### Chế độ blindfold (tùy chọn)
@@ -776,7 +777,7 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 ## Mô hình Bảo mật
 
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
-- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. Gateway đặt token này vào trang dashboard, nên mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Lớp kiểm tra Host và Origin ngăn trang web khác đọc trang và token. MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
+- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. Trang dashboard không chứa token này, vì chương trình nào trên máy cũng tải được trang. `switch ui` mở dashboard qua một file riêng tư (mode 0600), file này đưa token cho tab trình duyệt qua phần fragment của URL, rồi trang xóa nó khỏi thanh địa chỉ. Tab mở thẳng `http://127.0.0.1:3456/ui` mà không qua file này sẽ hiện thông báo bảo dùng `switch ui`. MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
 - API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được gửi tới `baseURL` và `endpoints` đã lưu của chính profile đó. Lần lưu nào đổi một trong hai thì phải nhập lại key.
 - Mỗi thay đổi từ dashboard mang theo revision của config mà trang đã tải. Nếu tab khác, CLI hoặc MCP server đã lưu trước đó, gateway trả 409 và trang tải lại thay vì ghi đè thay đổi kia.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream. Các header `x-*` khác, `traceparent` và `tracestate` được chuyển tiếp. Gateway bỏ header điều khiển của chính nó (`x-profile`, `x-llm-profile`) và header định danh mạng (`x-forwarded-*`, `x-real-ip`).

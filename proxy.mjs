@@ -1300,10 +1300,9 @@ async function route(req, res) {
         'X-Frame-Options': 'DENY',
         'X-Content-Type-Options': 'nosniff'
       });
-      // One gateway serves one user, so the page opened at /ui carries its own token. The Host and Origin
-      // guard above keeps it from other sites; the token is hex, so it needs no escaping.
-      const meta = `<meta name="llm-switcher-token" content="${ADMIN_TOKEN.toString()}">`;
-      return res.end(fs.readFileSync(uiHtmlPath, 'utf8').replace('<head>', `<head>\n  ${meta}`));
+      // No token in the page: any process on the machine can GET /ui. The dashboard gets it from the
+      // #token of the private launcher that `switch ui` opens.
+      return res.end(fs.readFileSync(uiHtmlPath, 'utf8'));
     }
   }
 
@@ -2266,7 +2265,7 @@ if (!handedOver) server.listen(PORT, '127.0.0.1', () => {
     serialized(() => reconcile(cfg));
   }
   console.log(`[llm-switcher] Server running on http://127.0.0.1:${PORT}`);
-  console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui`);
+  console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui (open it with \`switch ui\`)`);
   console.log(`[llm-switcher] Endpoints: /v1/messages (Claude Code) | /v1/responses (Codex)`);
   // Asynchronously discover latest tool models in the background without blocking startup
   refreshCatalog(STATE_DIR).catch(() => {});

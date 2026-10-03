@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.4
+
+- **The dashboard page carries no token:** `/ui` sent `admin.token` in the page, and any program on the machine can load `/ui`. The page now gets the token only from the `#token=` of the private launcher that `switch ui` opens (a file with mode 0600). The tab keeps it in `sessionStorage`, so it does not stay in the browser after the tab closes. A tab opened at `/ui` directly says to use `switch ui`. `switch status` and the gateway start line say the same.
+- **Tests:** The agy shim tests start a real relay and send a real request through it. The request must reach the gateway with the Google token, and a gateway without a valid proof must get nothing. The Update now test waits longer than the page polls, so a failure shows what the page saw.
+
 ## Release 1.3.3
 
 - **agy runs behind a relay:** A routed agy no longer gets the gateway port. The shim starts it behind `agy-relay.mjs`, which holds its own loopback port for as long as agy runs. For each connection, the relay asks the gateway for its identity proof on the same socket and sends agy's request only after the proof holds. Before, the shim checked the gateway only at launch, so a gateway that stopped during an agy session left its port free for another program to take, with agy's Google token sent to it. If the proof fails now, agy gets a 502 and the token stays in the relay.

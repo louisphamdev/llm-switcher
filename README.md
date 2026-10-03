@@ -211,7 +211,8 @@ node "$(npm root -g)/llm-switcher/proxy.mjs"
 
 `switch <command>` works the same on Linux, macOS and Windows. A checkout has its own launchers: `switch` for Linux and macOS, `switch.cmd` for Windows. Platform differences, and the two features that are not available everywhere, are in [📖 `docs/cross-platform.md`](docs/cross-platform.md).
 
-Open the Web Dashboard at: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
+Open the Web Dashboard with `switch ui`. It opens `http://127.0.0.1:3456/ui` with the access token of
+this install, and the browser tab keeps the token while it stays open.
 
 ---
 
@@ -345,8 +346,8 @@ socket, and sends the request on that socket only after the proof holds. If the 
 gets a 502, and its token stays in the relay.
 
 The relay accepts only a proof keyed by `gateway.secret`, a random key next to `admin.token`. No
-page and no route of the gateway serves this key. The dashboard page carries `admin.token`, so a
-proof keyed by `admin.token` could be made by any program that loads the page. If the running
+page and no route of the gateway serves this key, and no program can derive it from `admin.token`.
+If the running
 gateway is older than the relay, agy gets a 502 that says to restart it (`switch off`, then
 `switch on`).
 
@@ -782,7 +783,7 @@ Because of this split, a provider fingerprint is never a rule in this gateway. I
 ## Security Model
 
 - The gateway binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS-rebinding protection) or whose `Origin` is not the dashboard itself (CSRF protection).
-- The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. The gateway puts this token in the dashboard page, so `http://127.0.0.1:3456/ui` works when you open it directly. The Host and Origin checks keep the page and the token from other sites. The MCP server reads the file. `/v1/*` and `/health` need no token.
+- The admin API (`/api/*`) requires the `x-llm-switcher-token` header. The gateway creates the token in `admin.token`, next to `config.json`, with mode 0600. The dashboard page does not carry this token, because any program on the computer can load the page. `switch ui` opens the dashboard through a private file (mode 0600) that gives the token to the browser tab in the URL fragment, and the page removes it from the address bar. A tab opened at `http://127.0.0.1:3456/ui` without this file shows a message that says to use `switch ui`. The MCP server reads the file. `/v1/*` and `/health` need no token.
 - API keys are never sent to the browser: `/api/status` returns redacted profiles and the dashboard keeps the stored key unless you type a new one. The stored key goes only to the stored `baseURL` and `endpoints` of that profile. A save that changes either one must carry the key again.
 - Every dashboard change carries the config revision that the page loaded. If another tab, the CLI or the MCP server saved in the meantime, the gateway answers 409 and the page reloads instead of overwriting that change.
 - Client credentials such as `x-api-key`, `authorization` or `x-goog-api-key` are **not** forwarded to upstreams. Other `x-*` headers, `traceparent` and `tracestate` pass through. The gateway drops its own control headers (`x-profile`, `x-llm-profile`) and the network identity headers (`x-forwarded-*`, `x-real-ip`).

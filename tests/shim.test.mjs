@@ -476,6 +476,21 @@ const AGY_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agyconfig-'));
 const AGY_CONFIG = path.join(AGY_CONFIG_DIR, 'config.json');
 test.after(() => fs.rmSync(AGY_CONFIG_DIR, { recursive: true, force: true }));
 fs.writeFileSync(path.join(path.dirname(AGY_CONFIG), 'admin.token'), AGY_TOKEN);
+// The relay key of this test install: the relay of a routed agy checks every connection with it.
+const AGY_SECRET = 'd'.repeat(64);
+fs.writeFileSync(path.join(path.dirname(AGY_CONFIG), 'gateway.secret'), AGY_SECRET);
+// Stands in for agy: sends one request with its Google token to CLOUD_CODE_URL, when it has one.
+const AGY_REQUEST = path.join(AGY_CONFIG_DIR, 'agy-request.mjs');
+fs.writeFileSync(AGY_REQUEST, `
+import http from 'node:http';
+const url = process.env.CLOUD_CODE_URL;
+if (url) await new Promise((resolve) => {
+  const req = http.request(url + '/v1internal:loadCodeAssist', { method: 'POST', agent: false, headers: { authorization: 'Bearer google-secret' } },
+    (res) => { res.resume(); res.on('end', () => { console.log('STATUS ' + res.statusCode); resolve(); }); });
+  req.on('error', (e) => { console.log('ERROR ' + e.message); resolve(); });
+  req.end('{}');
+});
+`);
 const VERIFY = path.join(ROOT, 'verify-gateway.mjs');
 // Async on purpose: the /health listener lives in this process, and a spawnSync would block it.
 const { spawn: spawnAsync } = await import('node:child_process');
@@ -491,19 +506,31 @@ function runAsync(cmd, args, opts) {
 }
 const NOTICE = /did not prove it is this switcher/;
 
-// A /health listener: 'real' signs like this gateway, 'forged' sends a wrong proof, 'silent' never answers.
+// A gateway listener: 'real' signs like this gateway (both proofs), 'forged' sends wrong proofs,
+// 'silent' never answers. `server.seen` holds the Authorization of every request that is not a probe.
 async function agyListener(kind) {
   const http = await import('node:http');
   const net = await import('node:net');
+  const crypto = await import('node:crypto');
+  const seen = [];
   const server = kind === 'silent'
     ? net.createServer((sock) => sock.on('error', () => {}))
     : http.createServer((req, res) => {
       const port = server.address().port;
-      const nonce = new URL(req.url, 'http://x').searchParams.get('challenge');
-      const proof = kind === 'real' ? identityProof(nonce, { role: 'gateway', port, pid: 4242 }, AGY_TOKEN) : 'forged';
+      const u = new URL(req.url, 'http://x');
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher', port, pid: 4242, proof }));
+      if (u.pathname !== '/health') {
+        seen.push(req.headers.authorization || '');
+        req.resume();
+        return res.end('{"answeredBy":"gateway"}');
+      }
+      const nonce = u.searchParams.get('challenge');
+      const real = kind === 'real';
+      const proof = real ? identityProof(nonce, { role: 'gateway', port, pid: 4242 }, AGY_TOKEN) : 'forged';
+      const relayProof = real ? crypto.createHmac('sha256', AGY_SECRET).update(['relay', port, 4242, nonce].join('|')).digest('hex') : 'forged';
+      res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher', port, pid: 4242, proof, relayProof }));
     });
+  server.seen = seen;
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   return server;
 }
@@ -511,7 +538,7 @@ async function agyListener(kind) {
 async function runAgyWindowsShim(port) {
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyshim-'));
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyfake-'));
-  fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), '@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\n');
+  fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), `@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\nnode "${AGY_REQUEST}"\r\n`);
   for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
   fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
   fs.writeFileSync(path.join(STATE, 'env-agy.cmd'), `SET "CLOUD_CODE_URL=http://127.0.0.1:${port}"\r\n`);
@@ -537,10 +564,14 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
       // agy gets the port of its own relay, which proves the gateway on every connection.
       const relayPort = Number((out.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
       assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out}`);
+      // The request really crossed the relay and reached this gateway, token included.
+      assert.match(out, /STATUS 200/, out);
+      assert.deepEqual(server.seen, ['Bearer google-secret']);
       assert.doesNotMatch(err, NOTICE);
     } else {
       assert.match(out, /CCU=\[\]/, 'the token must not go to a port that did not prove itself');
       assert.match(err, NOTICE);
+      assert.deepEqual(server.seen ?? [], [], 'the listener never received the token');
     }
     assert.ok(ms < 8000, `the shim took ${ms} ms`);
   });
@@ -553,7 +584,7 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
     t.after(() => server.close());
     const port = server.address().port;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyposix-'));
-    fs.writeFileSync(path.join(dir, 'agy'), '#!/usr/bin/env bash\necho "CCU=[${CLOUD_CODE_URL:-}]"\n');
+    fs.writeFileSync(path.join(dir, 'agy'), `#!/usr/bin/env bash\necho "CCU=[\${CLOUD_CODE_URL:-}]"\nnode "${AGY_REQUEST}"\n`);
     fs.chmodSync(path.join(dir, 'agy'), 0o755);
     for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
     fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
@@ -566,10 +597,13 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
     if (routed) {
       const relayPort = Number((out.stdout.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
       assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out.stdout}`);
+      assert.match(out.stdout, /STATUS 200/, out.stdout);
+      assert.deepEqual(server.seen, ['Bearer google-secret']);
       assert.doesNotMatch(out.stderr, NOTICE);
     } else {
       assert.match(out.stdout, /CCU=\[\]/);
       assert.match(out.stderr, NOTICE);
+      assert.deepEqual(server.seen ?? [], [], 'the listener never received the token');
     }
     assert.ok(Date.now() - started < 8000, `the shim took ${Date.now() - started} ms`);
   });

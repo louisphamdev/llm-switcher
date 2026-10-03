@@ -134,6 +134,8 @@ export async function startDashboardFixture() {
     upstream,
     upstreamBase,
     dashboardUrl: `http://127.0.0.1:${port}/ui`,
+    // How `switch ui` opens it: the token comes in the fragment, never in the page.
+    tokenUrl: () => `http://127.0.0.1:${port}/ui#token=${adminToken()}`,
     // What is on disk, which the dashboard has to agree with after every action.
     config: () => JSON.parse(fs.readFileSync(cfgPath, 'utf8')),
     // A change made outside the dashboard, as `switch` in a terminal or an editor would make it.
