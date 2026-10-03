@@ -614,7 +614,7 @@ Lệnh này ghi một file cho mỗi tool, và không mở file cấu hình nào
 | --- | --- | --- |
 | Claude Code | `~/.claude/skills/llm-switcher-status/` | Một thư mục có `.claude-plugin/plugin.json` nằm dưới skills directory sẽ được nạp như một plugin ở phiên kế tiếp. Không cần marketplace, không cần bước install. |
 | Codex | `~/.codex/hooks.json` | Codex tự đọc file này. `config.toml` không bị mở. |
-| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy đọc file này khi khởi động. agy 1.2.7 nạp file này nhưng chưa chạy hook toàn cục. Chỉ `.agents/hooks.json` trong workspace mới chạy. Cho tới khi có bản chạy hook toàn cục, toast của shim là nhắc nhở cho agy. agy không chạy được đường dẫn có dấu nháy, nên nếu đường dẫn của `hook-status.mjs` có dấu cách, lệnh cài bỏ qua agy và in `[Skip]`. |
+| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy đọc file này khi khởi động. agy 1.2.14 nạp file này nhưng chưa chạy hook toàn cục. Chỉ `.agents/hooks.json` trong workspace mới chạy. Cho tới khi có bản chạy hook toàn cục, toast của shim là nhắc nhở cho agy. agy không chạy được đường dẫn có dấu nháy, nên nếu đường dẫn của `hook-status.mjs` có dấu cách, lệnh cài bỏ qua agy và in `[Skip]`. |
 
 Nếu `~/.codex/hooks.json` đã có sẵn thì lệnh sẽ **merge**. Hook của bạn được giữ nguyên, và
 `switch plugin uninstall` chỉ lấy đi phần của switcher. Nếu file không parse được thì lệnh từ chối và

@@ -10,7 +10,8 @@ import {
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
   isAntigravityModel, smartUsage,
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
-  smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage
+  smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
+  createCodeAssistStream
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -897,4 +898,18 @@ test('codeAssistToIR: generation parameters map to ir.params', () => {
   assert.equal(ir.params.temperature, 0.2);
   assert.equal(ir.params.topP, 0.9);
   assert.deepEqual(ir.params.stop, ['END']);
+});
+
+test('Code Assist stream: a chunk is wrapped with a trace id, an error is sent bare as Code Assist does', () => {
+  const out = [];
+  const stream = createCodeAssistStream((event, data) => out.push(data), 'gemini-3.8-flash-high');
+  stream.text('hi');
+  stream.error('upstream broke');
+  const chunk = out.find(d => d.response);
+  assert.equal(typeof chunk.traceId, 'string');
+  assert.match(chunk.response.responseId, /^agy-/);
+  const err = out.at(-1);
+  assert.deepEqual(Object.keys(err), ['error'], 'an error is not wrapped in response/traceId');
+  assert.equal(err.error.status, 'INTERNAL');
+  assert.equal(err.error.message, 'upstream broke');
 });

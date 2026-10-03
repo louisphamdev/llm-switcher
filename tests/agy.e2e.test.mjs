@@ -489,6 +489,7 @@ test('the inspector reads the usage of a non-streaming Bifrost agy turn', async 
 });
 
 test('a failed Bifrost lookup is retried soon, not pinned for ten minutes', async () => {
+  flakyLookups = 0; // the first lookup of this test fails, whatever ran before
   const port = await startGateway({ LLM_SWITCHER_CODE_ASSIST_URL: `${base}/google`, LLM_SWITCHER_BIFROST_RETRY_MS: '200' });
   const send = async () => (await fetch(`http://127.0.0.1:${port}/v1internal:streamGenerateContent?alt=sse`, { method: 'POST', headers: agyHeaders({ 'x-llm-profile': 'agyf' }), body: JSON.stringify(envelope()) })).text();
   assert.match(await send(), /flaky converted/);
@@ -497,6 +498,7 @@ test('a failed Bifrost lookup is retried soon, not pinned for ten minutes', asyn
 });
 
 test('a Bifrost lookup that answers 404 is retried soon too', async () => {
+  notFoundLookups = 0;
   const port = await startGateway({ LLM_SWITCHER_CODE_ASSIST_URL: `${base}/google`, LLM_SWITCHER_BIFROST_RETRY_MS: '200' });
   const send = async () => (await fetch(`http://127.0.0.1:${port}/v1internal:streamGenerateContent?alt=sse`, { method: 'POST', headers: agyHeaders({ 'x-llm-profile': 'agynf' }), body: JSON.stringify(envelope()) })).text();
   assert.match(await send(), /flaky converted/);
@@ -518,9 +520,12 @@ test('a Bifrost stream that breaks ends the answer to agy with an error, not a c
   await assert.rejects(r.text());
 });
 
-test('with agy switched off, its agent turns go back to Google', async () => {
+test('with agy switched off, its agent turns go back to Google', async (t) => {
   const token = fs.readFileSync(path.join(tmpDir, 'admin.token'), 'utf8').trim();
-  const off = await fetch(url('/api/switch'), { method: 'POST', headers: { 'content-type': 'application/json', 'x-llm-switcher-token': token }, body: JSON.stringify({ target: 'agy', profile: null }) });
+  const switchAgy = (profile) => fetch(url('/api/switch'), { method: 'POST', headers: { 'content-type': 'application/json', 'x-llm-switcher-token': token }, body: JSON.stringify({ target: 'agy', profile }) });
+  // Put agy back, so a test added after this one still finds it routed.
+  t.after(async () => { await switchAgy('agyb'); });
+  const off = await switchAgy(null);
   assert.equal(off.status, 200, await off.text());
   const before = received.length;
   const r = await fetch(url('/v1internal:streamGenerateContent?alt=sse'), { method: 'POST', headers: agyHeaders(), body: JSON.stringify(envelope()) });

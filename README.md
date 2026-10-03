@@ -621,7 +621,7 @@ This writes one file for each tool, and it opens no configuration file of either
 | --- | --- | --- |
 | Claude Code | `~/.claude/skills/llm-switcher-status/` | A folder with `.claude-plugin/plugin.json` under a skills directory loads as a plugin on the next session. There is no marketplace and no install step. |
 | Codex | `~/.codex/hooks.json` | Codex reads this file by itself. `config.toml` stays closed. |
-| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy reads this file at the start. agy 1.2.7 loads it, but it does not run global hooks yet. Only `.agents/hooks.json` in a workspace runs. Until a release runs global hooks, the shim toast is the notice for agy. agy cannot run a quoted path, so if the path of `hook-status.mjs` holds a space, the install skips agy and prints `[Skip]`. |
+| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy reads this file at the start. agy 1.2.14 loads it, but it does not run global hooks yet. Only `.agents/hooks.json` in a workspace runs. Until a release runs global hooks, the shim toast is the notice for agy. agy cannot run a quoted path, so if the path of `hook-status.mjs` holds a space, the install skips agy and prints `[Skip]`. |
 
 An existing `~/.codex/hooks.json` is merged. Your own hooks stay, and `switch plugin uninstall` takes
 only ours away. If the file does not parse, the install refuses it and changes nothing, because that

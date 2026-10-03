@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.1
+
+- **agy note:** `switch plugin status` now names agy 1.2.14. This release of agy also loads `~/.gemini/antigravity-cli/hooks.json` but does not run its hooks (measured 2026-10-03), so the shim toast is still the notice for agy.
+- **Tests:** A test covers an error in a converted agy stream. The error goes to agy bare, as Code Assist sends it. The agy end-to-end tests now pass in any order.
+
 ## Release 1.3.0
 
 - **Antigravity CLI (`agy`):** A third tool, beside Claude Code and Codex. A profile with `"tool": "agy"` routes it, and `switch agy <profile>` turns it on. `switch off agy` turns it off and leaves the other tools alone. The dashboard has an agy row and an **agy on intact** template.

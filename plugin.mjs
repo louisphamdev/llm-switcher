@@ -181,11 +181,11 @@ function uninstallCodex(opts) {
 // with its quotes kept literally, so the path goes unquoted, with forward slashes. A path with a
 // space cannot be written that way, and then agy is skipped.
 //
-// agy 1.2.7 loads this global file but does not run its hooks; only a workspace's .agents/hooks.json
-// runs (measured 2026-10-02). The entry is ready for a release that runs global hooks. Until then the
+// agy 1.2.14 loads this global file but does not run its hooks; only a workspace's .agents/hooks.json
+// runs (measured 2026-10-03). The entry is ready for a release that runs global hooks. Until then the
 // shim toast is the launch notice for agy.
 export const AGY_HOOK_NAME = 'llm-switcher-status';
-export const AGY_GLOBAL_HOOKS_NOTE = 'agy 1.2.7 loads global hooks but does not run them yet; the shim toast is the notice';
+export const AGY_GLOBAL_HOOKS_NOTE = 'agy 1.2.14 loads global hooks but does not run them yet; the shim toast is the notice';
 
 function agyHooksPath(opts) {
   return path.join(opts.agyHome || agyHome(), 'hooks.json');
