@@ -35,10 +35,11 @@ elif [ -d "$ROOT/.git" ]; then DEFAULT_OUT="$ROOT/blindfold/certs"
 else DEFAULT_OUT="$HOME/.llm-switcher/blindfold/certs"; fi
 # Older commands read `make-certs.sh <host> <out-dir>`. The host list is fixed now, so the host is
 # ignored; two arguments keep those commands working. A lone path-like argument is the directory.
+# A Windows path (C:\...\certs) has no forward slash, so a backslash also marks a path.
 OUT_ARG=""
 if [ "$#" -ge 2 ]; then OUT_ARG="$2"
 elif [ "$#" -eq 1 ]; then
-  case "$1" in */*|.*) OUT_ARG="$1" ;; *) : ;; esac
+  case "$1" in */*|*\\*|.*) OUT_ARG="$1" ;; *) : ;; esac
 fi
 OUT_DIR="${OUT_ARG:-$DEFAULT_OUT}"
 CA_DAYS=3650

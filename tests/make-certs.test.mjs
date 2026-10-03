@@ -20,3 +20,17 @@ test('make-certs.sh builds the certificates under a path that contains a dot', {
   for (const f of ['ca.pem', 'ca.key', 'leaf.pem', 'leaf.key']) assert.ok(fs.existsSync(path.join(out, f)), `${f} is missing`);
   assert.deepEqual(fs.readdirSync(dir), ['first.last'], 'no serial file outside the output directory');
 });
+
+// A Windows path has no forward slash. The script took `C:\...\certs` for the host of the old
+// two-argument form, ignored it, and rebuilt the default certificates of the checkout instead.
+test('make-certs.sh writes to a Windows path given as its only argument', { skip: process.platform !== 'win32' && 'a Windows path' }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmswcerts-win-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const out = path.join(dir, 'certs');
+  // Where the script falls back to: a decoy, so a failing run never touches the real certificates.
+  const decoy = path.join(dir, 'decoy');
+  execFileSync('bash', [path.join(ROOT, 'blindfold', 'make-certs.sh'), out], { stdio: 'pipe', env: { ...process.env, LLM_SWITCHER_BLINDFOLD_CERTS: decoy } });
+  assert.match(out, /^[A-Za-z]:\\/, 'the argument is a native Windows path');
+  for (const f of ['ca.pem', 'ca.key', 'leaf.pem', 'leaf.key']) assert.ok(fs.existsSync(path.join(out, f)), `${f} is missing in ${out}`);
+  assert.equal(fs.existsSync(decoy), false, 'nothing is written to the default directory');
+});
