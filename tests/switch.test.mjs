@@ -640,3 +640,24 @@ test('switch off stops the installed service only when that service owns the por
   const log = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '';
   assert.doesNotMatch(log, /\b(stop|restart)\b/, `systemctl was told to stop the instance on port 3456:\n${log}`);
 });
+
+// The same rule for `switch port`: the unit of another instance keeps its port and is not restarted.
+test('switch port leaves the installed service of another port unchanged', { skip: process.platform !== 'linux' && 'a systemd fake' }, async (t) => {
+  const ws = await workspace(t, await freePort());
+  const unitDir = path.join(ws.home, '.config', 'systemd', 'user');
+  fs.mkdirSync(unitDir, { recursive: true });
+  const unit = path.join(unitDir, 'llm-switcher.service');
+  const original = '[Service]\nExecStart=/usr/bin/node /opt/llm-switcher/proxy.mjs --port 3456\n';
+  fs.writeFileSync(unit, original);
+  const bin = path.join(ws.dir, 'fakebin');
+  fs.mkdirSync(bin);
+  const calls = path.join(ws.dir, 'systemctl.log');
+  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${calls}"\nexit 0\n`, { mode: 0o755 });
+  const env = { PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  assert.equal((await run(ws, ['on', 'plain'], { env })).status, 0);
+  const r = await run(ws, ['port', String(await freePort())], { env });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(fs.readFileSync(unit, 'utf8'), original, 'the unit of port 3456 was rewritten');
+  const log = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '';
+  assert.doesNotMatch(log, /\b(stop|restart|start|enable)\b/, `systemctl was told to act on the other instance:\n${log}`);
+});
