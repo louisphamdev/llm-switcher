@@ -621,3 +621,22 @@ test('R7e: saves work again after the file is fixed', async (t) => {
   assert.equal(fixed.status, 0, fixed.stdout + fixed.stderr);
   assert.ok(readCfg(ws).profiles.plain, 'the file writes again');
 });
+
+// A second instance (LLM_SWITCHER_PORT) must never stop the service of the first one: the unit
+// runs the gateway of another port. This test once stopped the real gateway of the machine.
+test('switch off stops the installed service only when that service owns the port', { skip: process.platform !== 'linux' && 'a systemd fake' }, async (t) => {
+  const ws = await workspace(t, await freePort());
+  const unitDir = path.join(ws.home, '.config', 'systemd', 'user');
+  fs.mkdirSync(unitDir, { recursive: true });
+  fs.writeFileSync(path.join(unitDir, 'llm-switcher.service'), '[Service]\nExecStart=/usr/bin/node /opt/llm-switcher/proxy.mjs --port 3456\n');
+  // A systemctl that only records what it was told.
+  const bin = path.join(ws.dir, 'fakebin');
+  fs.mkdirSync(bin);
+  const calls = path.join(ws.dir, 'systemctl.log');
+  fs.writeFileSync(path.join(bin, 'systemctl'), `#!/bin/sh\necho "$@" >> "${calls}"\nexit 0\n`, { mode: 0o755 });
+  const env = { PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  assert.equal((await run(ws, ['on', 'plain'], { env })).status, 0);
+  assert.equal((await run(ws, ['off'], { env })).status, 0);
+  const log = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '';
+  assert.doesNotMatch(log, /\b(stop|restart)\b/, `systemctl was told to stop the instance on port 3456:\n${log}`);
+});

@@ -232,8 +232,8 @@ async function stopProxy(port) {
   };
   // Our own unit needs no identity proof: its manager stops it. That also covers a unit that is
   // still starting (the port is free) and a hung gateway under the unit (the probe is silent).
-  const svc = installedService();
-  const ownUnit = svc && [port, null].includes(servicePort(svc));
+  const svc = serviceForPort(port);
+  const ownUnit = Boolean(svc);
   if (state === 'free') {
     if (!ownUnit) return 'not-running';
     serviceStop(svc);
@@ -271,7 +271,7 @@ async function changePort(newPortStr) {
   // Refuse before anything stops: the old gateway keeps running when the new port is taken.
   const target = await probeGateway(p);
   if (isHeld(target)) refuseForeignPort(p, 'this switcher', target);
-  const svc = installedService();
+  const svc = serviceForPort(oldPort);
   // The unit is rewritten below. It keeps the choice that `service install --no-autoupdate` made.
   const svcText = svc ? serviceText(svc) : null;
   const autoupdate = svcText === null || autoupdateFromServiceText(svcText);
@@ -686,6 +686,13 @@ function serviceText(kind) {
 function servicePort(kind) {
   const text = serviceText(kind);
   return text === null ? null : portFromServiceText(text);
+}
+
+// The installed service runs the gateway of the port its definition names. A second instance
+// (LLM_SWITCHER_PORT) must never stop or rewrite it. A definition with no readable port counts.
+function serviceForPort(port) {
+  const svc = installedService();
+  return svc && [port, null].includes(servicePort(svc)) ? svc : null;
 }
 
 function reportBackup(backup) {
