@@ -776,6 +776,23 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       }
     });
 
+    it('shows every dialog tab whole on a phone', async () => {
+      await page.resize(390, 844);
+      try {
+        await editProfile('intact-claude');
+        await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+        const cut = await page.evaluate(`(() => {
+          const bar = document.querySelector('#profile-form .tabs').getBoundingClientRect();
+          return [...document.querySelectorAll('#profile-form .tabs .tab-btn')]
+            .filter(b => { const r = b.getBoundingClientRect(); return r.left < bar.left - 0.5 || r.right > bar.right + 0.5; })
+            .map(b => b.textContent.trim());
+        })()`);
+        assert.deepEqual(cut, [], 'these tabs are cut off by the tab bar at 390 px');
+      } finally {
+        await page.resize(1280, 900);
+      }
+    });
+
     it('does not let a long profile name break the dialog header', async () => {
       const cfg = fx.config();
       cfg.profiles['intact-claude'].name = 'N'.repeat(300);

@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.5
+
+- **Dashboard motion:** The switch, the checkbox, the dialog, the toast and the tooltip used easing curves that overshoot and bounce back. They now use one smooth ease-out curve (`--ease-out`). The durations did not change.
+- **Dashboard elevation:** The dialog, the toast and the model list used a wide 50 px shadow on top of their border. The shadow is now short and tight, so the border defines the edge, in both themes.
+- **Dialog tabs on a phone:** At 390 px wide, the profile dialog cut off the **Model Slots** tab, and the tab bar hides its scrollbar. On a narrow screen the tabs now have less padding, and they wrap if they still do not fit.
+- **API key field:** The field has `autocomplete="off"`, so a password manager does not offer to save the key.
+
 ## Release 1.3.4
 
 - **The dashboard page carries no token:** `/ui` sent `admin.token` in the page, and any program on the machine can load `/ui`. The page now gets the token only from the `#token=` of the private launcher that `switch ui` opens (a file with mode 0600). The tab keeps it in `sessionStorage`, so it does not stay in the browser after the tab closes. A tab opened at `/ui` directly says to use `switch ui`. `switch status` and the gateway start line say the same.
