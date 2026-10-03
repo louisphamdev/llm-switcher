@@ -23,8 +23,12 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   });
 
   after(async () => {
-    await browser?.close();
-    await fx?.stop();
+    // The gateway must stop even when the browser cleanup throws, or it holds this process open.
+    try {
+      await browser?.close();
+    } finally {
+      await fx?.stop();
+    }
   });
 
   beforeEach(async () => {

@@ -80,7 +80,8 @@ export async function launchBrowser() {
       for (const p of pages) p.close();
       child.kill();
       await new Promise(r => { child.once('exit', r); setTimeout(r, 2000); });
-      fs.rmSync(dir, { recursive: true, force: true });
+      // On Windows a Chromium child process can hold a cache file for a moment after the exit (EBUSY).
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   };
 }
