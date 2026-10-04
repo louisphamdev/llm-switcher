@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.8
+
+- **Update now with the new code already on disk:** The update compared the version on disk, not the version of the running gateway. When the checkout or the npm install already had the new release, the update said "Already on the latest version" and did not restart. The gateway then ran the old code and showed the update notice again and again. The gateway now restarts into the newer code on disk.
+- **Windows service without a window:** The logon task started `node.exe` directly. `node.exe` is a console program, so Windows opened a terminal window for the gateway, and when you closed that window the gateway stopped. The task now starts the gateway through `conhost.exe --headless`, and no window opens. Run `switch service install` again to update an installed task.
+
 ## Release 1.3.7
 
 - **Update notice in time:** The gateway kept the npm answer for 12 hours. A release published after the last check did not show an update button until the next day. It now asks npm again after 5 minutes.
