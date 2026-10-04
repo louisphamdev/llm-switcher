@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.7
+
+- **Update notice in time:** The gateway kept the npm answer for 12 hours. A release published after the last check did not show an update button until the next day. It now asks npm again after 5 minutes.
+
 ## Release 1.3.6
 
 - **Dashboard from a bookmark:** In 1.3.4 the tab kept the token in `sessionStorage`. A bookmark, a typed URL or a new tab then had no token: every call got HTTP 401, and the dashboard showed no profiles and every route as OFF. The token is now in `localStorage`, so after one `switch ui` every tab of that browser works. The page still does not carry the token.
