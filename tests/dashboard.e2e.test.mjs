@@ -24,17 +24,37 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     await page.goto(fx.tokenUrl());
   });
 
-  it('a tab opened without the launcher token says to open the dashboard with switch ui', async () => {
+  // Close the tab itself, then raise the main one: a tab left in the background gets throttled
+  // timers and no animation frames, which stalls every later test.
+  async function closeTab(tab) {
+    await tab.send('Page.close').catch(() => {});
+    tab.close();
+    await page.send('Page.bringToFront');
+  }
+
+  it('a new tab, opened from a bookmark after switch ui ran once, shows the profiles', async () => {
     const fresh = await browser.newPage();
     try {
-      await fresh.goto(fx.dashboardUrl);
-      await fresh.waitFor(`/switch ui/.test(document.getElementById('toast')?.textContent || '')`, 'the switch ui hint');
+      await fresh.goto(fx.dashboardUrl + '#/routes');
+      await fresh.waitFor(`document.querySelectorAll('#profiles-grid .pcard').length === ${Object.keys(fx.config().profiles).length}`, 'the profile cards');
     } finally {
-      // Close the tab itself, then raise the main one: a tab left in the background gets throttled
-      // timers and no animation frames, which stalls every later test.
-      await fresh.send('Page.close').catch(() => {});
-      fresh.close();
-      await page.send('Page.bringToFront');
+      await closeTab(fresh);
+    }
+  });
+
+  it('a browser that never got the launcher token says so on the page, not only in a toast', async () => {
+    const fresh = await browser.newPage();
+    try {
+      await fresh.goto(fx.dashboardUrl + '#/routes');
+      await fresh.evaluate(`localStorage.clear(), sessionStorage.clear()`);
+      await fresh.reload();
+      await fresh.waitFor(`/switch ui/.test(document.getElementById('status-sub')?.textContent || '')`, 'the switch ui hint in the header');
+    } finally {
+      await closeTab(fresh);
+      // The storage is shared by the origin, so the main tab needs the token again. A #hash change
+      // alone fires no load event, so leave the page first.
+      await page.goto('about:blank');
+      await page.goto(fx.tokenUrl());
     }
   });
 

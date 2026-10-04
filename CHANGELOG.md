@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.3.6
+
+- **Dashboard from a bookmark:** In 1.3.4 the tab kept the token in `sessionStorage`. A bookmark, a typed URL or a new tab then had no token: every call got HTTP 401, and the dashboard showed no profiles and every route as OFF. The token is now in `localStorage`, so after one `switch ui` every tab of that browser works. The page still does not carry the token.
+- **Dashboard without a token:** The header now says to open the dashboard with `switch ui`. Before, it said "Gateway is idle", which looked like a config with no routes.
+
 ## Release 1.3.5
 
 - **Dashboard motion:** The switch, the checkbox, the dialog, the toast and the tooltip used easing curves that overshoot and bounce back. They now use one smooth ease-out curve (`--ease-out`). The durations did not change.
