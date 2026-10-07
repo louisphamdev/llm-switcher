@@ -1,5 +1,8 @@
-// Brings this install to the newest release: a git checkout pulls fast-forward only, an npm install
-// asks the registry and installs that exact version. Restarting the gateway is the caller's job.
+// Brings this install to the newest release. A release is published to npm, so npm is what is asked
+// first: `npm install -g llm-switcher@<version>` for the exact version the registry names. A git
+// checkout is the one install npm cannot serve, because npm writes into the global prefix while the
+// running code is the checkout itself, so the checkout is asked second and only then. Restarting
+// the gateway is the caller's job.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,8 +83,9 @@ async function updateNpmInstall(root, run, log, registryUrl) {
     throw failure('npm install', err);
   }
   const to = readVersion(root);
-  // npm can install into another prefix than the one this gateway runs from; then nothing changed here.
-  if (to === from) return noUpdate(from, `npm installed v${latest}, but not into ${root}.`);
+  // npm installs into the global prefix. When this gateway runs from a checkout that is a different
+  // directory, so the registry can name a release this code never receives; `elsewhere` says so.
+  if (to === from) return { ...noUpdate(from, `npm installed v${latest}, but not into ${root}.`), elsewhere: latest };
   return { updated: true, from, to, reason: `Installed v${to} from npm.` };
 }
 
@@ -93,10 +97,27 @@ export async function applyUpdate({
   registryUrl = process.env.LLM_SWITCHER_REGISTRY_URL || REGISTRY_URL,
   running = CURRENT_VERSION
 } = {}) {
-  const r = fs.existsSync(path.join(root, '.git'))
-    ? await updateCheckout(root, run, logger)
-    : await updateNpmInstall(root, run, logger, registryUrl);
-  // Newer code already on disk (a pull or an install outside the gateway) is an update for the
+  // npm writes into the global prefix, so a checkout is the one install it cannot serve: the running
+  // code is this directory, not the prefix. The registry is still asked, because the release on npm
+  // is the release every other install receives, but for a checkout a failed install is not the end
+  // of the update -- the checkout is the thing that can move, so it is asked next.
+  const checkout = fs.existsSync(path.join(root, '.git'));
+  let registry;
+  try {
+    registry = await updateNpmInstall(root, run, logger, registryUrl);
+  } catch (err) {
+    if (!checkout) throw err;
+    logger(`npm could not install it here: ${err.message}`);
+    registry = { ...noUpdate(readVersion(root), `npm could not install it here: ${err.message}`), elsewhere: true };
+  }
+  let r = registry;
+  if (!r.updated && checkout) {
+    r = await updateCheckout(root, run, logger);
+    // Neither could deliver it, and npm held a release this directory cannot take: both facts, because
+    // "already the latest version" on its own would hide the one version the reader does not have.
+    if (!r.updated && registry.elsewhere) r = { ...r, reason: `${registry.reason} ${r.reason}` };
+  }
+  // Newer code already on disk (an install outside the gateway) is an update for the
   // running process: without the restart it keeps the old code and the old version forever.
   const onDisk = readVersion(root);
   if (!r.updated && isNewer(onDisk, running)) {

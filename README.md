@@ -554,10 +554,9 @@ On Linux the unit is a systemd *user* service: it starts when you log in. To sta
 
 When npm has a newer release, the dashboard shows a notice. Click **Update now** in this notice. The gateway installs the release and starts the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
 
-The gateway installs a release in one of two ways:
+The gateway installs a release from npm, because that is where a release is published. It asks the registry for the newest version and runs `npm install -g llm-switcher@<version>`, then restarts into it.
 
-- A git checkout runs `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing.
-- An npm install runs `npm install -g llm-switcher@<latest>`.
+A git checkout is the one install npm cannot serve: npm writes into the global prefix while the running code is the checkout itself. So when npm did not move the directory the gateway runs from, and that directory is a checkout, the checkout is asked next, and it runs `git pull --ff-only`. If the checkout has local changes, or commits that are not on the upstream branch, the update stops and changes nothing. When npm held a release the checkout could not take, the notice says both: which version npm has, and that the checkout has nothing.
 
 Requests that are open on the gateway when the update starts finish on the old code. New requests go to the new code. The Codex interceptor stops, and the new gateway starts it again. Thus a Codex request that is open at that moment fails one time. The old process stays as the parent of the new process until the gateway stops. Thus a service manager keeps the process that it started.
 

@@ -552,10 +552,9 @@ Trên Linux, unit là service systemd *của user*: nó khởi động khi bạn
 
 Khi npm có bản mới, dashboard hiện một thông báo. Bấm **Update now** trong thông báo này. Gateway cài bản mới và chạy code mới. Sau đó dashboard tự tải lại. `switch update` làm việc tương tự từ terminal.
 
-Gateway cài bản mới theo một trong hai cách:
+Gateway cài bản mới từ npm, vì đó là nơi bản phát hành được đăng. Nó hỏi registry lấy số phiên bản mới nhất rồi chạy `npm install -g llm-switcher@<phiên bản>`, sau đó khởi động lại vào bản đó.
 
-- Bản git checkout chạy `git pull --ff-only`. Nếu checkout có thay đổi cục bộ, hoặc có commit không nằm trên nhánh upstream, việc cập nhật dừng lại và không đổi gì.
-- Bản cài bằng npm chạy `npm install -g llm-switcher@<latest>`.
+Bản git checkout là thứ duy nhất npm không phục vụ được: npm ghi vào global prefix, trong khi code đang chạy chính là thư mục checkout. Nên khi npm không dịch chuyển được thư mục mà gateway đang chạy, và thư mục đó là một checkout, gateway hỏi tiếp checkout, và checkout chạy `git pull --ff-only`. Nếu checkout có thay đổi cục bộ, hoặc có commit không nằm trên nhánh upstream, việc cập nhật dừng lại và không đổi gì. Khi npm có bản mới mà checkout không lấy được, thông báo nói cả hai: npm đang có số phiên bản nào, và checkout không có gì để cập nhật.
 
 Các request đang chạy trên gateway lúc cập nhật sẽ chạy xong trên code cũ. Request mới đi vào code mới. Interceptor của Codex dừng lại, và gateway mới khởi động nó lại. Vì vậy một request Codex đang chạy đúng lúc đó sẽ lỗi một lần. Tiến trình cũ ở lại làm tiến trình cha của tiến trình mới cho tới khi gateway dừng. Nhờ vậy service manager vẫn giữ đúng tiến trình mà nó đã khởi động.
 

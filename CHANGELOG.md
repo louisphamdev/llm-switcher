@@ -1,5 +1,13 @@
 # Changelog — LLM Switcher
 
+## Release 1.4.1 — 2026-10-07
+
+- **The update comes from npm, because that is where a release is published.** The gateway asked npm what the newest version is and ran `npm install -g llm-switcher@<version>` for exactly that version. Before, the install decided: a directory with a `.git` pulled and never asked npm, and the dashboard's Update now button read as a git operation on a project that ships to npm.
+- **A git checkout is the one install npm cannot serve, and it says so.** npm writes into the global prefix while the running code is the checkout itself, so the install lands somewhere nothing runs. The checkout is then asked, and it pulls fast-forward only. When npm held a release the checkout could not take, the notice names that version and what the checkout has, because "already the latest version" on its own would hide the one version the reader does not have.
+- **A failed npm install no longer fails the update of a checkout.** A checkout used to update without npm in the way. Asking npm first put an install between the reader and a pull, and any failure of that install -- a version the registry does not serve, a network, a read-only prefix -- ended the update even though the checkout could still have moved. Now a checkout reports what npm did and goes on to pull; an npm install with no checkout still fails loudly, because there is nothing else to try.
+
+Tests: 17 in `tests/update.test.mjs`, plus the rest of the suite.
+
 ## Release 1.4.0 — 2026-10-07
 
 - **A model answers with the tool names it was trained on, and the caller only runs its own.** A Codex model says `shell` where Claude Code declared `Bash`, and the turn ends with `Error: No such tool available: shell`. The gateway now writes the call back in the vocabulary the caller declared, and says the names in the prompt so most calls never need rewriting.
