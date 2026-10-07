@@ -431,7 +431,6 @@
     }
     .chip .lbl { grid-column: 1 / -1; font-size: 0.7rem; overflow-wrap: anywhere; }
     .chip .val { font-family: var(--font-mono); overflow-wrap: anywhere; }
-    .chip .b1m { font-weight: 600; font-size: 0.7rem; }
 
     .copyline {
       display: flex;
@@ -551,11 +550,8 @@
 
     /* Model slot combobox: one listbox per slot, provider prefix dimmed, match in the accent. */
     .combo { position: relative; }
-    .slot-1m-note { font-size: 0.72rem; color: var(--faint); }
-    /* Kept in the page when empty: a live region added later is often not read. */
-    .slot-1m-note:empty { margin-top: -0.25rem; }
-    .slot-1m-note.warn { color: var(--warn); }
-    .slot-1m-note.err { color: var(--err); }
+    .slot-note { font-size: 0.72rem; color: var(--faint); }    /* Kept in the page when empty: a live region added later is often not read. */
+    .slot-note:empty { margin-top: -0.25rem; }
     .combo > input { padding-right: 2.25rem; font-family: var(--font-mono); font-size: 0.8rem; }
     .combo-toggle {
       position: absolute; right: 4px; top: 4px; width: 28px; height: 28px;
@@ -1186,12 +1182,8 @@
             </div>
           </div>
 
-          <!-- TAB 3: Models & 1M -->
+          <!-- TAB 3: Models -->
           <div id="tab-models" class="tab-content" style="display:none; gap:0.9rem; flex-direction:column;">
-            <div class="badge warn" id="warn-1m-callout" style="display:none; padding:0.5rem 0.75rem; border-radius:8px;">
-              <span id="warn-1m-icon">⚠️</span> <span id="warn-1m-text">1M context flag is enabled</span>
-            </div>
-
             <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
               <h3 id="model-slot-heading" style="font-size:0.92rem; font-weight:600;">Model Slots Mapping</h3>
               <div id="models-status" class="models-status" aria-live="polite"></div>
@@ -1251,7 +1243,7 @@
     let formLoadedKey = null;
     let formDirty = false;
     let loadedModels = [];
-    let loadedLimits = {};   // model id -> { context, input, output }, as the gateway lists them
+    let loadedLimits = {};   // model id -> { context, compact, input, output }, as the gateway lists them
     let currentProfileBuffer = null;
     let renderedSlotFormat = 'auto';
     let logRefreshTimer = null;
@@ -1588,11 +1580,6 @@
       return defaultModels[slotId] || '';
     }
 
-    function flagForSlot(model1M, slotId) {
-      if (!model1M) return false;
-      return Boolean(model1M[slotId]);
-    }
-
     function renderModelSlots(slotFmt, p) {
       const container = document.getElementById('slot-fields');
       const heading = document.getElementById('model-slot-heading');
@@ -1605,31 +1592,24 @@
 
       for (const s of cfg.slots) {
         const val = currentProfileBuffer ? valueForSlot(currentProfileBuffer.defaultModels, s.id) : valueForSlot(p?.defaultModels, s.id);
-        const checked = currentProfileBuffer ? flagForSlot(currentProfileBuffer.model1M, s.id) : flagForSlot(p?.model1M, s.id);
 
         const slotRow = document.createElement('div');
         slotRow.style.cssText = 'display:flex; flex-direction:column; gap:0.25rem;';
         slotRow.innerHTML = `
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <label for="p-${s.id}" style="font-size:0.82rem; font-weight:500;">${escapeHtml(s.name)}</label>
-            <label style="display:flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:var(--accent); cursor:pointer;">
-              <input type="checkbox" id="p-${s.id}-1m" aria-label="1M context for ${escapeHtml(s.name)}" aria-describedby="p-${s.id}-1m-note" style="width:13px; height:13px; min-height:0;" onchange="update1mWarnings()" ${checked ? 'checked' : ''}>
-              1M context
-            </label>
-          </div>
+          <label for="p-${s.id}" style="font-size:0.82rem; font-weight:500;">${escapeHtml(s.name)}</label>
           <div class="combo">
-            <input type="text" id="p-${s.id}" oninput="update1mWarnings()" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="p-${s.id}-list" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
+            <input type="text" id="p-${s.id}" oninput="updateWindowNotes()" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="p-${s.id}-list" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
             <button type="button" class="combo-toggle" tabindex="-1" aria-label="Show models for ${escapeHtml(s.name)}">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
             </button>
             <ul class="combo-list" id="p-${s.id}-list" role="listbox" aria-label="${escapeHtml(s.name)} models" hidden></ul>
           </div>
-          <div class="slot-1m-note" id="p-${s.id}-1m-note" role="status" aria-live="polite"></div>
+          <div class="slot-note" id="p-${s.id}-note" role="status" aria-live="polite"></div>
         `;
         container.appendChild(slotRow);
         wireCombo(slotRow.querySelector('.combo'));
       }
-      update1mWarnings();
+      updateWindowNotes();
     }
 
     function onToolChange() {
@@ -1641,31 +1621,20 @@
       const cfg = getActiveSlotConfig(renderedSlotFormat);
       if (!currentProfileBuffer) currentProfileBuffer = {};
       const defaultModels = { ...(currentProfileBuffer.defaultModels || {}) };
-      const model1M = { ...(currentProfileBuffer.model1M || {}) };
       for (const s of cfg.slots) {
         const inp = document.getElementById('p-' + s.id);
-        const chk = document.getElementById('p-' + s.id + '-1m');
         if (inp) {
           const val = inp.value.trim();
           if (val) defaultModels[s.id] = val;
           else delete defaultModels[s.id];
         }
-        if (chk) {
-          if (chk.checked) model1M[s.id] = true;
-          else delete model1M[s.id];
-        }
       }
       currentProfileBuffer.defaultModels = defaultModels;
-      currentProfileBuffer.model1M = model1M;
-      return { defaultModels, model1M };
-    }
+      // An old config can still carry the retired 1M flags. They are dropped on the next save
+      // instead of being written back: the window is the model's own now.
+      delete currentProfileBuffer.model1M;
+      return { defaultModels };
 
-    // A window known to be under 1M locks the box; an unknown one only warns, since many
-    // gateways list no limits at all.
-    function contextVerdict(l) {
-      const window = (l && (l.context || l.input)) || 0;
-      if (!window) return { kind: 'unknown', window: 0 };
-      return { kind: window >= 1000000 ? 'ok' : 'small', window };
     }
 
     // 128000 reads as 128K and 262144 as 256K: a round decimal count keeps base 1000.
@@ -1674,32 +1643,24 @@
       return n >= b * b ? +(n / b / b).toFixed(1) + 'M' : n >= b ? Math.round(n / b) + 'K' : String(n);
     }
 
-    function update1mWarnings() {
-      const cfg = getActiveSlotConfig(renderedSlotFormat);
-      let any1m = false;
-      for (const s of cfg.slots) {
-        const chk = document.getElementById('p-' + s.id + '-1m');
-        const note = document.getElementById('p-' + s.id + '-1m-note');
+    // The window each listed model has, as the gateway reports it: the whole one and the smaller
+    // one to compress at. Shown, never a setting: the tool sizes the session from it.
+    function windowLine(model) {
+      const l = loadedLimits[model];
+      if (!l || !(l.context || l.compact)) return '';
+      const parts = [];
+      if (l.context) parts.push(fmtTokens(l.context) + ' context');
+      if (l.compact && l.compact < (l.context || 0)) parts.push('compacts at ' + fmtTokens(l.compact));
+      return parts.join(', ');
+    }
+
+    function updateWindowNotes() {
+      for (const s of getActiveSlotConfig(renderedSlotFormat).slots) {
+        const note = document.getElementById('p-' + s.id + '-note');
+        if (!note) continue;
         const model = document.getElementById('p-' + s.id)?.value.trim() || '';
-        if (!chk) continue;
-        const v = contextVerdict(model ? loadedLimits[model] : null);
-        const locked = v.kind === 'small';
-        if (locked) chk.checked = false;
-        chk.disabled = locked;
-        chk.closest('label').style.opacity = locked ? '0.5' : '';
-        chk.closest('label').style.cursor = locked ? 'not-allowed' : 'pointer';
-        if (note) {
-          let text = '', cls = '';
-          if (locked) { text = `Context ${fmtTokens(v.window)} is under 1M, so 1M context is off for this model.`; cls = 'err'; }
-          else if (v.kind === 'ok') text = `Context ${fmtTokens(v.window)}.`;
-          else if (chk.checked && model) { text = 'The gateway does not list this model\'s context. Make sure it takes 1M tokens.'; cls = 'warn'; }
-          note.textContent = text;
-          note.className = 'slot-1m-note' + (cls ? ' ' + cls : '');
-        }
-        if (chk.checked) any1m = true;
+        note.textContent = model ? windowLine(model) : '';
       }
-      const warnCallout = document.getElementById('warn-1m-callout');
-      if (warnCallout) warnCallout.style.display = any1m ? 'inline-flex' : 'none';
     }
 
     // Prefetch Counts for Nav Badges
@@ -1841,8 +1802,7 @@
         const modelChips = pCfg.slots.map(s => {
           const val = valueForSlot(p.defaultModels, s.id);
           if (!val) return '';
-          const has1m = flagForSlot(p.model1M, s.id);
-          return '<div class="chip"><span class="faint lbl">' + escapeHtml(s.name) + '</span><span class="val">' + escapeHtml(val) + '</span>' + (has1m ? '<b class="b1m">1M</b>' : '') + '</div>';
+          return '<div class="chip"><span class="faint lbl">' + escapeHtml(s.name) + '</span><span class="val">' + escapeHtml(val) + '</span></div>';
         }).filter(Boolean).join('');
 
         card.innerHTML = `
@@ -1971,8 +1931,7 @@
         outFormat: 'openai-chat',
         mode: 'convert',
         thinkingMode: 'auto',
-        defaultModels: {},
-        model1M: {}
+        defaultModels: {}
       };
 
       document.getElementById('form-title').textContent = 'Add New Provider Profile';
@@ -2105,8 +2064,6 @@
       };
       // A save with no edit must leave the profile as it was: write a default only where the profile
       // already had the key.
-      const model1M = { ...(currentProfileBuffer?.model1M || {}) };
-      if (Object.keys(model1M).length || existing.model1M) profilePayload.model1M = model1M;
       const thinkingMode = document.getElementById('p-thinking-mode').value;
       if (thinkingMode !== 'auto' || existing.thinkingMode) profilePayload.thinkingMode = thinkingMode;
 
@@ -2311,7 +2268,7 @@
         setModelsStatus('error', 'Models not loaded: ' + err.message, 'Retry');
       }
       document.querySelectorAll('.combo[data-open]').forEach(renderComboOptions);
-      update1mWarnings();
+      updateWindowNotes();
     }
 
     // Slot combobox (ARIA combobox with a listbox). Typing filters; the arrow opens the full list.
@@ -2429,7 +2386,7 @@
       combo.querySelector('input').value = model;
       formDirty = true;
       closeCombo(combo);
-      update1mWarnings();
+      updateWindowNotes();
     }
 
     function onComboKeydown(e) {

@@ -77,6 +77,15 @@ function startUpstream() {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ id, owned_by: id.split('/')[0], ...(id.startsWith('claude/') ? { bifrost_ua: 'claude-cli/' } : {}) }));
       }
+      // A provider list with real windows: a 1M model that also names the point to compress at,
+      // and a smaller one. A model the list says nothing of keeps the catalog template.
+      if (req.method === 'GET' && req.url.startsWith('/chat/v1/models')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ data: [
+          { id: 'gpt-5.6-sol', context_length: 1048576, compact_window: 272000 },
+          { id: 'up-opus', context_length: 200000 }
+        ] }));
+      }
       if (req.url.startsWith('/intact/v1/messages')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ id: 'msg_n', type: 'message', role: 'assistant', model: json.model, content: [{ type: 'text', text: 'bifrost ok' }], stop_reason: 'end_turn', usage: { input_tokens: 3, output_tokens: 2 } }));
@@ -213,7 +222,7 @@ before(async () => {
       chat: { name: 'Mock Chat', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-chat', defaultModels: models },
       vtx: { name: 'Mock Vertex', mode: 'convert', inFormat: 'auto', outFormat: 'vertex', baseURL: `${base}/vtx`, apiKey: 'sk-secret-vtx', defaultModels: models },
       agmock: { name: 'Mock AG via chat', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-ag', defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
-      pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' }, model1M: { main: true } },
+      pub: { name: 'Mock Public', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-pub', publicModels: ['gpt-5.6-sol', 'gpt-5.2'], defaultModels: { main: 'ag/mock-flash' } },
       roles: { name: 'Mock Public Roles', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-roles', publicModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       native: { name: 'Mock Strict OpenAI', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', thinkingMode: 'native', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-native', defaultModels: models },
       intactcc: { name: 'Mock intact', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', thinkingMode: 'off', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact-user', defaultModels: { opus: 'claude/claude-opus-5', sonnet: 'gem/flash', haiku: 'claude/claude-haiku-4-5', fable: 'gem/flash' } },
@@ -1161,17 +1170,22 @@ test('Codex WS: a client half-close aborts the running turn', async () => {
   assert.ok(await until(() => hangState.slowAborted, 2000), 'the upstream turn kept running');
 });
 
-test('/v1/models windows follow model1M and the entry comes from codex-catalog-template.json', async () => {
+// The window /v1/models serves is the model's own: the whole one as max_context_window, the
+// window to compress at as context_window. Nothing is hardcoded, so a model the profile's list
+// names nothing keeps the template's window.
+test('/v1/models serves the real window of each model, and the template only as a fallback', async () => {
   const template = JSON.parse(fs.readFileSync(path.join(ROOT, 'codex-catalog-template.json'), 'utf8'));
   const pub = await (await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'pub' } })).json();
-  const win = Object.fromEntries(pub.models.map(m => [m.slug, m.context_window]));
-  assert.deepEqual(win, { 'gpt-5.6-sol': 1000000, 'gpt-5.2': template.context_window });
+  const bySlug = Object.fromEntries(pub.models.map(m => [m.slug, m]));
+  assert.equal(bySlug['gpt-5.6-sol'].max_context_window, 1048576, 'a model with a 1M window gets 1M');
+  assert.equal(bySlug['gpt-5.6-sol'].context_window, 272000, 'and still compacts at its own threshold');
+  assert.equal(bySlug['gpt-5.2'].context_window, template.context_window, 'a model the list says nothing of keeps the template');
+  assert.equal(bySlug['gpt-5.2'].max_context_window, template.max_context_window);
   for (const m of pub.models) assert.equal(m.description, template.description);
-  const one = await (await fetch(url('/v1/models/gpt-5.2'), { headers: { 'x-llm-profile': 'pub' } })).json();
-  assert.equal(one.context_window, template.context_window);
-  assert.equal(one.id, 'gpt-5.2');
-  const main = await (await fetch(url('/v1/models/gpt-5.6-sol'), { headers: { 'x-llm-profile': 'pub' } })).json();
-  assert.equal(main.context_window, 1000000);
+  const one = await (await fetch(url('/v1/models/gpt-5.6-sol'), { headers: { 'x-llm-profile': 'pub' } })).json();
+  assert.equal(one.context_window, 272000);
+  assert.equal(one.max_context_window, 1048576);
+  assert.equal(one.id, 'gpt-5.6-sol');
 });
 
 // ---- Admin API: stale dashboard writes, control characters, key destination (F06, F33, keeper next-time) ----

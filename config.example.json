@@ -20,12 +20,6 @@
         "sonnet": "ag/gemini-3.7-flash",
         "haiku": "ag/gemini-3.6-flash-medium",
         "fable": "ag/gemini-3.8-flash"
-      },
-      "model1M": {
-        "opus": true,
-        "sonnet": true,
-        "haiku": false,
-        "fable": true
       }
     },
     "codex-default": {
@@ -45,11 +39,6 @@
         "main": "gemini-3.8-flash",
         "review": "gemini-3.7-flash-medium",
         "subagent": "gemini-3.6-flash-low"
-      },
-      "model1M": {
-        "main": false,
-        "review": false,
-        "subagent": false
       }
     }
   },

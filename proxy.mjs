@@ -21,9 +21,11 @@ import {
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
   ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
-  codexModelEntry, smallestWindows, publicModelWindows, model1MForSlot,
+  codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
+import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows } from './windows.mjs';
+import { createToolVocab } from './toolvocab.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
@@ -474,11 +476,25 @@ function parsePayloadLine(line) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
+// The tool vocabulary the caller declared, so a model that answers with a name from its own
+// training is written back in the caller's words instead of ending the turn with "No such tool
+// available". Built once per request from the tools the caller actually sent, so a request that
+// declared none pays nothing and a turn where the model agreed with the list changes nothing.
+let toolVocabCache = null;
+let toolVocabForIr = null;
+function toolVocabFor(ir) {
+  if (toolVocabForIr !== ir) {
+    toolVocabForIr = ir;
+    toolVocabCache = createToolVocab(ir?.tools);
+  }
+  return toolVocabCache;
+}
+
 function clientRenderer(clientFormat, res, model, opts = {}) {
-  if (clientFormat === 'anthropic') return createAnthropicStream((e, d) => sendSSE(res, e, d), model);
+  if (clientFormat === 'anthropic') return createAnthropicStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'responses') return createResponsesStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model);
-  return createChatStream((e, d) => sendSSE(res, null, d), model);
+  return createChatStream((e, d) => sendSSE(res, null, d), model, opts);
 }
 
 function clientMessage(clientFormat, args) {
@@ -887,7 +903,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const out = clientMessage(clientFormat, {
         model: requestedModel || mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
         finish: col.finish, prompt: col.prompt, completion, cached: col.cached,
-        reasoning: col.reasoning, sig: col.sig
+        reasoning: col.reasoning, sig: col.sig, vocab: toolVocabFor(ir)
       });
       sendJson(res, 200, out);
       answered = true;
@@ -904,7 +920,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta });
+    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir) });
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
     const streamError = await pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal: ac.signal, sink: res, tag: profileKey });
@@ -1172,15 +1188,18 @@ async function fetchModels(body, cfg) {
 }
 
 // A listed model's token limits, as intact and OpenRouter write them. Null when the list gives none.
+// The two windows come from windows.mjs, so /api/fetch-models and /v1/models cannot read a model
+// differently.
 function modelLimits(m) {
   if (!m || typeof m !== 'object') return null;
+  const w = parseModelWindows(m);
   const n = v => (Number.isFinite(v) && v > 0 ? v : 0);
   const top = m.top_provider && typeof m.top_provider === 'object' ? m.top_provider : {};
   const out = {};
-  const context = n(m.context_length) || n(top.context_length) || n(m.context_window);
   const input = n(m.max_input_tokens);
   const output = n(m.max_output_tokens) || n(top.max_completion_tokens);
-  if (context) out.context = context;
+  if (w?.context) out.context = w.context;
+  if (w?.compact) out.compact = w.compact;
   if (input) out.input = input;
   if (output) out.output = output;
   return Object.keys(out).length ? out : null;
@@ -1283,12 +1302,12 @@ async function route(req, res) {
   // Without publicModels, fall back to the deduplicated mapped upstream IDs.
   if (method === 'GET' && (pathname === '/v1/models' || pathname === '/models')) {
     checkVersionAndRefresh(req.headers['anthropic-version'] ? 'claude' : 'codex', req.headers, STATE_DIR);
-    const { ids, windows } = servedModels(req);
+    const { ids, windows } = await servedModels(req);
     const created = Math.floor(Date.now() / 1000);
     return sendJson(res, 200, {
       object: 'list',
       data: ids.map(id => ({ id, object: 'model', created, owned_by: 'system' })),
-      models: ids.map(id => ({ ...codexModelEntry(id, windows.get(id)), id, object: 'model', created, owned_by: 'system' }))
+      models: ids.map(id => ({ ...codexModelEntry(id, windows[id]), id, object: 'model', created, owned_by: 'system' }))
     });
   }
 
@@ -1296,8 +1315,8 @@ async function route(req, res) {
   if (method === 'GET' && (pathname.startsWith('/v1/models/') || pathname.startsWith('/models/'))) {
     const modelId = decodeURIComponent(pathname.replace(/^\/(v1\/)?models\//, ''));
     if (modelId) {
-      const { windows } = servedModels(req);
-      return sendJson(res, 200, { ...codexModelEntry(modelId, windows.get(modelId)), id: modelId, object: 'model', created: Math.floor(Date.now() / 1000), owned_by: 'system' });
+      const { windows } = await servedModels(req);
+      return sendJson(res, 200, { ...codexModelEntry(modelId, windows[modelId]), id: modelId, object: 'model', created: Math.floor(Date.now() / 1000), owned_by: 'system' });
     }
   }
 
@@ -1355,15 +1374,28 @@ async function route(req, res) {
   return sendJson(res, 404, { error: { message: `Not found: ${method} ${pathname}` } });
 }
 
-// The names /v1/models serves, and the window of each. Official names when the profile publishes
-// them, otherwise the mapped upstream IDs; each window follows model1M of its slot.
-function servedModels(req) {
-  const { profile } = getFirstActiveProfile(['responses', 'anthropic'], req);
+// The names /v1/models serves, and the real window of each. Official names when the profile
+// publishes them, otherwise the mapped upstream IDs.
+//
+// The window is what the model really has, so the tool sizes its own session: the profile's list
+// first (intact serves context_length and compact_window), then the list the Codex CLI cached for
+// its account, and the template only when neither names a window.
+async function servedModels(req) {
+  const { profileKey, profile } = getFirstActiveProfile(['responses', 'anthropic'], req);
+  const windows = await modelWindowsFor(profileKey, profile);
   if (Array.isArray(profile?.publicModels) && profile.publicModels.length) {
-    return { ids: [...new Set(profile.publicModels.filter(Boolean))], windows: publicModelWindows(profile) };
+    return { ids: [...new Set(profile.publicModels.filter(Boolean))], windows };
   }
-  const windows = smallestWindows(Object.entries(profile?.defaultModels || {}).map(([slot, id]) => [id, model1MForSlot(profile, slot)]));
-  return { ids: [...windows.keys()], windows };
+  return { ids: [...new Set(Object.values(profile?.defaultModels || {}).filter(Boolean))], windows };
+}
+
+// The windows of every model the profile serves. A profile that names no model in its own list
+// still gets the cached numbers, because an entry with the template window is better than none.
+async function modelWindowsFor(profileKey, profile) {
+  if (!profile?.baseURL) return {};
+  const listed = await resolveProfileWindows(STATE_DIR, `${profileKey || 'profile'}@${profile.baseURL}`, profile.baseURL, profile.apiKey);
+  if (Object.keys(listed).length) return listed;
+  return readLocalCodexWindows();
 }
 
 async function routeApi(req, res, method, pathname) {
@@ -1541,6 +1573,10 @@ async function routeConfigApi(res, method, pathname, body) {
     for (const k of ['outFormat', 'optimizerURL', 'thinkingMode']) {
       if (Object.hasOwn(profile, k) && !profile[k]) delete merged[k];
     }
+    // The merge above keeps a key the payload does not mention, so a retired one has to be dropped
+    // here: the window comes from the model's own list now, and a flag left in config.json would
+    // be read by nothing while still telling the next reader that the window is a choice.
+    delete merged.model1M;
     cfg.profiles[key] = merged;
 
     // A target assigned to this profile whose new inFormat no longer supports it -> unassign that target.
@@ -1798,7 +1834,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
-    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta });
+    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir) });
 
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));

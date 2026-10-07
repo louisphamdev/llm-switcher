@@ -141,7 +141,7 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
   - Khắc phục lỗi mồ côi `tool_result` do các công cụ nén token (RTK, Headroom, Ponytail) vô tình cắt mất turn `assistant` phía trước $\implies$ chống lỗi `HTTP 400 Bad Request`.
   - Tự động bù lại tham số `thinking` nếu tool ngoài cắt mất trên các reasoning model.
   - Gộp các turn cùng role liên tiếp để đáp ứng nghiêm ngặt luật xen kẽ lượt nói của Anthropic.
-- **Context window theo model chính thức:** switcher không còn ép cửa sổ 1M hay ngưỡng auto-compact, và không ghi tên model nào vào môi trường của bạn. Claude Code tự ước lượng phiên theo cửa sổ của model bạn chọn; backend có cửa sổ nhỏ hơn model đó có thể tràn trong phiên dài. `model1M` giờ chỉ quyết định `/v1/models` liệt kê gì.
+- **Context window đến từ chính model:** switcher không còn ép cửa sổ nào và không ghi tên model nào vào môi trường của bạn. Danh sách model của profile là nguồn: cửa sổ thật thành `max_context_window`, cửa sổ nén thành `context_window` trong `/v1/models`, nên Codex lên kế hoạch và nén đúng theo những gì model thật sự có. Claude Code tự ước lượng phiên theo model nó gọi; backend có cửa sổ nhỏ hơn model đó có thể tràn trong phiên dài.
 - **Không làm bẩn `settings.json` (Zero Config Mutation):** Không bao giờ đọc hay ghi `~/.claude/settings.json` hay `~/.codex/config.toml`, và không ghi biến môi trường nào cũng không thêm tham số `--config` nào mà công cụ đọc như cấu hình. Công cụ chỉ đến gateway qua interceptor, nên không hiện banner cảnh báo của nhà cung cấp.
 - **Live Request / Response Inspector:** Bảng theo dõi thời gian thực ngay trên Web UI: xem độ trễ, token prompt/output, preview prompt câu hỏi và khối suy luận thinking.
 - **Cài đặt Daemon Service nền:** Cung cấp lệnh cài đặt gateway chạy ngầm tự khởi động cùng hệ điều hành trên Windows (Task Scheduler), macOS (launchd) và Linux (systemd).
@@ -313,10 +313,14 @@ Hãy đọc [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) trước k
 
 ### Những gì bạn đánh đổi
 
-- **Context 1M theo cửa sổ của model chính thức.** Switcher không còn ép cửa sổ 1M hay ngưỡng
-  auto-compact, cũng không ghi tên model nào vào môi trường: Claude Code tự ước lượng phiên theo
-  cửa sổ của model bạn chọn. Backend có cửa sổ nhỏ hơn model đó có thể tràn trong phiên dài.
-  `model1M` giờ chỉ quyết định `/v1/models` liệt kê gì.
+- **Cửa sổ đi theo model, nên không còn gì để phải bật.** Switcher không ép cửa sổ hay ngưỡng
+  auto-compact, cũng không ghi tên model nào vào môi trường. Coding tool nhận đúng cửa sổ của model:
+  gateway đọc cửa sổ từng model trong danh sách của profile (`context_length`, `max_context_window`,
+  hoặc `compact_window` mà intact thêm cho model Codex) rồi phục vụ tại `/v1/models` — cửa sổ thật là
+  `max_context_window`, mốc nén là `context_window`. Model 1M nhận 1M; model 872K nhận 872K và vẫn nén
+  đúng mốc của nó, thay vì nén ở 95% một cửa sổ nó không có. Danh sách không nói cửa sổ thì dùng
+  template catalog. Claude Code tự ước lượng phiên theo model nó gọi; backend có cửa sổ nhỏ hơn model
+  đó có thể tràn trong phiên dài.
 - **Codex cần chứng chỉ làm một lần.** Blindfold là thứ giữ Codex trên endpoint chính thức, và nó
   cần một CA riêng cộng leaf nêu đúng ba host ở trên. Không bật thì Codex hiện dòng
   `base URL is overridden` trên màn `/model`.
@@ -589,12 +593,6 @@ route.
         "sonnet": "ag/gemini-3.7-flash",
         "haiku": "ag/gemini-3.6-flash-medium",
         "fable": "ag/gemini-3.8-flash"
-      },
-      "model1M": {
-        "opus": true,
-        "sonnet": true,
-        "haiku": false,
-        "fable": true
       }
     },
     "codex-default": {
@@ -607,8 +605,7 @@ route.
       // Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // tên chính thức cho main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // không bắt buộc: ghép một vai trò với tên public khác
-      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
-      "model1M": { "main": false, "review": false, "subagent": false }
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }
     }
   },
   "debug": false,
@@ -683,6 +680,20 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 - **Tool của Codex:** tool `custom`/freeform (VD `apply_patch` với Lark grammar), tool `namespace` và `local_shell` được đưa lên upstream dưới dạng function tool rồi chuyển ngược thành item `custom_tool_call` / `function_call` có namespace / `local_shell_call`. Hosted tool (`web_search`, `file_search`, `tool_search`, sinh ảnh) chạy trên server OpenAI nên upstream khác không cung cấp được và bị lược bỏ.
 - **Thought signature của Gemini 3:** chữ ký đi kèm function call được cache trong RAM theo tool call id (5.000 call gần nhất) và gắn lại vào đúng part `functionCall`, kể cả qua `extra_content` của endpoint OpenAI-compatible của Gemini. Sau khi restart gateway, call không rõ chữ ký trong lượt hiện tại dùng giá trị `skip_thought_signature_validator` mà Google cho phép (Google lưu ý có thể giảm chất lượng).
 - **`/v1/messages/count_tokens`:** chính xác khi profile của Claude Code dùng upstream Anthropic native; các trường hợp khác là ước lượng (provider khác không có endpoint tương đương).
+- **Effort của thinking:** một thang duy nhất xếp các mức, `none` → `ultra`, và mỗi mức đứng cho một ngân sách token, nên mức và ngân sách là cùng một yêu cầu dưới hai cách diễn đạt. Mức đó đi qua mọi chặng: `reasoning_effort` của OpenAI Chat, `output_config.effort` của Anthropic, `reasoning.effort` của Codex, và dạng ngân sách cho `thinking.budget_tokens` của Anthropic cùng `thinkingBudget` của Gemini. Chặng nào chỉ biết ít mức hơn sẽ được hỏi mức sâu nhất mà nó biết (`xhigh` thành `high` ở upstream OpenAI nghiêm ngặt, không bao giờ thành `medium`), và ngân sách Gemini không bao giờ vượt 32768 mức mà Gemini nhận.
+
+### Claude Code Remote Control (`claude rc`)
+
+Một phiên Remote Control đi qua hai chặng, và chỉ một chặng là của bạn.
+
+| Chặng | Đi đến đâu | Ai phục vụ |
+|---|---|---|
+| Session bridge | `https://api.anthropic.com/v1/code/sessions/...` | Anthropic |
+| Inference | gateway ở `127.0.0.1`, rồi tới upstream của profile | LLM Switcher |
+
+Bridge mang theo chính cuộc hội thoại: prompt gõ trong app hoặc web UI, việc đồng bộ phiên, và kiểm tra tài khoản theo gói Max/Pro của bạn. Chỉ có các lệnh gọi model của agent do nó điều khiển là thứ bạn thay thế được.
+
+**Hết quota Claude thì phiên chết ở bridge, trước cả lệnh gọi model đầu tiên.** Gói thuê bao được kiểm tra trước khi prompt được dispatch, nên UI trả về hết quota và không có gì tới được gateway. Đổi profile sang một upstream còn dư token cũng không giúp: bridge chặn trước. Cần quota trên tài khoản Claude cho bridge, và một profile chạy được cho phần inference.
 
 ## Nghiên cứu & Ma trận Giao thức Response
 

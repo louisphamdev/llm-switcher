@@ -141,7 +141,7 @@ LLM Switcher acts as a transparent man-in-the-middle without ever touching clien
   - Fixes orphaned `tool_result` blocks caused by aggressive prompt pruners (RTK, Headroom, Ponytail) before sending to Anthropic/OpenAI upstream.
   - Automatically restores thinking parameters if an intermediary tool stripped them.
   - Merges consecutive same-role turns to enforce strict alternating turn requirements.
-- **Context windows come from the model:** the switcher no longer forces a 1M window or an auto-compact limit, and it writes no model name into your environment. Claude Code sizes its own session from the window of the official model you pick, and a backend with a smaller window than that model can overflow in a long session. `model1M` now only decides what `/v1/models` reports.
+- **Context windows come from the model:** the switcher no longer forces a window and it writes no model name into your environment. A profile's own model list is the source: the whole window becomes `max_context_window` and the window to compress at becomes `context_window` in `/v1/models`, so Codex plans and compacts against what the model really has. Claude Code sizes its own session from the model it calls, and a backend with a smaller window than that model can overflow in a long session.
 - **Zero Config Mutation:** Never reads or writes `~/.claude/settings.json` or `~/.codex/config.toml`, and writes no environment variable and no `--config` argument that a coding tool reads as configuration. The tool reaches the gateway only through the interceptor, so no provider warning banner appears.
 - **Live Request / Response Inspector:** Built-in dashboard tab displaying real-time requests, latency, token consumption, prompt previews, and thinking blocks.
 - **Native Background Service:** Install and run as an OS background daemon on Windows (Task Scheduler), macOS (launchd), or Linux (systemd).
@@ -312,14 +312,15 @@ Read [📖 `docs/codex-blindfold.md`](docs/codex-blindfold.md) before you turn i
 
 ### What you give up
 
-- **1M context follows the official model's window.** The switcher no longer forces a 1M window
-  or an auto-compact limit, and it writes no model name into your environment. Claude Code sizes
-  its own session from the window of the model you pick. A backend whose window is smaller than
-  that model can overflow in a long session. `model1M` now only decides what `/v1/models` reports.
-  The dashboard reads each model's window from the gateway's model list (`context_length` or
-  `max_input_tokens`, as intact and OpenRouter give them). When the window is known to be under
-  1M, the slot's **1M context** box is cleared and locked. When the list gives no window, the box
-  stays free and shows a warning when it is ticked.
+- **The window follows the model, so there is nothing to set.** The switcher no longer forces a
+  window or an auto-compact limit, and it writes no model name into your environment. What a
+  coding tool gets is what the model has: the gateway reads the window of each model from the
+  profile's own list (`context_length`, `max_context_window`, or the `compact_window` intact adds
+  for a Codex model) and serves it at `/v1/models` as `max_context_window` for the whole window and
+  `context_window` for the point to compress at. A 1M model gets 1M; a 872K model gets 872K, and it
+  still compacts at its own threshold instead of at 95% of a window it does not have. When the list
+  names no window, the catalog template is used. Claude Code sizes its own session from the model it
+  calls, and a backend whose window is smaller than that model can overflow in a long session.
 - **Codex needs certificates once.** Blindfold mode is what keeps Codex on its official endpoint,
   and it needs a private CA plus a leaf naming the three hosts above. Skip it and Codex shows the
   `base URL is overridden` line on its `/model` screen instead.
@@ -593,12 +594,6 @@ of the routing.
         "sonnet": "ag/gemini-3.7-flash",
         "haiku": "ag/gemini-3.6-flash-medium",
         "fable": "ag/gemini-3.8-flash"
-      },
-      "model1M": {
-        "opus": true,
-        "sonnet": true,
-        "haiku": false,
-        "fable": true
       }
     },
     "codex-default": {
@@ -611,8 +606,7 @@ of the routing.
       // A profile that serves Codex MUST have publicModels (see Codex-first setup).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // official names for main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // optional: pair one role with another public name
-      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
-      "model1M": { "main": false, "review": false, "subagent": false }
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }
     }
   },
   "debug": false,
@@ -686,6 +680,20 @@ Because of this split, a provider fingerprint is never a rule in this gateway. I
 - **Codex tools:** `custom`/freeform tools (e.g. `apply_patch` with its Lark grammar), `namespace` tools and `local_shell` are exposed to upstreams as function tools and converted back to `custom_tool_call` / namespaced `function_call` / `local_shell_call` items. Hosted tools (`web_search`, `file_search`, `tool_search`, image generation) execute on OpenAI's servers, so other upstreams cannot provide them and they are omitted.
 - **Gemini 3 thought signatures:** signatures returned with function calls are cached in memory by tool call id (last 5,000 calls) and replayed on the matching `functionCall` part, including through Gemini's OpenAI-compatible `extra_content`. After a gateway restart, unknown calls in the current turn get Google's documented `skip_thought_signature_validator` value, which Google notes may reduce quality.
 - **`/v1/messages/count_tokens`:** exact when the active Claude Code profile uses a native Anthropic upstream; otherwise an estimate (other providers have no equivalent endpoint).
+- **Thinking effort:** one ladder orders the levels, `none` → `ultra`, and each level stands for one token budget, so a level and a budget are the same request in either vocabulary. A level crosses every hop: OpenAI Chat `reasoning_effort`, Anthropic `output_config.effort`, Codex `reasoning.effort`, and a budget for Anthropic `thinking.budget_tokens` and Gemini `thinkingBudget`. A target that names fewer levels is asked for the deepest one it names (`xhigh` becomes `high` on a strict OpenAI upstream, never `medium`), and the Gemini budget never goes above the 32768 Gemini accepts.
+
+### Claude Code Remote Control (`claude rc`)
+
+A Remote Control session runs on two hops, and only one of them is yours.
+
+| Hop | Where it goes | Served by |
+|---|---|---|
+| Session bridge | `https://api.anthropic.com/v1/code/sessions/...` | Anthropic |
+| Inference | the gateway on `127.0.0.1`, then the upstream of the profile | LLM Switcher |
+
+The bridge carries the conversation itself: the prompt typed in the app or web UI, the session sync, and the account check against your Max/Pro subscription. Only the model calls of the agent it drives are yours to replace.
+
+**An empty Claude quota stops the session at the bridge, before any model call is made.** The subscription is checked before the prompt is dispatched, so the UI answers out-of-quota and nothing ever reaches the gateway. Pointing the profile at an upstream with a full balance does not help: the bridge refuses first. Keep quota on the Claude account for the bridge, and a working profile for the inference.
 
 ## Research & Protocol Matrices
 

@@ -797,6 +797,7 @@ test('A5: migration splits shared auto profile into -claude and -codex halves wi
         name: 'Shared Profile',
         apiKey: 'secret-key',
         defaultModels: { opus: 'opus-model', sonnet: 'sonnet-model', subagent: 'sub-model' },
+        // The retired 1M flags are in an old config: the split must not carry them into a half.
         model1M: { opus: true, sonnet: false }
       }
     }
@@ -819,10 +820,8 @@ test('A5: migration splits shared auto profile into -claude and -codex halves wi
   assert.equal(codex.defaultModels.main, 'opus-model');
   assert.equal(codex.defaultModels.review, 'sonnet-model');
   assert.equal(codex.defaultModels.subagent, 'sub-model');
-  assert.equal(claude.model1M.opus, true);
-  assert.equal(claude.model1M.sonnet, false);
-  assert.equal(codex.model1M.main, true);
-  assert.equal(codex.model1M.review, false);
+  assert.equal(claude.model1M, undefined, 'the retired 1M flags do not survive the split');
+  assert.equal(codex.model1M, undefined);
 });
 
 test('A5: R7 row 4 splits profile with Claude/no-tool fields active for responses with slot fallbacks', () => {
@@ -881,7 +880,7 @@ test('A5: migration preserves legacy "default" key on both halves during split',
   assert.equal(res.config.profiles['combo-codex'].defaultModels.default, 'chat-default');
 });
 
-test('A5: migration never fills slot whose value is empty string or false', () => {
+test('A5: migration never fills slot whose value is empty string', () => {
   const raw = {
     activeProfile: 'combo',
     profiles: {
@@ -895,7 +894,7 @@ test('A5: migration never fills slot whose value is empty string or false', () =
   const res = migrateConfigInMemory(raw);
   const codex = res.config.profiles['combo-codex'];
   assert.equal(codex.defaultModels.main, '');
-  assert.equal(codex.model1M.main, false);
+  assert.equal(codex.model1M, undefined, 'and the retired flags do not come along');
 });
 
 test('A5: migration splits renamed command-word profile as <key>-profile-claude and <key>-profile-codex', () => {
@@ -1610,7 +1609,7 @@ test('each routed tool gets a route line; a tool that is off gets an empty one',
   assert.match(r.on.claude, /\bcl\b/, 'the line names the profile that serves claude');
   assert.match(r.on.claude, /intact\.example\.io/, 'and the host the traffic goes to');
   assert.match(r.on.claude, /gemini-3\.8-flash/, 'and the model it maps to');
-  assert.match(r.on.claude, /1M/, 'and the 1M window, because that changes what the session costs');
+  assert.doesNotMatch(r.on.claude, /1M/, 'and no window: the tool sizes the session from the model');
   assert.match(r.on.codex, /\bcx\b/);
   assert.match(r.on.codex, /other\.example\.io/);
   assert.doesNotMatch(r.on.codex, /intact\.example\.io/, 'one tool never shows the other tool route');

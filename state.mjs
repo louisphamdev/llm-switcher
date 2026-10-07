@@ -333,14 +333,6 @@ function getClaudeSlots(p) {
   return slots;
 }
 
-function getClaude1M(p) {
-  const flags = {};
-  for (const s of CLAUDE_MODEL_SLOTS) {
-    if (p.model1M && Object.hasOwn(p.model1M, s)) flags[s] = p.model1M[s];
-  }
-  return flags;
-}
-
 function getCodexSlots(p) {
   const slots = {};
   for (const s of CODEX_MODEL_SLOTS) {
@@ -349,17 +341,11 @@ function getCodexSlots(p) {
   return slots;
 }
 
-function getCodex1M(p) {
-  const flags = {};
-  for (const s of CODEX_MODEL_SLOTS) {
-    if (p.model1M && Object.hasOwn(p.model1M, s)) flags[s] = p.model1M[s];
-  }
-  return flags;
-}
-
 function createClaudeHalf(p) {
   const half = {};
   for (const [k, v] of Object.entries(p)) {
+    // model1M is dropped as well: the window is the model's own now, so a flag left in an old
+    // config is read by nothing and would only mislead whoever opens the dashboard.
     if (['inFormat', 'blindfold', 'blindfoldPort', 'blindfoldHost', 'blindfoldPrefix', 'defaultModels', 'model1M', 'publicModels', 'codexRoles'].includes(k)) {
       continue;
     }
@@ -375,14 +361,6 @@ function createClaudeHalf(p) {
     if (Object.hasOwn(p.defaultModels, 'default')) dm.default = p.defaultModels.default;
   }
   if (p.defaultModels && typeof p.defaultModels === 'object') half.defaultModels = dm;
-
-  const m1m = {};
-  if (p.model1M && typeof p.model1M === 'object') {
-    for (const slot of CLAUDE_MODEL_SLOTS) {
-      if (Object.hasOwn(p.model1M, slot)) m1m[slot] = p.model1M[slot];
-    }
-  }
-  if (Object.keys(m1m).length > 0) half.model1M = m1m;
 
   return half;
 }
@@ -420,27 +398,6 @@ function createCodexHalf(p) {
   }
   if (Object.hasOwn(srcDm, 'default')) dm.default = srcDm.default;
   if (Object.keys(dm).length > 0) half.defaultModels = dm;
-
-  const m1m = {};
-  const srcM1m = p.model1M && typeof p.model1M === 'object' ? p.model1M : {};
-  for (const slot of CODEX_MODEL_SLOTS) {
-    if (Object.hasOwn(srcM1m, slot)) m1m[slot] = srcM1m[slot];
-  }
-  if (!Object.hasOwn(m1m, 'main') && Object.hasOwn(srcM1m, 'opus')) {
-    m1m.main = srcM1m.opus;
-  }
-  if (!Object.hasOwn(m1m, 'review') && Object.hasOwn(srcM1m, 'sonnet')) {
-    m1m.review = srcM1m.sonnet;
-  }
-  if (!Object.hasOwn(m1m, 'subagent')) {
-    for (const k of ['fast', 'fallback', 'haiku', 'fable']) {
-      if (Object.hasOwn(srcM1m, k)) {
-        m1m.subagent = srcM1m[k];
-        break;
-      }
-    }
-  }
-  if (Object.keys(m1m).length > 0) half.model1M = m1m;
 
   return half;
 }
@@ -557,11 +514,9 @@ export function migrateConfigInMemory(rawConfig) {
     }
 
     const claudeSlots = getClaudeSlots(p);
-    const claude1M = getClaude1M(p);
     const codexSlots = getCodexSlots(p);
-    const codex1M = getCodex1M(p);
-    const hasClaude = Object.keys(claudeSlots).length > 0 || Object.keys(claude1M).length > 0;
-    const hasCodex = Object.keys(codexSlots).length > 0 || Object.keys(codex1M).length > 0
+    const hasClaude = Object.keys(claudeSlots).length > 0;
+    const hasCodex = Object.keys(codexSlots).length > 0
       || (Array.isArray(p.publicModels) && p.publicModels.length > 0)
       || (p.codexRoles && Object.keys(p.codexRoles).length > 0);
 
@@ -1027,15 +982,6 @@ export function modelForSlot(profile, slot) {
   return '';
 }
 
-export function model1MForSlot(profile, slot) {
-  const flags = profile?.model1M || {};
-  if (Object.hasOwn(flags, slot)) return Boolean(flags[slot]);
-  for (const k of legacyKeysForSlot(slot)) {
-    if (Object.hasOwn(flags, k)) return Boolean(flags[k]);
-  }
-  return false;
-}
-
 // ---------------- Codex-facing model names ----------------
 //
 // Codex must never be handed a switcher-internal name. It can display whatever it
@@ -1126,32 +1072,28 @@ function codexCatalogTemplate() {
 
 // One catalog entry. /v1/models and the OpenAI-Model handshake both use it, so they cannot drift.
 // model-catalog.json itself is no longer written (R9: publicModels stays the gateway's mapping table).
-export function codexModelEntry(name, is1M) {
+//
+// The window comes from the model, never from a setting: `win` is what the profile's own list says
+// ({ context, compact }), and the entry then carries the same pair the official Codex catalog
+// publishes — the window to compress at as context_window, the whole one as max_context_window. A
+// model that lists no window keeps the template's.
+export function codexModelEntry(name, win) {
   // The template copies a real OpenAI model. Its Responses Lite and code modes send the tools in a
   // form made for OpenAI's own tools, and an upstream then gets none (LS-5).
   const { tool_mode, ...template } = structuredClone(codexCatalogTemplate() || {});
-  return {
+  const out = {
     ...template,
     use_responses_lite: false,
     slug: name,
-    display_name: name,
-    ...(is1M ? { context_window: 1000000, max_context_window: 1000000 } : {})
+    display_name: name
   };
-}
-
-// name -> is1M. The picker sizes a session from this window, so when two slots share a name the
-// smaller window wins: overstating it makes Codex plan against space it does not have.
-export function smallestWindows(pairs) {
-  const windows = new Map();
-  for (const [name, is1M] of pairs) {
-    if (!name) continue;
-    if (!windows.has(name) || !is1M) windows.set(name, Boolean(is1M));
+  const context = Number(win?.context) || 0;
+  const compact = Number(win?.compact) || 0;
+  if (context > 0) {
+    out.max_context_window = context;
+    out.context_window = compact > 0 && compact < context ? compact : context;
   }
-  return windows;
-}
-
-export function publicModelWindows(profile) {
-  return smallestWindows(CODEX_MODEL_SLOTS.map(slot => [codexPublicModel(profile, slot), model1MForSlot(profile, slot)]));
+  return out;
 }
 
 export function parsePort(value) {
@@ -1289,17 +1231,6 @@ function writeOrRemove(file, content) {
   }
 }
 
-// The main session model. Haiku is left out on purpose: a haiku-only 1M profile would otherwise
-// move the main session to Haiku. claude1MTiers reports every tier, haiku included.
-function claudeTier1M(profile) {
-  const m = profile?.model1M || {};
-  return m.opus ? 'opus[1m]' : m.sonnet ? 'sonnet[1m]' : m.fable ? 'fable[1m]' : null;
-}
-
-function anyTier1M(profile) {
-  return modelSlotsForProfile(profile).some(slot => model1MForSlot(profile, slot));
-}
-
 export function primaryModel(profile) {
   const slots = modelSlotsForProfile(profile);
   for (const slot of slots) {
@@ -1309,13 +1240,14 @@ export function primaryModel(profile) {
   return '';
 }
 
-// What a person needs at launch: which profile took the traffic, the host it goes to, the model it
-// maps to, and whether the 1M window is on, because that changes what the session costs. Never the
-// API key: a desktop notification reads this line, and so can any shell.
+// What a person needs at launch: which profile took the traffic, the host it goes to, and the
+// model it maps to. Never the API key: a desktop notification reads this line, and so can any
+// shell. No window goes with it: the tool sizes the session from the model's own window, which the
+// profile's list reports (see windows.mjs).
 function routeLine(tool, key, profile) {
   let host = '';
   try { host = new URL(profile.baseURL).host; } catch { /* a profile may carry no address yet */ }
-  return [`${tool} -> ${key}`, host, primaryModel(profile), anyTier1M(profile) ? '1M' : '']
+  return [`${tool} -> ${key}`, host, primaryModel(profile)]
     .filter(Boolean).join(' | ');
 }
 

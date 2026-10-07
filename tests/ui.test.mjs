@@ -89,22 +89,29 @@ test('a profile without outFormat keeps auto routing through a save', () => {
   assert.match(html, /getElementById\('p-outformat'\)\.value = p\.outFormat \|\| '';/);
 });
 
-// The 1M box is locked only when the model's window is known and under 1M. An unknown window
-// only warns: many gateways list no limits at all.
-test('contextVerdict locks only a window known to be under 1M', () => {
-  const verdict = new Function(functionBody('contextVerdict') + '\n    }\n    return contextVerdict;')();
-  assert.equal(verdict(undefined).kind, 'unknown');
-  assert.equal(verdict({ output: 32000 }).kind, 'unknown');
-  assert.equal(verdict({ context: 200000 }).kind, 'small');
-  assert.equal(verdict({ context: 200000 }).window, 200000);
-  assert.equal(verdict({ input: 1000000 }).kind, 'ok');
-  assert.equal(verdict({ context: 1048576 }).kind, 'ok');
+// The window is the model's own, so the dashboard reports it and offers no switch. A model the
+// gateway lists with no window says nothing, and a compact window below the whole one is the
+// point the tool compresses at.
+test('windowLine reports the window the gateway lists, and nothing when it lists none', () => {
+  // functionBody stops before the closing brace, so a helper it calls is closed here.
+  const source = `${functionBody('fmtTokens')}\n    }\n${functionBody('windowLine')}\n    }\n    return windowLine;`;
+  const withLimits = limits => new Function('loadedLimits', source)(limits);
+  const line = withLimits({});
+  assert.equal(line(undefined), '');
+  assert.equal(line('bare'), '', 'a model with no limits says nothing');
+  const loaded = { bare: { output: 32000 }, big: { context: 1048576 }, codex: { context: 872000, compact: 272000 } };
+  const listed = withLimits(loaded);
+  assert.equal(listed('big'), '1M context');
+  assert.equal(listed('codex'), '872K context, compacts at 272K');
+  assert.equal(listed('bare'), '', 'limits without a window are not a window');
 });
 
-test('each 1M box names its slot and points at its note', () => {
+test('the 1M switch is gone from the slots, the card and the payload', () => {
   const slots = functionBody('renderModelSlots');
-  assert.match(slots, /aria-label="1M context for \$\{escapeHtml\(s\.name\)\}"/);
-  assert.match(slots, /aria-describedby="p-\$\{s\.id\}-1m-note"/);
-  assert.match(slots, /class="slot-1m-note" id="p-\$\{s\.id\}-1m-note" role="status"/);
-  assert.doesNotMatch(html, /\.slot-1m-note:empty \{ display: none/);
+  assert.doesNotMatch(slots, /type="checkbox"/, 'a model slot offers no window switch');
+  assert.match(slots, /class="slot-note" id="p-\$\{s\.id\}-note" role="status"/);
+  assert.match(slots, /oninput="updateWindowNotes\(\)"/, 'typing a model refreshes its window');
+  assert.doesNotMatch(html, /id="warn-1m-callout"/);
+  assert.doesNotMatch(functionBody('collectCurrentSlotValues'), /model1M\s*[,}]/);
+  assert.doesNotMatch(html, /profilePayload\.model1M/);
 });

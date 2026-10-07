@@ -10,7 +10,8 @@ import {
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
   isAntigravityModel, smartUsage,
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
-  smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage
+  smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
+  budgetToEffort, effortToBudget, normalizeEffort, capEffort, EFFORT_LEVELS
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -831,4 +832,100 @@ test('structured output: Responses text.format keeps name and strict; JSON mode 
   const txt = responsesToIR({ model: 'x', input: 'hi', text: { format: { type: 'text' } } });
   assert.equal(irToChatBody(txt, 'm').response_format, undefined);
   assert.equal(irToVertexBody(txt, 'm').generationConfig, undefined);
+});
+
+// ---- thinking: one ladder, both directions ----
+//
+// Codex sends reasoning.effort, an OpenAI strict upstream names four levels, Anthropic speaks
+// budget_tokens or output_config.effort, and Gemini speaks thinkingBudget with a ceiling. The same
+// level has to survive each hop, and no hop may quietly ask for less than the client did.
+
+test('the effort ladder is ordered, and a level round-trips through its budget', () => {
+  assert.deepEqual([...EFFORT_LEVELS], ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+    assert.equal(budgetToEffort(effortToBudget(level)), level, `${level} must survive its own budget`);
+  }
+  // The budgets the gateway has always read a request as. Claude Code sends a budget on every
+  // request, so a boundary that moved would hand it a different level.
+  assert.equal(effortToBudget('low'), 1024);
+  assert.equal(effortToBudget('medium'), 2048);
+  assert.equal(effortToBudget('high'), 8000);
+  assert.equal(budgetToEffort(1024), 'low');
+  assert.equal(budgetToEffort(2048), 'medium');
+  assert.equal(budgetToEffort(3000), 'medium');
+  assert.equal(budgetToEffort(10000), 'high');
+  assert.equal(budgetToEffort(31999), 'xhigh', 'a 32K thinking budget is above high');
+  assert.equal(budgetToEffort(0), 'minimal', 'and a budget below the floor is still a level');
+});
+
+test('an unknown or missing effort is medium, and none stays none', () => {
+  assert.equal(normalizeEffort(undefined), 'medium');
+  assert.equal(normalizeEffort(''), 'medium');
+  assert.equal(normalizeEffort('Extreme'), 'medium');
+  assert.equal(normalizeEffort('XHIGH'), 'xhigh', 'the level is case-insensitive');
+  assert.equal(normalizeEffort('none'), 'none', 'none is a level the ladder names');
+  // `none` is the one level that means thinking off, and both client vocabularies say it that way.
+  assert.deepEqual(responsesToIR({ model: 'm', reasoning: { effort: 'none' }, input: [] }).thinking, { type: 'disabled' });
+  assert.deepEqual(anthropicToIR({ model: 'm', messages: [], output_config: { effort: 'none' } }).thinking, { type: 'disabled' });
+});
+
+test('capEffort asks a narrower target for the deepest level it names, never for less', () => {
+  const openai = ['minimal', 'low', 'medium', 'high'];
+  assert.equal(capEffort('medium', openai), 'medium');
+  assert.equal(capEffort('xhigh', openai), 'high', 'xhigh becomes the top level OpenAI names, not medium');
+  assert.equal(capEffort('max', openai), 'high');
+  assert.equal(capEffort('ultra', openai), 'high');
+  assert.equal(capEffort('minimal', openai), 'minimal');
+  assert.equal(capEffort('high', EFFORT_LEVELS), 'high', 'a target that names the whole ladder is untouched');
+  assert.equal(capEffort('ultra', EFFORT_LEVELS), 'ultra');
+  assert.equal(capEffort('ultra'), 'ultra', 'no list means no ceiling');
+});
+
+// Codex -> OpenAI Chat: the level travels, and a strict upstream gets the top level it names.
+test('Codex reasoning.effort reaches OpenAI Chat, and a strict upstream keeps the depth', () => {
+  const at = effort => responsesToIR({ model: 'gpt-5.6-sol', reasoning: { effort }, input: [{ role: 'user', content: 'hi' }] });
+  assert.equal(irToChatBody(at('xhigh'), 'gpt-5.6-sol', { thinkingMode: 'native' }).reasoning_effort, 'high',
+    'a strict OpenAI upstream names no xhigh, so it is asked for high');
+  assert.equal(irToChatBody(at('high'), 'gpt-5.6-sol', { thinkingMode: 'native' }).reasoning_effort, 'high');
+  assert.equal(irToChatBody(at('minimal'), 'gpt-5.6-sol', { thinkingMode: 'native' }).reasoning_effort, 'minimal');
+  // A gateway that forwards the object keeps the whole ladder: intact and 9Router accept it.
+  assert.equal(irToChatBody(at('ultra'), 'gpt-5.6-sol').reasoning_effort, 'ultra');
+  assert.equal(irToChatBody(at('xhigh'), 'gpt-5.6-sol').reasoning_effort, 'xhigh');
+  assert.equal(irToChatBody(at('none'), 'gpt-5.6-sol', { thinkingMode: 'native' }).reasoning_effort, undefined,
+    'none is thinking off, not a level to send');
+});
+
+// Codex -> Anthropic: a level with no budget becomes the level Anthropic names, and a client that
+// sent budget_tokens keeps its budget instead of having it restated.
+test('a level reaches Anthropic as output_config.effort, from either client vocabulary', () => {
+  const at = payload => irToAnthropicBody(anthropicToIR(payload), 'claude-opus-4-6');
+  // Anthropic client, effort only, no thinking object.
+  assert.equal(at({ model: 'x', max_tokens: 8000, messages: [{ role: 'user', content: 'hi' }], output_config: { effort: 'xhigh' } }).output_config.effort, 'xhigh');
+  assert.equal(at({ model: 'x', max_tokens: 8000, messages: [{ role: 'user', content: 'hi' }], output_config: { effort: 'none' } }).thinking, undefined,
+    'effort none is thinking off, so the turn is not asked to think');
+  // Codex client: the parser stands a budget behind the level, so Anthropic gets the budget.
+  const codex = irToAnthropicBody(responsesToIR({ model: 'x', max_output_tokens: 200000, reasoning: { effort: 'xhigh' }, input: [{ role: 'user', content: 'hi' }] }), 'claude-opus-4-6');
+  assert.equal(codex.thinking.budget_tokens, 16000, 'the level becomes the budget Anthropic takes');
+
+  const fromBudget = at({ model: 'x', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 31999 } });
+  assert.equal(fromBudget.output_config, undefined, 'a budget already said it in Anthropic own words');
+  assert.equal(fromBudget.thinking.budget_tokens, 31999);
+});
+
+// Anthropic/Vertex speak budgets, and Gemini refuses a budget above its ceiling rather than trimming.
+test('a level becomes the budget each API speaks, and Gemini gets one it accepts', () => {
+  const budgetOf = (effort, format) => emitUpstreamBody(format,
+    responsesToIR({ model: 'm', max_output_tokens: 200000, reasoning: { effort }, input: [{ role: 'user', content: 'hi' }] }), 'm').thinking?.budget_tokens;
+  assert.equal(budgetOf('high', 'anthropic'), 8000);
+  assert.equal(budgetOf('xhigh', 'anthropic'), 16000);
+  assert.equal(budgetOf('ultra', 'anthropic'), 65536);
+  const geminiOf = effort => irToVertexBody(
+    responsesToIR({ model: 'm', reasoning: { effort }, input: [{ role: 'user', content: 'hi' }] }), 'm').generationConfig.thinkingConfig.thinkingBudget;
+  assert.equal(geminiOf('high'), 8000);
+  // max and ultra are above the ceiling Gemini takes, and it refuses rather than trims.
+  assert.equal(geminiOf('max'), 32768);
+  assert.equal(geminiOf('ultra'), 32768);
+  assert.equal(irToVertexBody(anthropicToIR({ model: 'm', max_tokens: 200000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 100000 } }), 'm').generationConfig.thinkingConfig.thinkingBudget, 32768);
+  // Anthropic keeps the budget it was given, only under max_tokens as its own rule requires.
+  assert.equal(irToAnthropicBody(anthropicToIR({ model: 'm', max_tokens: 200000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 100000 } }), 'm').thinking.budget_tokens, 100000);
 });

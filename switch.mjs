@@ -7,7 +7,7 @@ import {
   ROOT_DIR, STATE_DIR, TOOLS, configPath, hasPlaceholder, claudeSettingsPath, paths, certCoversHost, loadConfig, getConfigLoadError, saveConfig,
   resolvePort, parsePort, findProfileKey, getActiveMap, setTargetProfile, activateProfile, deactivateAll,
   applyLaunchState, clearLaunchState, computeLaunchState,
-  modelSlotsForProfile, modelForSlot, model1MForSlot, readAdminToken, adminTokenPath, openLog,
+  modelSlotsForProfile, modelForSlot, readAdminToken, adminTokenPath, openLog,
   probeGateway, probeBlindfold, ensureBlindfoldCerts, stopRecordedBlindfold, writeDashboardLauncher,
   contractLabSettings, codexPublicModelsWarning,
   getMigrationError, getMigrationCollision, getLastLoadError,
@@ -342,7 +342,7 @@ function printProfile(profile) {
   console.log(`Upstream:     ${show(profile.baseURL || '(not set)')}`);
   for (const slot of modelSlotsForProfile(profile)) {
     const model = modelForSlot(profile, slot);
-    if (model) console.log(`${(slot[0].toUpperCase() + slot.slice(1) + ':').padEnd(14)}${show(model)}${model1MForSlot(profile, slot) ? '  [1M]' : ''}`);
+    if (model) console.log(`${(slot[0].toUpperCase() + slot.slice(1) + ':').padEnd(14)}${show(model)}`);
   }
 }
 

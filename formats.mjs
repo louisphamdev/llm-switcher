@@ -285,22 +285,77 @@ function sanitizeSchemaNode(schema) {
 }
 
 // ---------------- thinking helpers ----------------
+//
+// Thinking crosses the gateway in one IR field and leaves in whatever the upstream speaks: a level
+// (OpenAI Chat `reasoning_effort`, Anthropic `output_config.effort`, Codex `reasoning.effort`) or a
+// token budget (Anthropic `thinking.budget_tokens`, Gemini `thinkingBudget`). The ladder below is
+// the single order both directions use, so a level survives any number of hops and a budget is the
+// level it stands for.
+//
+// The ladder is Codex's own, which is the widest set of levels any of these APIs names today. A
+// target that names fewer takes the highest level it does name: an upstream is refused an unknown
+// enum value, while a lower level than asked for is still the request the person made.
+export const EFFORT_LEVELS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
-function budgetToEffort(b) {
-  const n = Number(b) || 0;
-  return n >= 8000 ? 'high' : n >= 2000 ? 'medium' : 'low';
+// The token budget each level stands for. Distinct and increasing, so budgetToEffort is its exact
+// inverse. The boundaries are the ones this gateway has always read a request's budget by, because
+// a budget is what Claude Code sends on every request: at or above 1024 is low, at or above ~2K is
+// medium, at or above 8000 is high. Moving a boundary would hand an existing request a different
+// level. Gemini caps thinkingBudget at 32768, which the Vertex emitter applies; nothing clamps it
+// here, or a level would be lost on the next hop.
+const EFFORT_BUDGETS = Object.freeze({ minimal: 512, low: 1024, medium: 2048, high: 8000, xhigh: 16000, max: 32768, ultra: 65536 });
+
+// The levels OpenAI Chat names in `reasoning_effort`. A strict OpenAI upstream rejects the rest.
+const OPENAI_CHAT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high']);
+
+// Gemini's own ceiling for thinkingBudget. Above it the request is refused, not trimmed.
+const GEMINI_MAX_BUDGET = 32768;
+
+function effortRank(e) {
+  const i = EFFORT_LEVELS.indexOf(String(e || '').toLowerCase());
+  return i;
 }
 
-function effortToBudget(e) {
-  switch (String(e || '').toLowerCase()) {
-    case 'max':
-    case 'xhigh':
-    case 'high': return 8000;
-    case 'medium': return 4000;
-    case 'low':
-    case 'minimal': return 1024;
-    default: return 2000;
+/**
+ * The level as the ladder spells it. An unknown or missing value is `medium`, which is what a
+ * client that asks for no reasoning gets on every API here. `none` is kept: it is a level the
+ * ladder names, and a caller reads it as thinking off.
+ */
+function normalizeEffort(e) {
+  const s = String(e || '').toLowerCase();
+  return effortRank(s) >= 0 ? s : 'medium';
+}
+
+/**
+ * The level a target accepts: the one asked for, or the top of `allowed` when the target names
+ * fewer levels than the ladder does. Never silently drops below what was asked for.
+ */
+function capEffort(e, allowed) {
+  const wanted = normalizeEffort(e);
+  if (!Array.isArray(allowed) || !allowed.length || allowed.includes(wanted)) return wanted;
+  let best = allowed[0];
+  for (const a of allowed) {
+    if (effortRank(a) >= 0 && effortRank(a) <= effortRank(wanted) && effortRank(a) > effortRank(best)) best = a;
   }
+  return best;
+}
+
+/**
+ * The level a token budget stands for: the highest whose budget the number reaches. An exact
+ * effortToEffort round trip returns the level that was asked for.
+ */
+function budgetToEffort(b) {
+  const n = Number(b) || 0;
+  let out = 'minimal';
+  for (const level of Object.keys(EFFORT_BUDGETS)) {
+    if (n >= EFFORT_BUDGETS[level]) out = level;
+  }
+  return out;
+}
+
+/** The token budget a level stands for. */
+function effortToBudget(e) {
+  return EFFORT_BUDGETS[normalizeEffort(e)] ?? EFFORT_BUDGETS.medium;
 }
 
 function clampBudget(b, fallback = 2048) {
@@ -415,10 +470,17 @@ function anthropicToIR(payload) {
   }
 
   if (Array.isArray(payload.tools) && payload.tools.length) {
-    ir.tools = payload.tools.map(t => ({
-      name: t.name, description: t.description || '',
-      parameters: sanitizeJsonSchema(t.input_schema || {})
-    }));
+    ir.tools = payload.tools
+      .filter(t => t && t.name)
+      .map(t => ({
+        name: t.name, description: t.description || '',
+        parameters: sanitizeJsonSchema(t.input_schema || {}),
+        // A client tool is `{"name","input_schema"}`, optionally typed "custom". A dated type is a
+        // server tool: Anthropic runs it, its result reaches the caller without the caller executing
+        // anything. Sending one to another provider as a function tool moves the work to the caller,
+        // which is not what the caller asked for, so it is marked rather than treated as a tool.
+        side: isProviderRunTool(t) ? 'provider' : 'client'
+      }));
   }
 
   if (payload.tool_choice) {
@@ -442,8 +504,17 @@ function anthropicToIR(payload) {
 }
 
 // Anthropic `thinking` param ({type, budget_tokens}) -> IR thinking ({type, budget, effort}).
+//
+// A client may also ask for depth with `output_config.effort` and no `thinking` object at all.
+// That is a request for thinking, so it becomes one here; the emitter then answers in the same
+// words. Reading only the `thinking` object would drop the request and send the turn unthinking.
 function thinkingFromAnthropicParam(th, effort) {
-  if (!th || typeof th !== 'object') return null;
+  if (!th || typeof th !== 'object') {
+    if (typeof effort === 'string' && effort) {
+      return isNoReasoningEffort(effort) ? { type: 'disabled' } : { type: 'enabled', effort };
+    }
+    return null;
+  }
   // Client explicitly disabled thinking -> honor that intent, don't "restore" thinking.
   if (th.type === 'disabled') return { type: 'disabled' };
   const out = { type: th.type === 'adaptive' ? 'adaptive' : 'enabled' };
@@ -456,6 +527,18 @@ function thinkingFromAnthropicParam(th, effort) {
 
 function isNoReasoningEffort(e) {
   return String(e || '').toLowerCase() === 'none';
+}
+
+// Anthropic names its server tools by a dated type (web_search_20260209, code_execution_20250825,
+// tool_search_20251119, memory_20250818, bash_20250124, text_editor_20250124). The date moves and
+// the list grows, so the shape decides: a client tool carries input_schema, and the only type a
+// client tool may carry is "custom".
+function isProviderRunTool(t) {
+  const type = typeof t?.type === 'string' ? t.type : '';
+  if (!type) return false;
+  if (type === 'custom') return false;
+  if (t.input_schema && typeof t.input_schema === 'object') return false;
+  return true;
 }
 
 // OpenAI Chat Completions -> IR (light normalization).
@@ -678,8 +761,44 @@ function parseToIR(clientFormat, payload) {
 
 // ---------------- emitters: IR -> upstream body ----------------
 
+// The tools the caller executes. A tool the provider runs has no business in another provider's
+// request as a function the caller is then asked to run: it changes who does the work, in a way the
+// caller cannot see. A client tool is the default, so a tool list built elsewhere without `side`
+// behaves as it always did.
+function clientTools(ir) {
+  return (ir.tools || []).filter(t => t && t.side !== 'provider');
+}
+
+// The tools that were dropped, with the reason, for the log line that says what left the request.
+function providerRunTools(ir) {
+  return (ir.tools || []).filter(t => t && t.side === 'provider').map(t => t.name);
+}
+
+// A whole tool call, name and arguments, in the vocabulary the caller declared. With no vocabulary
+// the call is returned untouched, which is the case for a request that declared no tools.
+function repairToolCall(tc, vocab) {
+  if (!vocab || typeof vocab.repair !== 'function') return { name: tc.name, args: tc.args };
+  const fixed = vocab.repair(tc.name, typeof tc.args === 'string' ? tc.args : stringifyArgs(tc.args || {}));
+  return { name: fixed.name, args: fixed.args };
+}
+
+// The tool names the caller declared, for a model that answers in a vocabulary of its own. Only the
+// names the caller's own system text does not already mention are named back: a prompt that already
+// lists them needs no second list, and one that lists some of them needs only the rest.
+//
+// Nothing is said about a tool fewer than two, because one tool has no other name to be confused
+// with, and nothing about a tool the provider runs, because the caller never executes those.
+function toolNamesNotice(ir, systemText) {
+  const names = (ir.tools || [])
+    .filter(t => t && typeof t.name === 'string' && t.name && t.side !== 'provider')
+    .map(t => t.name);
+  if (names.length < 2) return '';
+  const missing = names.filter(n => !String(systemText || '').includes(n));
+  if (!missing.length) return '';
+  return `When you call a tool, use exactly these names and do not substitute another: ${missing.join(', ')}.`;
+}
+
 function hasNativeReasoning(model) {
-  // Detect capability families instead of pinning exact versions. Claude Opus
   // model IDs change often, but all current Opus variants support reasoning.
   const m = String(model || '').toLowerCase();
   return m.includes('thinking') || m.includes('reasoning') || m.includes('reasoner') || m.includes('opus')
@@ -791,6 +910,16 @@ function irToChatBody(ir, model, opts = {}) {
     const thinkGuide = 'You must provide your internal reasoning and step-by-step thinking inside <think> and </think> tags before your final response.';
     systemText = systemText ? `${thinkGuide}\n\n${systemText}` : thinkGuide;
   }
+  // A model answers with the tool names it was trained on, whatever the caller declared: a Codex
+  // model says `shell` where the caller wrote `Bash`, and the caller answers "No such tool
+  // available". Naming the caller's own names is cheaper than repairing every such call.
+  //
+  // Only the names the caller's own prompt does not already mention are added. A client that names
+  // its tools in its system prompt (Claude Code does, at length) gets nothing at all, so there is no
+  // second list for the model to weigh against the first; a client with no such prompt gets the
+  // whole list. Fewer tools than two cannot be confused with each other, so nothing is said.
+  const toolNotice = mode === 'auto' ? toolNamesNotice(ir, systemText) : '';
+  if (toolNotice) systemText = systemText ? `${systemText}\n\n${toolNotice}` : toolNotice;
   if (systemText.trim()) messages.push({ role: 'system', content: systemText });
 
   for (const m of healToolPairs(ir.messages)) {
@@ -815,8 +944,9 @@ function irToChatBody(ir, model, opts = {}) {
 
   const body = { model, messages, stream: ir.stream === true };
   if (body.stream) body.stream_options = { include_usage: true };
-  if (ir.tools.length) {
-    body.tools = ir.tools.map(t => ({
+  const tools = clientTools(ir);
+  if (tools.length) {
+    body.tools = tools.map(t => ({
       type: 'function',
       function: { name: t.name, description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}) }
     }));
@@ -847,20 +977,26 @@ function irToChatBody(ir, model, opts = {}) {
   }
 
   if (wantsThinking && mode === 'native') {
-    body.reasoning_effort = ir.thinking?.effort && !['max', 'xhigh'].includes(ir.thinking.effort)
-      ? ir.thinking.effort
-      : (ir.thinking?.type === 'adaptive' ? 'high' : (ir.thinking?.budget ? budgetToEffort(ir.thinking.budget) : 'medium'));
+    // A strict OpenAI upstream names four levels and refuses the rest, so `xhigh` becomes `high`
+    // there and not `medium`: the request keeps as much of the depth as the target can take.
+    const asked = ir.thinking?.effort
+      || (ir.thinking?.type === 'adaptive' ? 'high' : (ir.thinking?.budget ? budgetToEffort(ir.thinking.budget) : 'medium'));
+    body.reasoning_effort = capEffort(asked, OPENAI_CHAT_LEVELS);
   } else if (wantsThinking) {
     if (ir.thinking?.type === 'adaptive') {
       body.thinking = { type: 'adaptive' };
-      body.reasoning_effort = ir.thinking.effort || 'high';
+      body.reasoning_effort = normalizeEffort(ir.thinking.effort || 'high');
     } else {
       // Restore thinking: if an external compression tool (RTK/Headroom) dropped the thinking object,
       // but the target model is a reasoning model, the gateway auto re-enables thinking with a safe budget.
       const rawBudget = ir.thinking?.budget ?? (ir.thinking?.effort ? effortToBudget(ir.thinking.effort) : 2048);
       const safeBudget = clampBudget(rawBudget);
       body.thinking = { type: 'enabled', budget_tokens: safeBudget };
-      body.reasoning_effort = ir.thinking?.effort || budgetToEffort(safeBudget);
+      // The level is what the client asked for; only when it asked with a budget is the level read
+      // back out of that budget, and the round trip returns the same level it came from.
+      body.reasoning_effort = ir.thinking?.effort
+        ? normalizeEffort(ir.thinking.effort)
+        : budgetToEffort(safeBudget);
     }
   }
   return body;
@@ -946,8 +1082,9 @@ function irToAnthropicBody(ir, model) {
     stream: ir.stream === true
   };
   if (ir.system && ir.system.trim()) body.system = ir.system;
-  if (ir.tools.length) {
-    body.tools = ir.tools.map(t => ({
+  const anthropicTools = clientTools(ir);
+  if (anthropicTools.length) {
+    body.tools = anthropicTools.map(t => ({
       name: t.name, description: t.description || '',
       input_schema: sanitizeJsonSchema(t.parameters || {})
     }));
@@ -966,6 +1103,13 @@ function irToAnthropicBody(ir, model) {
   if (ir.params.stop.length) body.stop_sequences = ir.params.stop;
   // Anthropic has no JSON mode without a schema.
   if (ir.responseFormat?.type === 'json_schema') body.output_config = { format: { type: 'json_schema', schema: ir.responseFormat.schema } };
+  // A level that arrived without a budget (Codex sends `reasoning.effort`) is passed on as the
+  // level Anthropic names, so the depth survives the hop instead of becoming a number. A client
+  // that sent budget_tokens has already said the same thing in Anthropic's own words, and its
+  // budget stands: budget and effort together would be the same request twice.
+  if (ir.thinking && ir.thinking.type !== 'disabled' && ir.thinking.effort && !ir.thinking.budget) {
+    body.output_config = { ...(body.output_config || {}), effort: capEffort(ir.thinking.effort, EFFORT_LEVELS) };
+  }
   if (ir.thinking && ir.thinking.type === 'adaptive') {
     body.thinking = { type: 'adaptive' };
   } else if (ir.thinking && ir.thinking.type !== 'disabled' && body.max_tokens > 1024) {
@@ -1060,9 +1204,10 @@ function irToVertexBody(ir, model) {
   if (ir.system && ir.system.trim()) {
     body.systemInstruction = { parts: [{ text: ir.system }] };
   }
-  if (ir.tools.length) {
+  const vertexTools = clientTools(ir);
+  if (vertexTools.length) {
     body.tools = [{
-      functionDeclarations: ir.tools.map(t => ({
+      functionDeclarations: vertexTools.map(t => ({
         name: t.name, description: t.description || '',
         parameters: toGeminiSchema(t.parameters || { type: 'object', properties: {} })
       }))
@@ -1084,7 +1229,11 @@ function irToVertexBody(ir, model) {
     // includeThoughts: without this flag Gemini won't return thought parts -> the client loses thinking.
     gc.thinkingConfig = { includeThoughts: true };
     if (ir.thinking.type === 'enabled') {
-      gc.thinkingConfig.thinkingBudget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 2048));
+      const wanted = ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 2048);
+      // Gemini refuses a budget above its ceiling instead of trimming it, and a level Gemini cannot
+      // reach is asked for with the highest budget it takes. The level itself is not invented here:
+      // a budget is what this API speaks.
+      gc.thinkingConfig.thinkingBudget = Math.min(clampBudget(wanted), GEMINI_MAX_BUDGET);
     }
   }
   if (ir.responseFormat) {
@@ -1691,11 +1840,12 @@ function anthropicStopReason(canonical, hasTools) {
 // --- Anthropic SSE + message ---
 // Sequential block state machine: indexes grow in content_block_start order, never
 // write deltas into a stopped block or reuse an index (thinking -> tool -> thinking -> text are all valid).
-function createAnthropicStream(emit, model) {
+function createAnthropicStream(emit, model, opts = {}) {
+  const vocab = opts.vocab;
   const msgId = `msg_${Date.now()}_${rand()}`;
   let nextIndex = 0;
   let open = null;          // { kind: 'thinking' | 'text', index }
-  const tools = new Map();  // tool index -> { index, id, name, closed }
+  const tools = new Map();  // tool index -> { index, id, name, closed, buffered }
   let sig = null;
 
   function closeOpen() {
@@ -1706,9 +1856,21 @@ function createAnthropicStream(emit, model) {
     emit('content_block_stop', { type: 'content_block_stop', index: open.index });
     open = null;
   }
+  // A call whose name was rewritten buffers its arguments: a key can only be renamed once the whole
+  // JSON exists, and a half-written object has no key to rename. The buffer goes out as one delta, so
+  // the block is never closed with arguments still pending and never has two deltas fighting over it.
+  function flushBuffered(st) {
+    if (!st.buffered) return;
+    emit('content_block_delta', {
+      type: 'content_block_delta', index: st.index,
+      delta: { type: 'input_json_delta', partial_json: st.buffered }
+    });
+    st.buffered = '';
+  }
   function closeTools() {
     for (const t of tools.values()) {
       if (!t.closed) {
+        flushBuffered(t);
         emit('content_block_stop', { type: 'content_block_stop', index: t.index });
         t.closed = true;
       }
@@ -1754,7 +1916,12 @@ function createAnthropicStream(emit, model) {
       let st = tools.get(key);
       if (!st) {
         closeOpen();
-        st = { index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: tc.name || 'tool', closed: false };
+        const fixed = vocab ? vocab.name(tc.name) : tc.name;
+        st = {
+          index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: fixed || 'tool', closed: false,
+          // Only a renamed name needs the arguments held back.
+          buffered: '', held: Boolean(vocab && fixed && fixed !== tc.name)
+        };
         tools.set(key, st);
         emit('content_block_start', {
           type: 'content_block_start', index: st.index,
@@ -1762,10 +1929,21 @@ function createAnthropicStream(emit, model) {
         });
       }
       if (tc.args) {
-        emit('content_block_delta', {
-          type: 'content_block_delta', index: st.index,
-          delta: { type: 'input_json_delta', partial_json: tc.args }
-        });
+        if (!st.held) {
+          emit('content_block_delta', {
+            type: 'content_block_delta', index: st.index,
+            delta: { type: 'input_json_delta', partial_json: tc.args }
+          });
+          return;
+        }
+        st.buffered += tc.args;
+        // The whole object at last: hand it over once, with the caller's own key spellings.
+        const repaired = vocab.args(st.name, st.buffered);
+        if (repaired !== st.buffered) {
+          st.buffered = repaired;
+          st.held = false;
+          flushBuffered(st);
+        }
       }
     },
     finish(canonical, stats = {}) {
@@ -1793,7 +1971,7 @@ function createAnthropicStream(emit, model) {
   };
 }
 
-function buildAnthropicMessage({ model, think, text, tools, finish, prompt, completion, cached, id, sig }) {
+function buildAnthropicMessage({ model, think, text, tools, finish, prompt, completion, cached, id, sig, vocab }) {
   const content = [];
   const thinking = (think || []).join('');
   if (thinking) {
@@ -1802,7 +1980,10 @@ function buildAnthropicMessage({ model, think, text, tools, finish, prompt, comp
   const body = (text || []).join('');
   if (body) content.push({ type: 'text', text: body });
   for (const tc of (tools || [])) {
-    content.push({ type: 'tool_use', id: tc.id || `toolu_${rand(24)}`, name: tc.name || 'tool', input: parseArgs(tc.args) });
+    // The name is written in the vocabulary the caller declared. A name it already uses is not
+    // touched, so the whole layer costs nothing on a turn where the model agreed with the list.
+    const fixed = repairToolCall(tc, vocab);
+    content.push({ type: 'tool_use', id: tc.id || `toolu_${rand(24)}`, name: fixed.name, input: parseArgs(fixed.args) });
   }
   if (!content.length) content.push({ type: 'text', text: '' });
   const p = prompt || 0;
@@ -1817,14 +1998,25 @@ function buildAnthropicMessage({ model, think, text, tools, finish, prompt, comp
 }
 
 // --- OpenAI Chat SSE + object ---
-function createChatStream(emit, model) {
+function createChatStream(emit, model, opts = {}) {
+  const vocab = opts.vocab;
   const id = `chatcmpl-${Date.now()}${rand(4)}`;
   const created = Math.floor(Date.now() / 1000);
-  const seenTools = new Set();
+  const seenTools = new Map();   // tool index -> { idx, name, buffered, held }
   const chunk = (choices, usage) => {
     const o = { id, object: 'chat.completion.chunk', created, model, choices };
     if (usage) o.usage = usage;
     emit(null, o);
+  };
+  // Chat has no rule about which block a delta belongs to, so held arguments go out at the end of the
+  // turn. A key can only be renamed once the whole object exists.
+  const flushHeld = () => {
+    for (const st of seenTools.values()) {
+      if (!st.held) continue;
+      chunk([{ index: 0, delta: { tool_calls: [{ index: st.idx, function: { arguments: st.buffered } }] }, finish_reason: null }]);
+      st.held = false;
+      st.buffered = '';
+    }
   };
   return {
     start() {
@@ -1839,13 +2031,26 @@ function createChatStream(emit, model) {
     tool(tc) {
       const idx = tc.index ?? 0;
       if (!seenTools.has(idx)) {
-        seenTools.add(idx);
-        chunk([{ index: 0, delta: { tool_calls: [{ index: idx, id: tc.id || `call_${rand(24)}`, type: 'function', function: { name: tc.name || 'tool', arguments: tc.args || '' } }] }, finish_reason: null }]);
-      } else if (tc.args) {
+        const name = vocab ? vocab.name(tc.name) : tc.name;
+        seenTools.set(idx, { idx, name, buffered: '', held: Boolean(vocab && name && name !== tc.name) });
+        chunk([{ index: 0, delta: { tool_calls: [{ index: idx, id: tc.id || `call_${rand(24)}`, type: 'function', function: { name: name || 'tool', arguments: '' } }] }, finish_reason: null }]);
+      }
+      const st = seenTools.get(idx);
+      if (!tc.args) return;
+      if (!st.held) {
         chunk([{ index: 0, delta: { tool_calls: [{ index: idx, function: { arguments: tc.args } }] }, finish_reason: null }]);
+        return;
+      }
+      st.buffered += tc.args;
+      const repaired = vocab.args(st.name, st.buffered);
+      if (repaired !== st.buffered) {
+        st.buffered = repaired;
+        st.held = false;
+        flushHeld();
       }
     },
     finish(canonical, stats = {}) {
+      flushHeld();
       const completion = stats.completion || 0;
       const prompt = stats.prompt || 0;
       const usage = { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
@@ -1854,12 +2059,13 @@ function createChatStream(emit, model) {
       chunk([{ index: 0, delta: {}, finish_reason: chatFinish(canonical, stats.hasTools) }], usage);
     },
     error(message) {
+      flushHeld();
       emit(null, { error: { message: String(message || 'Upstream stream error'), type: 'server_error', code: 'upstream_error' } });
     }
   };
 }
 
-function buildChatMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, stats }) {
+function buildChatMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, stats, vocab }) {
   const msg = { role: 'assistant', content: (text || []).join('') || null };
   const thinking = (think || []).join('');
   if (thinking) {
@@ -1867,11 +2073,14 @@ function buildChatMessage({ model, think, text, tools, finish, prompt, completio
     msg.reasoning = thinking;
   }
   if (tools && tools.length) {
-    msg.tool_calls = tools.map(tc => ({
-      id: tc.id || `call_${rand(24)}`,
-      type: 'function',
-      function: { name: tc.name || 'tool', arguments: typeof tc.args === 'string' ? tc.args : stringifyArgs(tc.args) }
-    }));
+    msg.tool_calls = tools.map(tc => {
+      const fixed = repairToolCall(tc, vocab);
+      return {
+        id: tc.id || `call_${rand(24)}`,
+        type: 'function',
+        function: { name: fixed.name || 'tool', arguments: fixed.args }
+      };
+    });
   }
   if (msg.content === null && !msg.tool_calls) msg.content = '';
   const usage = { prompt_tokens: prompt || 0, completion_tokens: completion || 0, total_tokens: (prompt || 0) + (completion || 0) };
@@ -1937,6 +2146,7 @@ function responsesToolItem(toolMeta, t, status = 'completed') {
 
 function createResponsesStream(emit, model, opts = {}) {
   const toolMeta = opts.toolMeta || null;
+  const vocab = opts.vocab;
   const respId = `resp_${Date.now()}${rand(8)}`;
   const created = Math.floor(Date.now() / 1000);
   let seq = 0;
@@ -1977,6 +2187,8 @@ function createResponsesStream(emit, model, opts = {}) {
   function closeTool(t) {
     if (t.done) return;
     t.done = true;
+    // A held call gets its arguments in the caller's own spelling here, with the item that Codex runs.
+    if (t.held && vocab) t.args = vocab.args(t.name, t.args || '{}');
     const item = responsesToolItem(toolMeta, { itemId: t.id, callId: t.callId, name: t.name, args: t.args });
     if (item.type === 'function_call') {
       send({ type: 'response.function_call_arguments.done', item_id: t.id, output_index: t.index, arguments: t.args });
@@ -2022,9 +2234,17 @@ function createResponsesStream(emit, model, opts = {}) {
       if (!st) {
         closeReasoning();
         closeMessage();
-        const kind = toolMeta?.[tc.name]?.kind || 'function';
+        const name = vocab ? vocab.name(tc.name) : tc.name;
+        const kind = toolMeta?.[name]?.kind || toolMeta?.[tc.name]?.kind || 'function';
         const prefix = kind === 'custom' ? 'ctc' : kind === 'local_shell' ? 'lsh' : 'fc';
-        st = { id: `${prefix}_${rand(24)}`, callId: tc.id || `call_${rand(24)}`, index: nextOutput++, name: tc.name || '', args: '', done: false, kind };
+        // Codex runs a tool on output_item.done, and the name is in that item. A renamed call
+        // therefore cannot be streamed argument by argument: the keys are only known once the whole
+        // object exists, so its arguments are held and go out with the item.
+        st = {
+          id: `${prefix}_${rand(24)}`, callId: tc.id || `call_${rand(24)}`, index: nextOutput++,
+          name: name || '', args: '', done: false, kind, upstream: tc.name,
+          held: Boolean(vocab && name && name !== tc.name)
+        };
         tools.set(key, st);
         if (kind !== 'local_shell') {
           const added = responsesToolItem(toolMeta, { itemId: st.id, callId: st.callId, name: st.name, args: '' }, 'in_progress');
@@ -2034,6 +2254,7 @@ function createResponsesStream(emit, model, opts = {}) {
       if (!st.name && tc.name) st.name = tc.name;
       if (tc.args && !st.done) {
         st.args += tc.args;
+        if (st.held) return;
         if (st.kind === 'function') {
           send({ type: 'response.function_call_arguments.delta', item_id: st.id, output_index: st.index, delta: tc.args });
         }
@@ -2067,7 +2288,7 @@ function createResponsesStream(emit, model, opts = {}) {
   };
 }
 
-function buildResponsesMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, toolMeta, stats }) {
+function buildResponsesMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, id, toolMeta, stats, vocab }) {
   const output = [];
   const thinking = (think || []).join('');
   if (thinking) output.push({ id: `rs_${rand(24)}`, type: 'reasoning', summary: [{ type: 'summary_text', text: thinking }] });
@@ -2080,9 +2301,10 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
   }
   const incomplete = finish === 'length';
   for (const tc of (tools || [])) {
+    const fixed = repairToolCall(tc, vocab);
     const item = responsesToolItem(toolMeta, {
-      callId: tc.id || `call_${rand(24)}`, name: tc.name,
-      args: typeof tc.args === 'string' ? tc.args : stringifyArgs(tc.args)
+      callId: tc.id || `call_${rand(24)}`, name: fixed.name,
+      args: fixed.args
     });
     // Same rule as the stream: a length stop never hands Codex a call with truncated arguments.
     if (incomplete && typeof tc.args === 'string') {
@@ -2191,7 +2413,7 @@ export {
   canonFinish, chatFinish, anthropicStopReason,
   smartReasoning, smartText, smartToolCalls, smartUsage, smartFinish,
   firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
-  budgetToEffort, effortToBudget, clampBudget, parseArgs, stringifyArgs,
+  budgetToEffort, effortToBudget, clampBudget, normalizeEffort, capEffort, parseArgs, stringifyArgs,
   anthropicToIR, responsesToIR, parseToIR,
   healToolPairs, healAnthropicPayload, rememberToolSignature, lookupToolSignature, estimateTokens, irToChatBody, irToAnthropicBody, irToVertexBody, emitUpstreamBody,
   normalizeUpstream, createUpstreamNormalizer, createCollector,

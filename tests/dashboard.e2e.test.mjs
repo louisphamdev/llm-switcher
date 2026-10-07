@@ -439,20 +439,19 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       assert.equal(models.haiku, 'my-own-model');
     });
 
-    it('locks the 1M box for a model under 1M, and saves the box for a model that has it', async () => {
+    it('shows the window each listed model has, and offers no window switch', async () => {
       await act(() => editProfile('intact-claude'));
       await act(() => tab('models'));
       await page.waitFor(`document.querySelector('#models-status')?.dataset.state === 'ready'`, 'the model list');
       await page.type('#p-sonnet', 'up-alpha');    // window 200000
-      assert.equal(await page.evaluate(`document.getElementById('p-sonnet-1m').disabled`), true, 'the box is free for a 200K model');
-      assert.match(await page.text('#p-sonnet-1m-note'), /200K.*under 1M/);
+      assert.match(await page.text('#p-sonnet-note'), /200K context/);
       await page.type('#p-opus', 'up-beta');       // window 1000000
-      assert.equal(await page.evaluate(`document.getElementById('p-opus-1m').disabled`), false);
-      await page.click('label:has(#p-opus-1m)');
-      assert.equal(await page.evaluate(`document.getElementById('p-opus-1m').checked`), true);
+      assert.match(await page.text('#p-opus-note'), /1M context/);
+      assert.equal(await page.evaluate(`document.querySelectorAll('#slot-fields input[type=checkbox]').length`), 0, 'no window switch is offered');
       await act(() => saveForm());
-      assert.equal(profiles()['intact-claude'].model1M?.opus, true);
-      assert.notEqual(profiles()['intact-claude'].model1M?.sonnet, true);
+      const saved = profiles()['intact-claude'];
+      assert.equal(saved.defaultModels.opus, 'up-beta');
+      assert.equal(saved.model1M, undefined, 'and nothing window-shaped is saved');
     });
 
     it('says why the list did not load and loads it on Retry', async () => {
@@ -467,7 +466,7 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       assert.equal(await modelsStatus(), '3 models');
     });
 
-    it('clears a model slot and a 1M box that the person emptied', async () => {
+    it('clears a model slot the person emptied, and drops the retired 1M flags', async () => {
       const cfg = fx.config();
       cfg.profiles['intact-claude'].model1M = { opus: true };
       fx.writeConfig(cfg);
@@ -476,14 +475,12 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
       await act(() => tab('models'));
       await page.waitFor(`document.querySelector('#models-status')?.dataset.state === 'ready'`, 'the model list');
       await page.type('#p-sonnet', '');
-      await page.key('Escape');    // the list of suggestions covers the boxes below until it closes
-      await page.click('label:has(#p-opus-1m)');
-      assert.equal(await page.evaluate(`document.getElementById('p-opus-1m').checked`), false);
+      await page.key('Escape');    // the list of suggestions covers the row below until it closes
       await act(() => saveForm());
       const saved = profiles()['intact-claude'];
       assert.equal(saved.defaultModels.sonnet, undefined, 'the emptied slot came back');
       assert.equal(saved.defaultModels.opus, 'up-opus');
-      assert.ok(!saved.model1M?.opus, 'the unticked 1M box came back');
+      assert.equal(saved.model1M, undefined, 'the retired flags are not written back');
     });
 
     it('shows the slots of the tool that the profile serves', async () => {
