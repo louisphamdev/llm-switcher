@@ -1,5 +1,18 @@
 # Changelog — LLM Switcher
 
+## Release 1.5.3 — 2026-10-07
+
+- **Idle compaction no longer calls a model unless one was named for it.** With no summary model set,
+  a summary was written with the conversation's own model — the expensive one, on an official
+  account, and the one with limits. That spends the costly model to save the tokens of a single
+  turn, and on a plan with limits it is worse than doing nothing.
+
+  There was no point paying for it either: the summary is used only to write the session file, so
+  with no model named there was nothing to store and the call bought nothing. Now no model is called
+  at all. The saving is unchanged — the request still leaves shortened, which is the whole of what
+  this feature costs and all of what it saves without a model. Set one with
+  `switch compact model <id>` to also make the shortening last.
+
 ## Release 1.5.2 — 2026-10-07
 
 - **Codex conversations can be shortened on an idle return too, behind its own switch.**

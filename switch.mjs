@@ -864,8 +864,9 @@ async function manageCompact(action = 'status', arg = '') {
     console.log(`  Idle over:      ${p.idleMinutes} minutes`);
     console.log(`  Context over:   ${Math.round(p.minBytes / 1024)} KB`);
     console.log(`  Keep recent:    ${p.keepRecent} messages`);
-    console.log(`  Summary model:  ${p.model || '(the model of the conversation itself)'}`);
+    console.log(`  Summary model:  ${p.model || '(none set)'}`);
     if (!p.enabled) console.log('\n  Turn it on with: switch compact on');
+    else if (!p.model) console.log('\n  No summary model: requests still go out shortened, and no model is called at all.');
   };
 
   if (act === 'on' || act === 'enable') {

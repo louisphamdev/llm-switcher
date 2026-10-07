@@ -789,11 +789,14 @@ function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBu
   const outFormat = resolveOutFormat(profile, mapped);
   const build = (prof, model, ir2) => buildUpstreamRequest(prof, outFormat, ir2, model, req);
 
-  // The summary is asked for with the model this setting names, or the one this conversation is
-  // already using. It is a request of its own, asked before the history is replaced, because the
-  // answer serves two readers: the person waiting for their own answer, and the agent that reads
-  // the summary next time.
-  const summary = askSummary({ ir, policy, profile, model: policy.model || mapped, build });
+  // A summary is only made when the reader named a model for it, and never with the conversation's
+  // own: that would spend the expensive model of an official account to save the tokens of the
+  // turn, which is a bad trade and, on a plan with limits, worse. With no model named there is
+  // still a saving, because the request leaves shortened, and without a summary there is nothing to
+  // write to the session file -- so a model call here would cost tokens and buy nothing.
+  const summary = policy.model
+    ? askSummary({ ir, policy, profile, model: policy.model, build })
+    : Promise.resolve('');
 
   // The request goes out shortened now, before the summary exists. The summary belongs in the
   // next resume, not in this answer, so this turn carries the text that stands in for the middle
