@@ -33,7 +33,7 @@ import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 import {
-  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR, IDLE_COMPACT_KEY,
+  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR, compactResponsesInput, IDLE_COMPACT_KEY,
 } from './idlecompact.mjs';
 import { askSummary } from './idlecall.mjs';
 import { claudeSessionId, findSessionFile, writeCompaction } from './claudesession.mjs';
@@ -759,9 +759,11 @@ async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profile
   const policy = idleCompactPolicy(loadConfig());
   const key = conversationKey(clientFormat, req, ir);
   if (!key) return null;
-  if (policy.enabled && clientFormat === 'anthropic'
-    && idleFor(key) > policy.idleMs && payloadBytes(payload) >= policy.minBytes) {
-    const r = compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer });
+  const wants = clientFormat === 'anthropic'
+    ? policy.enabled
+    : clientFormat === 'responses' && policy.enabled && policy.codex;
+  if (wants && idleFor(key) > policy.idleMs && payloadBytes(payload) >= policy.minBytes) {
+    const r = compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer, clientFormat });
     // Recorded on the way through rather than on the way out, so a request the provider then
     // fails still counts as the conversation having been here. What is being measured is the
     // client's pause, not the provider's answer.
@@ -778,7 +780,7 @@ function payloadBytes(payload) {
   try { return JSON.stringify(payload).length; } catch { return 0; }
 }
 
-function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer }) {
+function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer, clientFormat }) {
   const compacted = compactIR(ir, policy);
   if (!compacted) return null;
 
@@ -796,15 +798,19 @@ function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBu
   // The request goes out shortened now, before the summary exists. The summary belongs in the
   // next resume, not in this answer, so this turn carries the text that stands in for the middle
   // and nothing else; a turn that also carried the summary would pay for it twice.
-  // Rendered back into the Messages shape with the renderer the rest of the gateway uses. Writing
-  // the intermediate form into the body directly would put this gateway's own message shape on
-  // the wire, which is not what the provider speaks.
-  const withIt = irToAnthropicBody({ ...ir, messages: compacted.messages }, ir.model || payload.model).messages;
-  const next = { ...payload, messages: withIt };
+  // Written back into the client's own body. Claude Code goes through the renderer this gateway
+  // already uses, because it is translated on the way out. Codex is not: a Responses client
+  // reaches a Responses provider as the bytes it sent, so its history is shortened where it
+  // lives, in the request itself.
+  const field = clientFormat === 'responses' ? 'input' : 'messages';
+  const rendered = clientFormat === 'responses'
+    ? compactResponsesInput(payload.input, policy)
+    : irToAnthropicBody({ ...ir, messages: compacted.messages }, ir.model || payload.model).messages;
+  const next = { ...payload, [field]: rendered };
   const nextBuf = Buffer.from(JSON.stringify(next), 'utf8');
 
   console.log(
-    `[llm-switcher] idle compact ${key.slice(0, 12)} [${profileKey}]: ${before} -> ${JSON.stringify(withIt).length} bytes, ` +
+    `[llm-switcher] idle compact ${key.slice(0, 12)} [${profileKey}]: ${before} -> ${JSON.stringify(rendered).length} bytes, ` +
     `${compacted.middle} messages kept as text, ${compacted.dropped} dropped; summary call in flight`);
 
   // The summary is not waited for. It serves the next resume, not this answer, and holding the
@@ -818,15 +824,21 @@ function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBu
     }
     // Found by session id rather than by working directory: nothing in the request says what the
     // client's directory is, and a compaction written to the wrong project is one nothing reads.
-    const sessionId = claudeSessionId(req, payload);
+    // Codex is not written to. Its history is a SQLite store of its own, and a compaction there
+    // needs two halves: a contextCompaction row and a compacted entry in the rollout file. Both
+    // were written, correctly, from the shape of a real compaction, and Codex still resumed as if
+    // neither existed. Something else in that store is what tells it where the summary starts, and
+    // it has not been found. So the summary is made and the request goes out shortened, which is a
+    // real saving on this turn, and the thread itself is left to Codex.
+    const sessionId = clientFormat === 'responses' ? '' : claudeSessionId(req, payload);
     const file = sessionId ? findSessionFile(sessionId) : '';
     const written = file
       ? writeCompaction({
         file, summary: s, sessionId,
-        preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(withIt).length / 4),
+        preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(rendered).length / 4),
       })
       : null;
-    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary written, session file ${written ? 'updated' : 'not written'}`);
+    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary ${written ? 'written to the session file' : 'made, not stored'}`);
   }).catch(() => {});
 
   return { payload: next, bodyBuffer: nextBuf };

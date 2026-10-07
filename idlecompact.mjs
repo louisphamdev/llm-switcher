@@ -39,6 +39,9 @@ export const IDLE_COMPACT_KEY = 'idleCompact';
 // to lose anyway.
 const DEFAULTS = {
   enabled: false,
+  // Codex is off by default while Claude Code is the default on: a Codex compaction writes into
+  // Codex's own SQLite store, and that is opt-in per install on purpose.
+  codex: false,
   model: '',
   idleMinutes: 15,
   minBytes: 64 * 1024,
@@ -51,6 +54,7 @@ export function idleCompactPolicy(cfg) {
   const raw = cfg?.[IDLE_COMPACT_KEY];
   const p = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
   p.enabled = p.enabled === true;
+  p.codex = p.codex === true;
   p.model = typeof p.model === 'string' ? p.model.trim() : '';
   p.idleMinutes = Number.isFinite(+p.idleMinutes) && +p.idleMinutes > 0 ? +p.idleMinutes : DEFAULTS.idleMinutes;
   p.minBytes = Number.isFinite(+p.minBytes) && +p.minBytes > 0 ? +p.minBytes : DEFAULTS.minBytes;
@@ -224,4 +228,57 @@ export function clampSummary(text, policy) {
   const dot = cut.lastIndexOf('. ');
   if (dot > policy.summaryMaxChars / 2) return cut.slice(0, dot + 1);
   return cut;
+}
+// ---- the Responses shape, where the history lives in the request ----
+
+// Codex sends its history as an input array and reaches a Responses provider as the bytes it
+// wrote, so its history is shortened here rather than through a renderer. Same rule as the
+// intermediate form: the opening request and the recent turns stay as they are, the middle keeps
+// its words and loses its calls and their output.
+export function compactResponsesInput(input, policy) {
+  if (!Array.isArray(input) || input.length < policy.keepRecent + 2) return input;
+  const head = input.findIndex(isResponseMessage);
+  if (head < 0) return input;
+  let tail = input.length - policy.keepRecent;
+  if (tail <= head + 1) return input;
+  while (tail < input.length && isResponseResult(input[tail])) tail++;
+  if (tail <= head + 1) return input;
+
+  const kept = [];
+  kept.push(...input.slice(0, head));
+  kept.push(input[head]);
+  for (let i = head + 1; i < tail; i++) {
+    // A call, a result and a reasoning block are the weight of the session and none of the thread.
+    const t = responseText(input[i]);
+    if (!t) continue;
+    kept.push({
+      type: 'message',
+      role: input[i]?.role === 'assistant' ? 'assistant' : 'user',
+      content: [{ type: 'input_text', text: trimText(t, policy.userChars ?? 3000) }],
+    });
+  }
+  kept.push(...input.slice(tail));
+  return kept;
+}
+
+function isResponseMessage(item) {
+  return item && item.type === 'message' && item.role !== 'developer' && item.role !== 'system';
+}
+
+function isResponseResult(item) {
+  return !!item && (item.type === 'function_call_output' || item.type === 'custom_tool_call_output'
+    || item.type === 'local_shell_call_output');
+}
+
+function responseText(item) {
+  if (!isResponseMessage(item)) return '';
+  const c = item.content;
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return '';
+  let out = '';
+  for (const b of c) {
+    if (b && typeof b === 'object' && typeof b.text === 'string' &&
+      ['input_text', 'output_text', 'summary_text', 'text'].includes(b.type)) out += b.text;
+  }
+  return out;
 }
