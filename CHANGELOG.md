@@ -2,9 +2,19 @@
 
 ## Release 1.5.2 — 2026-10-07
 
-- **Codex conversations can be shortened on an idle return too, behind its own switch.** , off by default. The history is shortened in the request, which is where a Responses client keeps it: a Responses client reaches a Responses provider as the bytes it sent, so there is nothing to render through. Measured on a 25 KB conversation: 6 KB out.
+- **Codex conversations can be shortened on an idle return too, behind its own switch.**
+  `idleCompact.codex`, off by default. The history is shortened in the request, which is
+  where a Responses client keeps it: a Responses client reaches a Responses provider as the
+  bytes it sent, so there is nothing to render through. Measured on a 25 KB conversation,
+  6 KB goes out.
 
-  The thread itself is left to Codex. Its history is a SQLite store of its own, and a compaction there needs two halves: a  row in , whose  is nothing but a type and an id, and a  entry in the rollout file carrying the summary. Both were written, in the shape a real compaction takes, and Codex resumed as if neither existed. Something else in that store says where the summary begins; it was not found. So the summary is produced and the request goes out short, which saves the tokens of this turn, and no claim is made that the thread stays short.
+  The thread itself is left to Codex. Its history is a SQLite store of its own, and a
+  compaction there needs two halves: a `contextCompaction` row in `thread_items`, whose
+  `item_json` is nothing but a type and an id, and a `compacted` entry in the rollout file
+  carrying the summary. Both were written, in the shape a real compaction takes, and Codex
+  resumed as if neither existed. Something else in that store says where the summary begins;
+  it was not found. So the summary is produced and the request goes out short, which saves
+  the tokens of this turn, and no claim is made that the thread stays short.
 
 ## Release 1.5.1 — 2026-10-07
 
