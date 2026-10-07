@@ -1,6 +1,6 @@
 # Changelog — LLM Switcher
 
-## Unreleased
+## Release 1.4.0 — 2026-10-07
 
 - **A model answers with the tool names it was trained on, and the caller only runs its own.** A Codex model says `shell` where Claude Code declared `Bash`, and the turn ends with `Error: No such tool available: shell`. The gateway now writes the call back in the vocabulary the caller declared, and says the names in the prompt so most calls never need rewriting.
   - Two layers, because neither covers the whole case. The prompt layer is one sentence in `auto` mode, and only for the tool names the caller's own prompt does not already mention: Claude Code names its tools at length, so it gets nothing and there is no second list to contradict the first. It cannot help a provider that refuses the request before the model reads it (the Zen free tier answers 403 `FreeTierError`), nor a model that ignores the list. The repair layer is behind it, and pays only on the turns that need it.
