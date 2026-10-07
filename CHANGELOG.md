@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.5.1 — 2026-10-07
+
+- **Idle compaction is now in the dashboard.** A card on the Routes page carries the switch, the pause that counts as losing the cache, the size it must exceed, and the model that writes the summary. It reads and writes `/api/idle-compact`, the same endpoint and the same key `switch compact` uses, so the page and the terminal cannot show two different settings.
+
+  One bug came out of writing the endpoint: the field types were checked as groups, so `{"enabled":"yes"}` was accepted and then read as `false` — a typo switched the feature off without a word. Each field is now checked as the type it actually is, and a wrong type is refused rather than quietly turned into the default.
+
 ## Release 1.5.0 — 2026-10-07
 
 - **A conversation that comes back after a pause no longer pays full price for a cache nobody holds.** When a Claude Code session resumes after being idle long enough, and the context is large enough to be worth it, the gateway shortens the history and writes the compaction into the session file. Off by default. `switch compact on`, and `switch compact model <id>` for the model that writes the summary (empty means the conversation's own model).

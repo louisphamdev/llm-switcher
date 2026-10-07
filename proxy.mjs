@@ -33,7 +33,7 @@ import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 import {
-  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR,
+  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR, IDLE_COMPACT_KEY,
 } from './idlecompact.mjs';
 import { askSummary } from './idlecall.mjs';
 import { claudeSessionId, findSessionFile, writeCompaction } from './claudesession.mjs';
@@ -1697,6 +1697,42 @@ async function routeApi(req, res, method, pathname) {
   // GET /api/catalog (Dynamic Model Discovery)
   if (method === 'GET' && pathname === '/api/catalog') {
     return sendJson(res, 200, syncLocalCatalog(STATE_DIR));
+  }
+
+  // Idle compaction. The settings live under one key so the dashboard and `switch compact`
+  // write the same place, and the same defaults, instead of two views that can disagree.
+  if (method === 'GET' && pathname === '/api/idle-compact') {
+    return sendJson(res, 200, { idleCompact: idleCompactPolicy(loadConfig()) });
+  }
+  if (method === 'POST' && pathname === '/api/idle-compact') {
+    let patch;
+    try {
+      patch = JSON.parse((await readBody(req, 64 * 1024)).toString('utf8'));
+    } catch (err) {
+      return sendJson(res, err.status || 400, { error: err.message });
+    }
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return sendJson(res, 400, { error: 'body must be an object' });
+    }
+    // Per key, not per type-group. A loose check lets "yes" through for a boolean, and the
+    // policy then reads it as false: a typo would switch the feature off without saying so.
+    const kinds = { enabled: 'boolean', model: 'string', idleMinutes: 'number', minBytes: 'number', keepRecent: 'number' };
+    for (const [k, want] of Object.entries(kinds)) {
+      if (!(k in patch)) continue;
+      const v = patch[k];
+      const ok = want === 'number'
+        ? (typeof v === 'number' && Number.isFinite(v))
+        : typeof v === want;
+      if (!ok) return sendJson(res, 400, { error: `${k} must be ${want === 'number' ? 'a number' : `a ${want}`}` });
+    }
+    const cfg = loadConfig() || {};
+    cfg[IDLE_COMPACT_KEY] = { ...(cfg[IDLE_COMPACT_KEY] || {}), ...patch };
+    try {
+      saveConfig(cfg);
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+    return sendJson(res, 200, { idleCompact: idleCompactPolicy(loadConfig()) });
   }
 
   if (method !== 'POST') {

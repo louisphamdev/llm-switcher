@@ -952,6 +952,57 @@
       <!-- VIEW 1: Routes & Profiles -->
       <div id="view-routes" class="view-panel" style="display:none;">
         <div class="sec">
+          <!-- Idle compaction -->
+          <div class="card">
+            <div class="cardh">
+              <h2 style="font-size:1.02rem; font-weight:600;">Idle compaction</h2>
+              <span class="badge outline" id="badge-idle-compact">OFF</span>
+            </div>
+            <p style="margin:.2rem 0 .7rem; color:var(--muted); font-size:.86rem;">
+              A Claude Code conversation that comes back after a pause has lost the provider's prompt
+              cache, so its history is paid for at full price. Shorten it then, and write the
+              compaction into the session file so the next resume starts short.
+            </p>
+            <div class="row">
+              <label class="cb" style="display:flex; align-items:center; gap:.5rem;">
+                <input type="checkbox" id="idle-compact-enabled" onchange="saveIdleCompact()">
+                <span>Shorten a conversation that was idle too long</span>
+              </label>
+            </div>
+            <div class="row">
+              <div class="who">
+                <div class="l">Pause that counts as losing the cache</div>
+                <div class="meta">minutes · Anthropic 5m default, OpenAI 30m</div>
+              </div>
+              <div style="min-width:9rem;">
+                <input type="number" id="idle-compact-minutes" min="1" max="1440" class="inp"
+                       style="width:100%;" onchange="saveIdleCompact()">
+              </div>
+            </div>
+            <div class="row">
+              <div class="who">
+                <div class="l">Context it must be larger than</div>
+                <div class="meta">KB · below this nothing is touched</div>
+              </div>
+              <div style="min-width:9rem;">
+                <input type="number" id="idle-compact-kb" min="8" max="4096" class="inp"
+                       style="width:100%;" onchange="saveIdleCompact()">
+              </div>
+            </div>
+            <div class="row">
+              <div class="who">
+                <div class="l">Model that writes the summary</div>
+                <div class="meta">a cheaper model writes a cheaper and worse summary</div>
+              </div>
+              <div style="min-width:16rem; flex:1;">
+                <input type="text" id="idle-compact-model" class="inp" style="width:100%;"
+                       placeholder="empty = the model of the conversation itself"
+                       onchange="saveIdleCompact()">
+              </div>
+            </div>
+            <span id="idle-compact-status" class="meta" aria-live="polite"></span>
+          </div>
+
           <!-- Active Coding CLI Targets -->
           <div class="card">
             <div class="cardh">
@@ -1461,6 +1512,7 @@
       const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
 
       if (route === 'routes') {
+        loadIdleCompact();
         titleEl.textContent = 'Routes & Profiles';
         if (activeTargets.length > 0) {
           const parts = [];
@@ -1734,6 +1786,49 @@
     }
 
     // Load Status
+    // Idle compaction, read and written through the same endpoint `switch compact` uses, so the
+    // dashboard and the terminal cannot show two different settings.
+    function showIdleCompact(c) {
+      c = c || {};
+      document.getElementById('idle-compact-enabled').checked = !!c.enabled;
+      document.getElementById('idle-compact-minutes').value = c.idleMinutes ?? 15;
+      document.getElementById('idle-compact-kb').value = Math.round((c.minBytes ?? 65536) / 1024);
+      document.getElementById('idle-compact-model').value = c.model || '';
+      const badge = document.getElementById('badge-idle-compact');
+      badge.textContent = c.enabled ? 'ON' : 'OFF';
+      badge.className = 'badge ' + (c.enabled ? 'ok' : 'outline');
+    }
+
+    async function loadIdleCompact() {
+      try {
+        const r = await api('/api/idle-compact');
+        if (r.ok) showIdleCompact((await r.json()).idleCompact);
+      } catch { /* the card stays at its defaults; nothing here is required to route */ }
+    }
+
+    async function saveIdleCompact() {
+      const status = document.getElementById('idle-compact-status');
+      const patch = {
+        enabled: document.getElementById('idle-compact-enabled').checked,
+        idleMinutes: Number(document.getElementById('idle-compact-minutes').value) || 15,
+        minBytes: (Number(document.getElementById('idle-compact-kb').value) || 64) * 1024,
+        model: document.getElementById('idle-compact-model').value.trim()
+      };
+      status.textContent = 'Saving...';
+      try {
+        const r = await api('/api/idle-compact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch)
+        });
+        if (!r.ok) throw new Error((await r.json()).error || r.status);
+        showIdleCompact((await r.json()).idleCompact);
+        status.textContent = 'Saved. It applies to the next conversation that comes back after a pause.';
+      } catch (e) {
+        status.textContent = 'Not saved: ' + e.message;
+      }
+    }
+
     async function loadStatus() {
       try {
         const res = await api('/api/status');
