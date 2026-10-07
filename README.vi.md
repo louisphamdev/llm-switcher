@@ -548,6 +548,46 @@ Service không chạy trong shell của bạn. Vì vậy `switch service install
 
 Trên Linux, unit là service systemd *của user*: nó khởi động khi bạn đăng nhập. Muốn nó chạy ngay khi máy boot mà không cần đăng nhập (ví dụ server truy cập qua SSH), chạy một lần `loginctl enable-linger $USER`. Unit ghi đường dẫn tuyệt đối của `node` hiện tại; nếu bạn quản lý Node bằng nvm và gỡ phiên bản đó, hãy chạy lại `switch service install`.
 
+### Nén hội thoại khi để lâu
+
+Một hội thoại để lâu đủ thì sẽ mất cache của provider. Request kế tiếp phải trả full price cho một
+prefix mà provider không còn giữ, và lượt sau đó lại trả tiếp. Mỗi provider giữ cache bao lâu là
+việc của riêng họ: Anthropic 5 phút mặc định, 1 giờ nếu request yêu cầu; OpenAI 30 phút; Gemini và
+DeepSeek không công bố thời hạn nào.
+
+Khi một hội thoại Claude Code quay lại sau một khoảng nghỉ, và đủ lớn để đáng xử lý, gateway rút gọn
+lịch sử và ghi kết quả nén vào session file. Lượt lẽ ra phải tốn cả lịch sử giờ chỉ tốn phần tóm
+tắt.
+
+| | |
+| --- | --- |
+| `switch compact status` | Xem cấu hình |
+| `switch compact on` / `off` | Bật hoặc tắt (mặc định tắt) |
+| `switch compact model <id>` | Model nào viết phần tóm tắt. Rỗng hoặc `default`: dùng model của chính hội thoại đó |
+| `switch compact idle <phút>` | Nghỉ bao lâu thì coi là mất cache (15) |
+| `switch compact min <KB>` | Hội thoại phải lớn bao nhiêu mới đáng nén (64) |
+
+Hai điều là cố ý.
+
+**Chỉ một lần, không nén mọi lượt.** Nén mỗi lượt sẽ làm prefix đổi mỗi lượt, nên không lượt nào
+trúng cache, và hội thoại bị tóm tắt đi đi lại. Nén đúng lúc một khoảng nghỉ báo đã mất cache thì
+phần tóm tắt giữ nguyên cho các lượt sau.
+
+**Ghi vào session file, không qua API.** Claude Code dựng mọi request từ chuỗi entry trong
+`~/.claude/projects/<project>/<session>.jsonl`, nên một lần nén ghi vào đó rút gọn **mọi** request sau
+đó, chứ không chỉ lượt đã kích hoạt. Hai entry đúng bằng hai entry Claude Code tự ghi: một
+`compact_boundary` và một entry `user` mang cờ `isCompactSummary`. Các entry cũ vẫn nằm trong file —
+Claude Code cũng vậy — nên một bản transcript người ta vẫn đọc được đáng giá hơn một file nhỏ. Việc
+rút gọn có hiệu lực từ lần resume kế tiếp của phiên đó.
+
+Model rẻ viết phần tóm tắt rẻ và tệ hơn: tóm tắt thay cả lịch sử, nên thứ nó bỏ sót là mất hẳn.
+Đó là quyết định của người đọc, nên nó là một setting.
+
+Codex không xử lý ở đây. Nén của Codex là một item protocol chứ không phải file, provider gateway trả
+lời, và Codex tự lưu vào history của nó. Rút gọn request Codex ở phía client sẽ thay bằng một phần
+tóm tắt mà không client nào ghi lại. Antigravity CLI không có session file riêng, nên không có gì để
+làm cho việc rút gọn kéo dài.
+
 ### Cập nhật
 
 Khi npm có bản mới, dashboard hiện một thông báo. Bấm **Update now** trong thông báo này. Gateway cài bản mới và chạy code mới. Sau đó dashboard tự tải lại. `switch update` làm việc tương tự từ terminal.

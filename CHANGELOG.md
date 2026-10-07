@@ -1,5 +1,19 @@
 # Changelog — LLM Switcher
 
+## Release 1.5.0 — 2026-10-07
+
+- **A conversation that comes back after a pause no longer pays full price for a cache nobody holds.** When a Claude Code session resumes after being idle long enough, and the context is large enough to be worth it, the gateway shortens the history and writes the compaction into the session file. Off by default. `switch compact on`, and `switch compact model <id>` for the model that writes the summary (empty means the conversation's own model).
+
+Two decisions worth naming, because the obvious alternatives are worse.
+
+Compacting once, not every turn. Changing the prefix on every turn means no turn ever hits the cache and the conversation is summarized over and over. Compacting when a pause says the cache is gone keeps the summary stable for the turns that follow.
+
+The session file, not the API. Claude Code builds every request from the entry chain in `~/.claude/projects/<project>/<session>.jsonl`, so a compaction written there shortens every request after it rather than only the turn that triggered it. The two entries are the ones Claude Code writes itself, read off a real session: a `compact_boundary` and a `user` entry marked `isCompactSummary`. Old entries stay in the file, as they do after Claude Code's own compaction, because a transcript a person can still read is worth more than a small file.
+
+Codex and the Antigravity CLI are deliberately untouched. Codex compaction is a protocol item the provider gateway answers and Codex stores in its own history, so shortening a Codex request here would replace that with a summary no client records. The CLI has no session file to write.
+
+Tests: 14, including one that runs the real Claude Code binary against a local server and reads the request it sends. With twelve synthetic turns behind a boundary, that request carries the summary and none of the twelve.
+
 ## Release 1.4.1 — 2026-10-07
 
 - **The update comes from npm, because that is where a release is published.** The gateway asked npm what the newest version is and ran `npm install -g llm-switcher@<version>` for exactly that version. Before, the install decided: a directory with a `.git` pulled and never asked npm, and the dashboard's Update now button read as a git operation on a project that ships to npm.

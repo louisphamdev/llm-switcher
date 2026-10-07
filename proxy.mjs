@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
-  OUT_FORMATS, parseToIR, emitUpstreamBody, createUpstreamNormalizer, createCollector,
+  OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
   toGeminiSchema, isAntigravityModel,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
@@ -32,6 +32,11 @@ import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog
 import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
+import {
+  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR,
+} from './idlecompact.mjs';
+import { askSummary } from './idlecall.mjs';
+import { claudeSessionId, findSessionFile, writeCompaction } from './claudesession.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
@@ -743,6 +748,108 @@ function cleanSchemaDeep(obj) {
 // 1. Strip disallowed keywords ('encrypted', '$schema', 'cache_control')
 // 2. Fix invalid schema values where a property has a string value "object" instead of a valid schema object
 // 3. For ag/* targets (Gemini behind 9Router): rewrite to the strict Schema subset
+// ---- idle compaction ----
+
+// Claude Code only. Codex is left alone on purpose: its compaction is a protocol item, which the
+// provider gateway answers, and the answer is stored by Codex in its own history. Shortening a
+// Codex request here would replace that with a summary no client ever records, which costs the
+// tokens of the summary and saves only one turn. The Antigravity CLI has no session file of its
+// own to write, so there would be nothing to make the shortening last.
+async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profileKey, bodyBuffer) {
+  const policy = idleCompactPolicy(loadConfig());
+  const key = conversationKey(clientFormat, req, ir);
+  if (!key) return null;
+  if (policy.enabled && clientFormat === 'anthropic'
+    && idleFor(key) > policy.idleMs && payloadBytes(payload) >= policy.minBytes) {
+    const r = compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer });
+    // Recorded on the way through rather than on the way out, so a request the provider then
+    // fails still counts as the conversation having been here. What is being measured is the
+    // client's pause, not the provider's answer.
+    noteConversation(key);
+    return r;
+  }
+  noteConversation(key);
+  return null;
+}
+
+// Measured from the parsed body rather than from Content-Length, which is absent on a chunked
+// request and smaller than the body once it has been decoded.
+function payloadBytes(payload) {
+  try { return JSON.stringify(payload).length; } catch { return 0; }
+}
+
+function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer }) {
+  const compacted = compactIR(ir, policy);
+  if (!compacted) return null;
+
+  const before = JSON.stringify(ir.messages || []).length;
+  const mapped = mapModel(ir.model || payload.model || '', profile, 'anthropic');
+  const outFormat = resolveOutFormat(profile, mapped);
+  const build = (prof, model, ir2) => buildUpstreamRequest(prof, outFormat, ir2, model, req);
+
+  // The summary is asked for with the model this setting names, or the one this conversation is
+  // already using. It is a request of its own, asked before the history is replaced, because the
+  // answer serves two readers: the person waiting for their own answer, and the agent that reads
+  // the summary next time.
+  const summary = askSummary({ ir, policy, profile, model: policy.model || mapped, build });
+
+  // The request goes out shortened now, before the summary exists. The summary belongs in the
+  // next resume, not in this answer, so this turn carries the text that stands in for the middle
+  // and nothing else; a turn that also carried the summary would pay for it twice.
+  // Rendered back into the Messages shape with the renderer the rest of the gateway uses. Writing
+  // the intermediate form into the body directly would put this gateway's own message shape on
+  // the wire, which is not what the provider speaks.
+  const withIt = irToAnthropicBody({ ...ir, messages: compacted.messages }, ir.model || payload.model).messages;
+  const next = { ...payload, messages: withIt };
+  const nextBuf = Buffer.from(JSON.stringify(next), 'utf8');
+
+  console.log(
+    `[llm-switcher] idle compact ${key.slice(0, 12)} [${profileKey}]: ${before} -> ${JSON.stringify(withIt).length} bytes, ` +
+    `${compacted.middle} messages kept as text, ${compacted.dropped} dropped; summary call in flight`);
+
+  // The summary is not waited for. It serves the next resume, not this answer, and holding the
+  // client's turn open for a call nobody reads would make the saving feel like a cost. The file is
+  // written when it lands, which is also later than the response and therefore never races the
+  // entries Claude Code is appending right now.
+  Promise.resolve(summary).then((s) => {
+    if (!s) {
+      console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: the summary call produced nothing; the request went out shortened anyway`);
+      return;
+    }
+    // Found by session id rather than by working directory: nothing in the request says what the
+    // client's directory is, and a compaction written to the wrong project is one nothing reads.
+    const sessionId = claudeSessionId(req, payload);
+    const file = sessionId ? findSessionFile(sessionId) : '';
+    const written = file
+      ? writeCompaction({
+        file, summary: s, sessionId,
+        preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(withIt).length / 4),
+      })
+      : null;
+    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary written, session file ${written ? 'updated' : 'not written'}`);
+  }).catch(() => {});
+
+  return { payload: next, bodyBuffer: nextBuf };
+}
+
+// The summary goes in as a user message right after the opening request, which is where Claude
+// Code puts its own. A conversation handed a hole in it reads the hole as something it forgot
+// unless something says otherwise.
+function withSummary(msgs, insertAt, summary) {
+  const at = Math.min(Math.max(1, insertAt), msgs.length);
+  return [
+    ...msgs.slice(0, at),
+    { role: 'user', content: [{ type: 'text', text: summaryNotice(summary) }] },
+    ...msgs.slice(at),
+  ];
+}
+
+function summaryNotice(summary) {
+  return 'Earlier in this conversation the history was shortened because it had been idle long ' +
+    'enough that the provider no longer held its prompt cache. What follows is a summary of the ' +
+    'part that was replaced, then the more recent messages unchanged.\n\nSummary:\n' + summary;
+}
+
 function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req) {
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
@@ -838,6 +945,23 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   }
   // Code Assist names streaming in the path (:streamGenerateContent), not in the body.
   if (clientFormat === 'codeassist') ir.stream = Boolean(opts.codeAssistStream);
+
+  // Compaction rewrites the request itself, not just the intermediate form: when the client and
+  // the provider speak the same shape this gateway forwards the client's own bytes, so a change
+  // made only to the parsed form would shorten nothing that leaves the building.
+  const shrunk = await maybeCompactIdle(req, clientFormat, payload, ir, profile, profileKey, bodyBuffer);
+  if (shrunk) {
+    payload = shrunk.payload;
+    bodyBuffer = shrunk.bodyBuffer;
+    try {
+      ir = parseToIR(clientFormat, payload);
+    } catch {
+      // The compacted body was built from this one, so it parses. If it ever did not, the
+      // original is still what the caller meant to send.
+      payload = JSON.parse(bodyBuffer.toString('utf8'));
+      return sendClientError(res, clientFormat, 400, 'Cannot reparse the compacted request');
+    }
+  }
 
   const reqStartTime = Date.now();
   const requestPreview = previewOf(ir);

@@ -13,6 +13,7 @@ import {
   getMigrationError, getMigrationCollision, getLastLoadError,
   casClearToolPointers, emptyToolEnvFiles, syncInterceptorTools
 } from './state.mjs';
+import { idleCompactPolicy } from './idlecompact.mjs';
 import { runProbe, runCheck } from './contract.mjs';
 import { installPlugin, uninstallPlugin, pluginStatus, PLUGIN_NAME } from './plugin.mjs';
 import {
@@ -845,6 +846,56 @@ async function managePlugin(action = 'status') {
   }
 }
 
+// Idle compaction: a conversation that comes back after a pause has lost the provider's prompt
+// cache, so its history is paid for at full price. This turns that on and says what it will do.
+async function manageCompact(action = 'status', arg = '') {
+  const cfg = loadConfig() || {};
+  const policy = idleCompactPolicy(cfg);
+  const key = 'idleCompact';
+  const set = (patch) => {
+    cfg[key] = { ...(cfg[key] || {}), ...patch };
+    saveConfig(cfg);
+  };
+  const act = (action || 'status').toLowerCase();
+  const show = () => {
+    const p = idleCompactPolicy(loadConfig() || {});
+    console.log('Idle compaction (Claude Code)');
+    console.log(`  Enabled:        ${p.enabled ? 'yes' : 'no'}`);
+    console.log(`  Idle over:      ${p.idleMinutes} minutes`);
+    console.log(`  Context over:   ${Math.round(p.minBytes / 1024)} KB`);
+    console.log(`  Keep recent:    ${p.keepRecent} messages`);
+    console.log(`  Summary model:  ${p.model || '(the model of the conversation itself)'}`);
+    if (!p.enabled) console.log('\n  Turn it on with: switch compact on');
+  };
+
+  if (act === 'on' || act === 'enable') {
+    set({ enabled: true });
+    console.log('[OK] Idle compaction is on.');
+    show();
+  } else if (act === 'off' || act === 'disable') {
+    set({ enabled: false });
+    console.log('[OK] Idle compaction is off.');
+  } else if (act === 'model') {
+    const m = String(arg || '').trim();
+    if (!m) { console.log(`Summary model is currently: ${policy.model || '(none set)'}`); return; }
+    if (m === 'none' || m === 'default') { set({ model: '' }); console.log('[OK] The conversation\'s own model will write the summary.'); return; }
+    set({ model: m });
+    console.log(`[OK] Summaries will be written by: ${m}`);
+  } else if (act === 'idle') {
+    const n = Number(arg);
+    if (!Number.isFinite(n) || n <= 0) { console.error('Usage: switch compact idle <minutes>'); process.exit(1); }
+    set({ idleMinutes: Math.floor(n) });
+    console.log(`[OK] Compact a conversation idle over ${Math.floor(n)} minutes.`);
+  } else if (act === 'min') {
+    const n = Number(arg);
+    if (!Number.isFinite(n) || n <= 0) { console.error('Usage: switch compact min <KB>'); process.exit(1); }
+    set({ minBytes: Math.floor(n) * 1024 });
+    console.log(`[OK] Compact a conversation over ${Math.floor(n)} KB.`);
+  } else {
+    show();
+  }
+}
+
 async function manageShim(action = 'status') {
   const act = (action || 'status').toLowerCase();
 
@@ -1247,6 +1298,8 @@ if (cmd === 'off' || cmd === 'stop') {
   await runDoctor();
 } else if (cmd === 'service' || cmd === 'daemon') {
   await manageService(subArg.toLowerCase() || 'status');
+} else if (cmd === 'compact') {
+  await manageCompact(subArg.toLowerCase() || 'status', positionalArgs()[2] || '');
 } else if (cmd === 'shim' || cmd === 'shims') {
   await manageShim(subArg.toLowerCase() || 'status');
 } else if (cmd === 'plugin' || cmd === 'plugins') {

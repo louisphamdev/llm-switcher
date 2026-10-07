@@ -550,6 +550,46 @@ The service runs without your shell. `switch service install` therefore copies `
 
 On Linux the unit is a systemd *user* service: it starts when you log in. To start it at boot without a login (a server reached over SSH), run `loginctl enable-linger $USER` once. The unit records the absolute path of the current `node`; if you manage Node with nvm and remove that version, run `switch service install` again.
 
+### Idle compaction
+
+A conversation that pauses long enough loses the provider's prompt cache. The next request pays full
+price for a prefix the provider no longer holds, and pays it again on the turn after that. How long
+a provider keeps its cache is its own business: Anthropic 5 minutes by default and 1 hour when the
+request asks for it, OpenAI 30 minutes, Gemini and DeepSeek publish no lifetime at all.
+
+When a Claude Code conversation comes back after a pause and is large enough to be worth it, the
+gateway shortens the history and writes the compaction into the session file. The turn that would
+have cost the whole history costs the summary instead.
+
+| | |
+| --- | --- |
+| `switch compact status` | Show the settings |
+| `switch compact on` / `off` | Turn it on or off (off by default) |
+| `switch compact model <id>` | Which model writes the summary. Empty or `default`: the model of the conversation itself |
+| `switch compact idle <minutes>` | How long a pause counts as losing the cache (15) |
+| `switch compact min <KB>` | How large a conversation must be to be worth it (64) |
+
+Two things are deliberate.
+
+**Only once, not on every turn.** Compacting every turn would change the prefix every turn, so no
+turn would ever hit the cache and the conversation would be summarized over and over. Compacting
+when a pause says the cache is gone keeps the summary stable for the turns that follow.
+
+**The session file, not the API.** Claude Code builds every request from a chain of entries in
+`~/.claude/projects/<project>/<session>.jsonl`, so a compaction written there shortens every
+request after it, not just the turn that triggered it. The two entries are the ones Claude Code
+writes itself: a `compact_boundary` and a `user` entry marked `isCompactSummary`. The old entries
+stay in the file, which is what Claude Code does too, so a transcript a person can still read is
+worth more than a small file. The shortening takes effect the next time the session is resumed.
+
+A free model writes a free summary and a worse one: the summary replaces the history, so what it
+leaves out is gone. That is the reader's call, which is why the model is a setting.
+
+Codex is not handled here. Its compaction is a protocol item rather than a file, which the provider
+gateway answers, and the answer is stored by Codex in its own history. Shortening a Codex request at
+the client would replace that with a summary no client records. The Antigravity CLI has no session
+file of its own, so there would be nothing to make the shortening last.
+
 ### Updates
 
 When npm has a newer release, the dashboard shows a notice. Click **Update now** in this notice. The gateway installs the release and starts the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
