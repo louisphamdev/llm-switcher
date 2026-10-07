@@ -37,6 +37,7 @@ import {
 } from './idlecompact.mjs';
 import { askSummary } from './idlecall.mjs';
 import { claudeSessionId, findSessionFile, writeCompaction } from './claudesession.mjs';
+import { writeCodexCompaction } from './codexsession.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
@@ -820,28 +821,29 @@ function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBu
   // client's turn open for a call nobody reads would make the saving feel like a cost. The file is
   // written when it lands, which is also later than the response and therefore never races the
   // entries Claude Code is appending right now.
-  Promise.resolve(summary).then((s) => {
+  Promise.resolve(summary).then(async (s) => {
     if (!s) {
       console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: the summary call produced nothing; the request went out shortened anyway`);
       return;
     }
     // Found by session id rather than by working directory: nothing in the request says what the
     // client's directory is, and a compaction written to the wrong project is one nothing reads.
-    // Codex is not written to. Its history is a SQLite store of its own, and a compaction there
-    // needs two halves: a contextCompaction row and a compacted entry in the rollout file. Both
-    // were written, correctly, from the shape of a real compaction, and Codex still resumed as if
-    // neither existed. Something else in that store is what tells it where the summary starts, and
-    // it has not been found. So the summary is made and the request goes out shortened, which is a
-    // real saving on this turn, and the thread itself is left to Codex.
-    const sessionId = clientFormat === 'responses' ? '' : claudeSessionId(req, payload);
-    const file = sessionId ? findSessionFile(sessionId) : '';
-    const written = file
-      ? writeCompaction({
-        file, summary: s, sessionId,
-        preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(rendered).length / 4),
-      })
-      : null;
-    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary ${written ? 'written to the session file' : 'made, not stored'}`);
+    // Codex and Claude Code keep their history in different places, so each is written its own
+    // way: Codex in its rollout file and its store, Claude Code in its session file.
+    let written;
+    if (clientFormat === 'responses') {
+      written = await writeCodexCompaction({ summary: s });
+    } else {
+      const sessionId = claudeSessionId(req, payload);
+      const file = sessionId ? findSessionFile(sessionId) : '';
+      written = file
+        ? writeCompaction({
+          file, summary: s, sessionId,
+          preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(rendered).length / 4),
+        })
+        : null;
+    }
+    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary ${written ? 'stored' : 'made, not stored'}`);
   }).catch(() => {});
 
   return { payload: next, bodyBuffer: nextBuf };

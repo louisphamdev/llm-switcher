@@ -1,5 +1,27 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.0 — 2026-10-07
+
+- **A Codex thread now keeps the shortening, behind the same opt-in switch.** A Codex compaction is
+  three writes that have to agree, all read off a thread that had compacted seven times:
+
+  1. a `compacted` entry in the rollout file, carrying the summary and the history that replaces
+     the old one;
+  2. a row of type `contextCompaction` in `thread_items`, whose `item_json` is nothing but a type
+     and an id -- a marker, not a summary;
+  3. `thread_history_projection_state` moved forward to the byte offset and ordinal of that entry.
+
+  The third is the one that is easy to leave out, and leaving it out looks exactly like success.
+  That table records how far the store has consumed the rollout file: `next_rollout_byte_offset` is
+  the size of the file, exactly, and `next_rollout_ordinal` is the ordinal after the last entry
+  read. The rollout file is the record and the store is a projection of it, so an entry appended to
+  the file without moving the projection is simply never read. With all three written, Codex
+  resumes and answers from the summary; with the first two alone it resumes and says it has none.
+
+  `idleCompact.codex` remains off by default, because this opens Codex's database. With no summary
+  model named, no model is called: the request still goes out shortened, which is the whole of the
+  saving, and nothing is spent to earn it.
+
 ## Release 1.5.3 — 2026-10-07
 
 - **Idle compaction no longer calls a model unless one was named for it.** With no summary model set,
