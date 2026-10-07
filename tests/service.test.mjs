@@ -28,7 +28,7 @@ test('systemd unit quotes the command and carries the environment', () => {
 });
 
 const plist = () => launchdPlist({ nodeBin: '/n', script: '/a&b/proxy.mjs', port: 4001, logPath: '/l<og>', env: [['CLAUDE_CONFIG_DIR', '/x&y']] });
-const taskXml = () => scheduledTaskXml({ nodeBin: 'C:\\Program Files\\nodejs\\node.exe', script: 'C:\\Users\\A & B\\llm-switcher\\proxy.mjs', port: 4002, userId: 'PC\\a&b' });
+const taskXml = () => scheduledTaskXml({ nodeBin: 'C:\\Program Files\\nodejs\\node.exe', script: 'C:\\Users\\A & B\\llm-switcher\\proxy.mjs', port: 4002, userId: 'PC\\a&b', systemRoot: 'C:\\Windows' });
 
 test('the plist and the task XML are well-formed', { skip: !HAS_XMLLINT && 'needs xmllint' }, () => {
   execFileSync('xmllint', ['--noout', '-'], { input: plist() });
@@ -43,8 +43,10 @@ test('launchd plist escapes values and carries the environment', () => {
 
 test('Windows task XML keeps the command and its arguments apart and has no run-time limit', () => {
   const xml = taskXml();
-  assert.match(xml, /<Command>C:\\Program Files\\nodejs\\node.exe<\/Command>/);
-  assert.match(xml, /<Arguments>&quot;C:\\Users\\A &amp; B\\llm-switcher\\proxy.mjs&quot; --port 4002<\/Arguments>/);
+  // node.exe is a console program: started directly at logon it opens a terminal window, and closing
+  // that window stops the gateway. conhost --headless gives it a console that nobody sees.
+  assert.match(xml, /<Command>C:\\Windows\\System32\\conhost.exe<\/Command>/);
+  assert.match(xml, /<Arguments>--headless &quot;C:\\Program Files\\nodejs\\node.exe&quot; &quot;C:\\Users\\A &amp; B\\llm-switcher\\proxy.mjs&quot; --port 4002<\/Arguments>/);
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>PC\\a&amp;b<\/UserId>/);
   assert.equal(portFromServiceText(xml), 4002);
@@ -60,7 +62,7 @@ test('the port is read back from UTF-16 console output, as schtasks /Query /XML 
 
 test('autoupdate flag is placed into task XML, systemd unit, and launchd plist', () => {
   const xml = scheduledTaskXml({ nodeBin: 'node.exe', script: 'proxy.mjs', port: 3456, userId: 'u', autoupdate: true });
-  assert.match(xml, /<Arguments>&quot;proxy\.mjs&quot; --port 3456 --autoupdate<\/Arguments>/);
+  assert.match(xml, /<Arguments>--headless &quot;node\.exe&quot; &quot;proxy\.mjs&quot; --port 3456 --autoupdate<\/Arguments>/);
   assert.equal(portFromServiceText(xml), 3456);
 
   const unit = systemdUnit({ nodeBin: '/usr/bin/node', script: '/opt/proxy.mjs', port: 3456, autoupdate: true });

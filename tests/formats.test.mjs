@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  anthropicToIR, responsesToIR,
+  anthropicToIR, responsesToIR, codeAssistToIR,
   healToolPairs, irToChatBody, irToAnthropicBody, irToVertexBody, toGeminiSchema,
   createUpstreamNormalizer, createCollector, createThinkTagSplitter,
   createAnthropicStream, createResponsesStream, createVertexStream,
@@ -11,6 +11,7 @@ import {
   isAntigravityModel, smartUsage,
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
+  createCodeAssistStream,
   budgetToEffort, effortToBudget, normalizeEffort, capEffort, EFFORT_LEVELS
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
@@ -832,6 +833,86 @@ test('structured output: Responses text.format keeps name and strict; JSON mode 
   const txt = responsesToIR({ model: 'x', input: 'hi', text: { format: { type: 'text' } } });
   assert.equal(irToChatBody(txt, 'm').response_format, undefined);
   assert.equal(irToVertexBody(txt, 'm').generationConfig, undefined);
+});
+
+// ---- Code Assist (Antigravity CLI) input ----
+const ca = (contents, request = {}) => codeAssistToIR({ model: 'm', request: { contents, ...request } });
+const call = (name, id) => ({ functionCall: { ...(id ? { id } : {}), name, args: {} } });
+const resp = (name, id, output = 'r') => ({ functionResponse: { ...(id ? { id } : {}), name, response: { output } } });
+const toolMsgs = (ir) => ir.messages.filter(m => m.role === 'tool');
+
+test('codeAssistToIR: an answered id leaves the queue, so a later id-less result pairs with its own call', () => {
+  const ir = ca([
+    { role: 'user', parts: [{ text: 'go' }] },
+    { role: 'model', parts: [call('f', 'x')] }, { role: 'model', parts: [resp('f', 'x')] },
+    { role: 'model', parts: [call('f')] }, { role: 'model', parts: [resp('f')] }
+  ]);
+  const generated = ir.messages.find(m => m.role === 'assistant' && m.toolCalls?.[0]?.id !== 'x').toolCalls[0].id;
+  assert.deepEqual(toolMsgs(ir).map(m => m.toolCallId), ['x', generated]);
+});
+
+test('codeAssistToIR: two id-less parallel calls of one name pair first in, first out', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'go' }] }, { role: 'model', parts: [call('f'), call('f')] }, { role: 'user', parts: [resp('f', null, 'a'), resp('f', null, 'b')] }]);
+  const ids = ir.messages.find(m => m.role === 'assistant').toolCalls.map(c => c.id);
+  assert.deepEqual(toolMsgs(ir).map(m => [m.toolCallId, m.content]), [[ids[0], 'a'], [ids[1], 'b']]);
+});
+
+test('codeAssistToIR: two id-less orphans of one name get distinct ids', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'go' }] }, { role: 'user', parts: [resp('f'), resp('f')] }]);
+  const ids = toolMsgs(ir).map(m => m.toolCallId);
+  assert.equal(ids.length, 2);
+  assert.notEqual(ids[0], ids[1]);
+});
+
+test('codeAssistToIR: an unknown explicit id does not consume the open call of that name', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'go' }] }, { role: 'model', parts: [call('f')] }, { role: 'model', parts: [resp('f', 'zzz')] }, { role: 'model', parts: [resp('f')] }]);
+  assert.deepEqual(toolMsgs(ir).map(m => m.toolCallId), ['zzz', 'call_agy_0_f']);
+});
+
+test('codeAssistToIR: thought parts stay out of the text', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'q' }] }, { role: 'model', parts: [{ text: 'secret', thought: true }, { text: 'answer' }] }]);
+  assert.equal(ir.messages[1].content, 'answer');
+});
+
+test('codeAssistToIR: nested schema types are lowered', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'q' }] }], { tools: [{ functionDeclarations: [{ name: 't', parameters: {
+    type: 'OBJECT', properties: { list: { type: 'ARRAY', items: { type: 'STRING' } }, pick: { anyOf: [{ type: 'INTEGER' }, { type: 'BOOLEAN' }] } }
+  } }] }] });
+  const p = ir.tools[0].parameters;
+  assert.equal(p.type, 'object');
+  assert.equal(p.properties.list.type, 'array');
+  assert.equal(p.properties.list.items.type, 'string');
+  assert.ok(JSON.stringify(p.properties.pick).includes('"integer"'));
+});
+
+test('codeAssistToIR: each thinkingConfig form maps to ir.thinking', () => {
+  const think = (thinkingConfig) => ca([{ role: 'user', parts: [{ text: 'q' }] }], { generationConfig: { thinkingConfig } }).thinking;
+  assert.deepEqual(think({ thinkingBudget: 0 }), { type: 'disabled' });
+  assert.equal(think({ thinkingBudget: 4000 }).type, 'enabled');
+  assert.equal(think({ thinkingLevel: 'HIGH' }).effort, 'high');
+  assert.deepEqual(think({ includeThoughts: true, thinkingBudget: -1 }), { type: 'enabled', budget: 2048 });
+});
+
+test('codeAssistToIR: generation parameters map to ir.params', () => {
+  const ir = ca([{ role: 'user', parts: [{ text: 'q' }] }], { generationConfig: { maxOutputTokens: 900, temperature: 0.2, topP: 0.9, stopSequences: ['END'] } });
+  assert.equal(ir.params.maxTokens, 900);
+  assert.equal(ir.params.temperature, 0.2);
+  assert.equal(ir.params.topP, 0.9);
+  assert.deepEqual(ir.params.stop, ['END']);
+});
+
+test('Code Assist stream: a chunk is wrapped with a trace id, an error is sent bare as Code Assist does', () => {
+  const out = [];
+  const stream = createCodeAssistStream((event, data) => out.push(data), 'gemini-3.8-flash-high');
+  stream.text('hi');
+  stream.error('upstream broke');
+  const chunk = out.find(d => d.response);
+  assert.equal(typeof chunk.traceId, 'string');
+  assert.match(chunk.response.responseId, /^agy-/);
+  const err = out.at(-1);
+  assert.deepEqual(Object.keys(err), ['error'], 'an error is not wrapped in response/traceId');
+  assert.equal(err.error.status, 'INTERNAL');
+  assert.equal(err.error.message, 'upstream broke');
 });
 
 // ---- thinking: one ladder, both directions ----

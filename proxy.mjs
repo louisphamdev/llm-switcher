@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -12,7 +13,8 @@ import {
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
   toGeminiSchema, isAntigravityModel,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
-  buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage
+  buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
+  createCodeAssistStream, buildCodeAssistMessage
 } from './formats.mjs';
 import {
   TOOLS, configPath, loadConfig, getConfigLoadError, saveConfig, resolvePort, hasProfile, isValidProfileKey,
@@ -20,7 +22,7 @@ import {
   getActiveMap, setTargetProfile, activateProfile, deactivateProfile, deactivateAll, deleteProfile,
   isProfileActive, profileAcceptsTarget, applyLaunchState, readLaunchFlags, redactConfig, MASKED_KEY,
   modelForSlot, primaryModel, codexPublicModel, isSafeModelName, parsePort, CODEX_MODEL_SLOTS,
-  ensureAdminToken, identityProof, reconcileBlindfold, checkBlindfoldTarget,
+  ensureAdminToken, ensureGatewaySecret, relayProof, identityProof, reconcileBlindfold, checkBlindfoldTarget,
   codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
@@ -116,6 +118,8 @@ function checkRequestOrigin(req) {
 // The Host/Origin guard stops browser pages only. A local process that is not the owner must
 // also present the token from admin.token (mode 0600) to use /api/*.
 const ADMIN_TOKEN = Buffer.from(ensureAdminToken());
+// The relay key. The gateway keeps no copy: relayProof() reads the file for each proof.
+ensureGatewaySecret();
 
 // `switch contract-probe` names the trace id of the exchange it drives, so it can print the id
 // before intact holds it. Only a process that can read admin.token is believed, and the marker
@@ -206,8 +210,8 @@ async function readJsonBody(req, limit = MAX_API_BODY_SIZE) {
 // ----------------------------------------------------
 // Profile & model resolution
 // ----------------------------------------------------
-// R5: the only two input protocols, each owned by one tool.
-const CLIENT_FORMAT_TOOL = { anthropic: 'claude', responses: 'codex' };
+// R5: one input protocol per tool. codeassist is the Antigravity CLI (agy).
+const CLIENT_FORMAT_TOOL = { anthropic: 'claude', responses: 'codex', codeassist: 'agy' };
 
 function getActiveProfile(clientFormat, req) {
   const cfg = loadConfig();
@@ -251,6 +255,15 @@ function getFirstActiveProfile(preferred, req) {
 // clientFormat is the protocol the request arrived in. An `auto` profile serves every protocol,
 // so the profile's inFormat cannot tell a Codex request from a Claude one.
 function mapModel(requestedModel, profile, clientFormat) {
+  if (clientFormat === 'codeassist') {
+    // agy picks a model per call (gemini-3.8-flash-high). The main slot names the upstream model;
+    // '*' in it stands for that pick, so antigravity/* keeps agy's choice on an intact pool.
+    const slot = modelForSlot(profile, 'main');
+    if (!slot) return requestedModel || '';
+    if (!slot.includes('*')) return slot;
+    // A function replacer: a model name with $& or $1 in it must not expand.
+    return requestedModel ? slot.replace('*', () => requestedModel) : '';
+  }
   if (!requestedModel) return primaryModel(profile);
   const clean = requestedModel.replace(/\[1m\]/gi, '').trim();
   // If the client specified a model with a provider prefix (e.g. ag/..., gh/..., cf/...), keep it as-is
@@ -349,7 +362,7 @@ function sendClientError(res, clientFormat, status, message, headers = {}) {
   let body;
   if (clientFormat === 'anthropic') {
     body = { type: 'error', error: { type: anthropicErrorType(status), message } };
-  } else if (clientFormat === 'vertex') {
+  } else if (clientFormat === 'vertex' || clientFormat === 'codeassist') {
     body = { error: { code: status, message, status: vertexStatus(status) } };
   } else {
     body = { error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', code: String(status) } };
@@ -494,6 +507,7 @@ function clientRenderer(clientFormat, res, model, opts = {}) {
   if (clientFormat === 'anthropic') return createAnthropicStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'responses') return createResponsesStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model);
+  if (clientFormat === 'codeassist') return createCodeAssistStream((e, d) => sendSSE(res, null, d), model);
   return createChatStream((e, d) => sendSSE(res, null, d), model, opts);
 }
 
@@ -501,6 +515,7 @@ function clientMessage(clientFormat, args) {
   if (clientFormat === 'anthropic') return buildAnthropicMessage(args);
   if (clientFormat === 'responses') return buildResponsesMessage(args);
   if (clientFormat === 'vertex') return buildVertexMessage(args);
+  if (clientFormat === 'codeassist') return buildCodeAssistMessage(args);
   return buildChatMessage(args);
 }
 
@@ -522,6 +537,11 @@ const HOP_BY_HOP = new Set(['content-length', 'content-encoding', 'transfer-enco
 // Bifrost: intact names, per model, the User-Agent prefix of the provider's own client (bifrost_ua).
 // When the caller is that client, the request crosses as it is: only the key changes.
 const bifrostUACache = new Map();
+// A failed lookup holds the convert route only this long, so a short intact outage does not pin it.
+const BIFROST_RETRY_MS = (() => {
+  const v = Number(process.env.LLM_SWITCHER_BIFROST_RETRY_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 30000;
+})();
 async function bifrostUAFor(profile, model) {
   const base = String(profile.baseURL || '').replace(/\/+$/, '');
   if (!base || !model) return '';
@@ -529,24 +549,34 @@ async function bifrostUAFor(profile, model) {
   const hit = bifrostUACache.get(key);
   if (hit && hit.until > Date.now()) return hit.ua;
   let ua = '';
-  let ttl = 10 * 60 * 1000;
+  let failure = '';
   try {
     const r = await fetch(`${base}/models/${model.split('/').map(encodeURIComponent).join('/')}`, {
       headers: { authorization: `Bearer ${profile.apiKey || ''}` }, signal: AbortSignal.timeout(3000)
     });
+    // Only a 2xx is an answer. A 404 can be an intact older than 0.1.14 or a wrong baseURL.
     if (r.ok) ua = String((await r.json())?.bifrost_ua || '');
-  } catch {
-    ttl = 30 * 1000; // an unreachable list must not pin the decision for long
+    else failure = `HTTP ${r.status}`;
+  } catch (err) {
+    failure = err.message;
   }
-  bifrostUACache.set(key, { ua, until: Date.now() + ttl });
+  // One line per failure streak, not one per retry.
+  if (failure && !hit?.failed) console.warn(`[llm-switcher] Bifrost lookup of "${model}" at ${base} failed (${failure}); the convert route serves it, retry in ${BIFROST_RETRY_MS} ms`);
+  bifrostUACache.set(key, { ua, failed: Boolean(failure), until: Date.now() + (failure ? BIFROST_RETRY_MS : 10 * 60 * 1000) });
   return ua;
 }
+
+// Codex names its originator in the User-Agent: codex_cli_rs (TUI), codex_exec (`codex exec`),
+// codex_vscode, codex_sdk_ts. intact names one of them; each one is the same client.
+const BIFROST_UA_FAMILIES = [['codex_cli_rs/', 'codex_exec/', 'codex_vscode/', 'codex_sdk_ts/']];
 
 async function crossesBifrost(req, profile, model) {
   const clientUA = String(req.headers['user-agent'] || '');
   if (!clientUA) return false;
   const ua = await bifrostUAFor(profile, model);
-  return Boolean(ua) && clientUA.startsWith(ua);
+  if (!ua) return false;
+  const family = BIFROST_UA_FAMILIES.find(f => f.includes(ua)) || [ua];
+  return family.some(prefix => clientUA.startsWith(prefix));
 }
 
 // Every client header except its own credentials, the switcher's control headers and hop-by-hop.
@@ -559,6 +589,15 @@ function bifrostHeaders(req, profile) {
   }
   headers['x-api-key'] = profile.apiKey || '';
   return headers;
+}
+
+// The client formats a provider's own CLI speaks, and where Bifrost sends each one on intact.
+const BIFROST_FORMATS = new Set(['anthropic', 'responses', 'codeassist']);
+function bifrostURL(profile, clientFormat, req, opts = {}) {
+  const base = String(profile.baseURL || '').replace(/\/+$/, '');
+  if (clientFormat === 'responses') return withClientQuery(`${base}/responses`, req);
+  if (clientFormat === 'codeassist') return withClientQuery(`${base}/v1internal:${opts.codeAssistAction}`, req);
+  return withClientQuery(upstreamEndpoint(profile, 'anthropic', '', false, req).url, req);
 }
 
 function withClientQuery(url, req) {
@@ -621,7 +660,9 @@ async function forwardAnthropicDirect(res, payload, bodyBuffer, url, headers, ma
       streamError = `stream interrupted: ${streamErr.cause?.message || streamErr.message}`;
     }
   } finally {
-    res.end();
+    // A cut stream must not reach the client as a whole answer.
+    if (streamError && !signal.aborted) res.destroy();
+    else res.end();
   }
   const error = streamError || (upstreamRes.ok ? null : errorPreview.slice(0, 300));
   return { status, error, healed: healed.notes, tokens: usage.tokens() };
@@ -638,13 +679,16 @@ function createUsageTap(limit = 4 * 1024 * 1024) {
     if (!u || typeof u !== 'object') return;
     if (typeof u.input_tokens === 'number') tokens.prompt = u.input_tokens + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     if (typeof u.output_tokens === 'number') tokens.completion = u.output_tokens;
+    // Gemini (Code Assist): thought tokens are billed as output.
+    if (typeof u.promptTokenCount === 'number') tokens.prompt = u.promptTokenCount;
+    if (typeof u.candidatesTokenCount === 'number') tokens.completion = u.candidatesTokenCount + (u.thoughtsTokenCount || 0);
   };
   const line = (l) => {
     const t = l.startsWith('data:') ? l.slice(5).trim() : '';
-    if (!t.includes('"usage"')) return;
+    if (!t.includes('"usage"') && !t.includes('"usageMetadata"')) return;
     try {
       const d = JSON.parse(t);
-      take(d.message?.usage || d.usage);
+      take(d.message?.usage || d.usage || d.response?.usage || d.response?.usageMetadata || d.usageMetadata);
     } catch {}
   };
   return {
@@ -659,7 +703,10 @@ function createUsageTap(limit = 4 * 1024 * 1024) {
     tokens() {
       text += decoder.decode();
       if (text.trim().startsWith('{')) {
-        try { take(JSON.parse(text).usage); } catch {}
+        try {
+          const j = JSON.parse(text);
+          take(j.usage || j.response?.usageMetadata || j.usageMetadata);
+        } catch {}
       } else if (text) line(text);
       return tokens;
     }
@@ -789,12 +836,18 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     ir.stream = Boolean(opts.vertexStream);
     if (!ir.model && opts.vertexModel) ir.model = opts.vertexModel;
   }
+  // Code Assist names streaming in the path (:streamGenerateContent), not in the body.
+  if (clientFormat === 'codeassist') ir.stream = Boolean(opts.codeAssistStream);
 
   const reqStartTime = Date.now();
   const requestPreview = previewOf(ir);
   const requestedModel = ir.model || payload.model || '';
   const mappedModel = mapModel(requestedModel, profile, clientFormat);
-  const bifrost = clientFormat === 'anthropic' && await crossesBifrost(req, profile, mappedModel);
+  if (clientFormat === 'codeassist' && !mappedModel) {
+    sendClientError(res, clientFormat, 400, 'The request names no model, and the main slot of the agy profile needs one (*).');
+    return;
+  }
+  const bifrost = BIFROST_FORMATS.has(clientFormat) && await crossesBifrost(req, profile, mappedModel);
   const outFormat = resolveOutFormat(profile, mappedModel);
   const route = bifrost ? 'bifrost' : outFormat;
   console.log(`[llm-switcher] ${clientFormat} -> ${route} "${requestedModel}" -> "${mappedModel}" [${profile.name || profileKey}]`);
@@ -804,7 +857,9 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
 
   // Contract lab: a sampled request carries a trace id to intact, and the bytes this gateway
   // writes back are copied for the upload that follows the answer.
-  const traceId = probeTraceId(req) || contractLab.traceFor(mappedModel);
+  // The contract lab compares converters of the Claude Code and Codex shapes; it has no reducer for
+  // the Code Assist shape, so an agy exchange is never sampled.
+  const traceId = clientFormat === 'codeassist' ? null : (probeTraceId(req) || contractLab.traceFor(mappedModel));
   const halfTap = traceId ? createHalfTap() : null;
   if (halfTap) tapClientWrites(res, halfTap);
 
@@ -823,11 +878,11 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     // Bifrost: the provider's own client reaching its own account through intact. Bytes and headers
     // go as sent, only the key changes: no healer, no thinkingMode, no conversion.
     if (bifrost) {
-      const { url } = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
+      // bifrostHeaders drops the client's own Authorization: agy's Google token never reaches intact.
       const headers = bifrostHeaders(req, profile);
       if (traceId) headers['x-intact-trace'] = traceId;
       try {
-        const r = await forwardAnthropicDirect(res, payload, bodyBuffer, withClientQuery(url, req), headers, mappedModel, ac.signal, profile, true);
+        const r = await forwardAnthropicDirect(res, payload, bodyBuffer, bifrostURL(profile, clientFormat, req, opts), headers, mappedModel, ac.signal, profile, true);
         answered = !r.error && r.status >= 200 && r.status < 300;
         log({ status: r.status, tokens: r.tokens, responsePreview: '(bifrost)', error: r.error || undefined });
       } catch (err) {
@@ -957,7 +1012,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
         toolResponse: halfTap?.text() || '',
         toolVersion: toolVersionFromUA(req.headers['user-agent']),
         inFormat: clientFormat,
-        outFormat: bifrost ? 'anthropic' : outFormat, // Bifrost converts nothing
+        outFormat: bifrost ? clientFormat : outFormat, // Bifrost converts nothing
         openerKey: profile.apiKey || ''
       });
     }
@@ -1074,7 +1129,7 @@ function validateProfileInput(p) {
     if (typeof p[k] === 'string' && CONTROL_CHARS.test(p[k])) return `${k} must not contain control characters`;
   }
   // R6 / R7(c): a profile declares exactly one tool. An old-format field must never be written back.
-  if (p.inFormat !== undefined) return 'inFormat is not supported; use "tool": "claude" or "tool": "codex"';
+  if (p.inFormat !== undefined) return 'inFormat is not supported; use "tool": "claude", "codex" or "agy"';
   if (p.blindfold !== undefined) return 'blindfold per-profile setting is deprecated';
   if (p.blindfoldPort !== undefined) return 'blindfoldPort per-profile setting is deprecated';
   if (p.blindfoldHost !== undefined) return 'blindfoldHost per-profile setting is deprecated';
@@ -1264,10 +1319,9 @@ async function route(req, res) {
         'X-Frame-Options': 'DENY',
         'X-Content-Type-Options': 'nosniff'
       });
-      // One gateway serves one user, so the page opened at /ui carries its own token. The Host and Origin
-      // guard above keeps it from other sites; the token is hex, so it needs no escaping.
-      const meta = `<meta name="llm-switcher-token" content="${ADMIN_TOKEN.toString()}">`;
-      return res.end(fs.readFileSync(uiHtmlPath, 'utf8').replace('<head>', `<head>\n  ${meta}`));
+      // No token in the page: any process on the machine can GET /ui. The dashboard gets it from the
+      // #token of the private launcher that `switch ui` opens.
+      return res.end(fs.readFileSync(uiHtmlPath, 'utf8'));
     }
   }
 
@@ -1281,7 +1335,9 @@ async function route(req, res) {
       proxy: 'llm-switcher',
       ...(challenge ? {
         pid: process.pid,
-        proof: identityProof(challenge, { role: 'gateway', port: PORT, pid: process.pid }, ADMIN_TOKEN.toString())
+        proof: identityProof(challenge, { role: 'gateway', port: PORT, pid: process.pid }, ADMIN_TOKEN.toString()),
+        // The only proof agy-relay.mjs accepts: its key is not on the dashboard page.
+        relayProof: relayProof(challenge, { port: PORT, pid: process.pid })
       } : {}),
       port: PORT,
       configLoaded: Boolean(loadConfig()),
@@ -1334,6 +1390,9 @@ async function route(req, res) {
     return handleCountTokens(req, res, buf);
   }
 
+  // The Antigravity CLI (agy): CLOUD_CODE_URL points every Code Assist call at this gateway.
+  if (pathname.startsWith('/v1internal:')) return routeCodeAssist(req, res, method, pathname);
+
   let clientFormat = null;
 
   // Codex CLI sends GET /v1/responses (and /v1/responses/{id}) to fetch model
@@ -1372,6 +1431,93 @@ async function route(req, res) {
 
   req.resume();
   return sendJson(res, 404, { error: { message: `Not found: ${method} ${pathname}` } });
+}
+
+// ----------------------------------------------------
+// Antigravity CLI (agy)
+// ----------------------------------------------------
+// Only the agent turns of agy go through its profile. Every other Code Assist call (sign-in state,
+// model list, quota, experiments, analytics) and the checkpoint summaries stay on the person's own
+// Google account, exactly as without the switcher.
+const CODE_ASSIST_URL = (process.env.LLM_SWITCHER_CODE_ASSIST_URL || 'https://daily-cloudcode-pa.googleapis.com').replace(/\/+$/, '');
+const CODE_ASSIST_MODEL_CALLS = new Set(['streamGenerateContent', 'generateContent']);
+// Idle time on a passthrough, not its total time: a checkpoint stream may think for a while. Node
+// runs a delay outside 1..2147483647 ms as 1 ms, so a value outside 1 s..max falls back to 5 min.
+const CODE_ASSIST_IDLE_MS = (() => {
+  const v = Number(process.env.LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS);
+  return Number.isFinite(v) && v >= 1000 && v <= 2147483647 ? v : 300000;
+})();
+
+async function routeCodeAssist(req, res, method, pathname) {
+  const action = pathname.slice('/v1internal:'.length);
+  if (method !== 'POST' || !CODE_ASSIST_MODEL_CALLS.has(action)) return passthroughCodeAssist(req, res, null);
+  let buf;
+  try {
+    buf = await readBody(req, MAX_BODY_SIZE);
+  } catch (err) {
+    return sendClientError(res, 'codeassist', err.status || 400, err.message);
+  }
+  // Without a config the gateway cannot tell whether agy is routed, so it must not guess Google.
+  if (!loadConfig()) return sendClientError(res, 'codeassist', 503, `The gateway has no readable config (${configPath}).`);
+  const { profile, error } = getActiveProfile('codeassist', req);
+  if (error) return sendClientError(res, 'codeassist', 400, error);
+  if (!profile) return passthroughCodeAssist(req, res, buf);
+  let envelope;
+  try {
+    envelope = JSON.parse(buf.toString('utf8'));
+  } catch (err) {
+    return sendClientError(res, 'codeassist', 400, `Cannot parse the Code Assist request: ${err.message}`);
+  }
+  if (envelope?.requestType !== 'agent') return passthroughCodeAssist(req, res, buf);
+  return handleConvert('codeassist', req, res, buf, { codeAssistAction: action, codeAssistStream: action === 'streamGenerateContent' });
+}
+
+// Headers that belong to this gateway or to a proxy in front of it. Everything else agy sends,
+// x-goog-* included, is meant for Google.
+const GATEWAY_ONLY_HEADERS = new Set([
+  'x-profile', 'x-llm-profile', 'x-llm-switcher-token', PROBE_HEADER, 'x-intact-trace', 'proxy-authorization', 'x-real-ip'
+]);
+const isGatewayOnlyHeader = (lk) => GATEWAY_ONLY_HEADERS.has(lk) || lk.startsWith('x-forwarded-');
+
+// The one place where a client credential leaves this gateway on purpose: agy's own Google token
+// goes back to Google, the host it was issued for. It never reaches the Bifrost or convert paths,
+// which build their own headers. The bytes stream both ways unread (an analytics call is 100 KB+).
+function passthroughCodeAssist(req, res, body) {
+  const target = new URL(`${CODE_ASSIST_URL}${req.url}`);
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (lk === 'host' || lk === 'connection' || lk === 'keep-alive' || lk === 'proxy-connection' || isGatewayOnlyHeader(lk)) continue;
+    headers[lk] = v;
+  }
+  if (body) {
+    delete headers['transfer-encoding'];
+    headers['content-length'] = String(body.length);
+  }
+  const transport = target.protocol === 'http:' ? http : https;
+  // One outcome per call: the first of a timeout, an upstream error or a broken answer decides it.
+  // Before the headers agy gets a Code Assist error; after them a half answer must not look whole,
+  // so the connection is cut.
+  let settled = false;
+  const fail = (status, message) => {
+    if (settled) return;
+    settled = true;
+    if (!res.headersSent) sendClientError(res, 'codeassist', status, message);
+    else res.destroy();
+    up.destroy();
+  };
+  const up = transport.request(target, { method: req.method, headers }, (ur) => {
+    res.writeHead(ur.statusCode || 502, ur.headers);
+    ur.on('aborted', () => fail(502, 'Code Assist closed the answer early'));
+    ur.on('error', (err) => fail(502, `Code Assist answer failed: ${err.message}`));
+    ur.on('end', () => { settled = true; });
+    ur.pipe(res);
+  });
+  up.setTimeout(CODE_ASSIST_IDLE_MS, () => fail(504, `Code Assist did not answer within ${CODE_ASSIST_IDLE_MS} ms`));
+  up.on('error', (err) => fail(502, `Cannot reach Code Assist: ${err.message}`));
+  res.on('close', () => { if (!res.writableEnded) up.destroy(); });
+  if (body) up.end(body);
+  else req.pipe(up);
 }
 
 // The names /v1/models serves, and the real window of each. Official names when the profile
@@ -1747,6 +1893,88 @@ function geminiSafeTools(tools) {
   });
 }
 
+// Bifrost on the WS transport. intact speaks HTTP and keeps no WS state, so the turn goes to
+// /responses as one streamed request with the whole conversation, and each SSE event goes back to
+// Codex as one text frame, unchanged.
+async function wsBifrostTurn({ socket, payload, req, ac, history, input, profile, profileKey, mappedModel }) {
+  const started = Date.now();
+  const log = (extra) => logInspection({
+    clientFormat: 'responses-ws', outFormat: 'bifrost', profile: profileKey, model: mappedModel, stream: true,
+    requestPreview: '(bifrost)', duration: Date.now() - started, tokens: { prompt: 0, completion: 0 }, ...extra
+  });
+  const headers = bifrostHeaders(req, profile);
+  for (const h of Object.keys(headers)) if (h === 'upgrade' || h.startsWith('sec-websocket-')) delete headers[h];
+  headers['content-type'] = 'application/json';
+  headers.accept = 'text/event-stream';
+  // `type` names the WS frame (response.create); it is not a field of a Responses request.
+  const { type: _type, ...body } = payload;
+
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(bifrostURL(profile, 'responses', req), {
+      method: 'POST', headers, body: JSON.stringify({ ...body, model: mappedModel, stream: true }), signal: ac.signal
+    });
+  } catch (err) {
+    if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+    sendWsFailed(socket, mappedModel, `Bifrost forward error: ${err.cause?.message || err.message}`, 502);
+    return log({ status: 502, error: err.message });
+  }
+  if (!upstreamRes.ok) {
+    const errText = await upstreamRes.text().catch(() => '');
+    sendWsFailed(socket, mappedModel, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, upstreamRes.status);
+    return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
+  }
+
+  let completed = null;
+  // With store:false the backend sends response.completed with an empty output; the items of the
+  // turn come only in response.output_item.done, and the next turn must replay them.
+  const items = [];
+  let ended = false; // a response.completed or response.failed reached Codex
+  let streamError = null;
+  const decoder = new TextDecoder();
+  let pending = '';
+  const reader = upstreamRes.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let cut;
+      while ((cut = pending.indexOf('\n\n')) >= 0) {
+        const data = pending.slice(0, cut).split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
+        pending = pending.slice(cut + 2);
+        if (!data || data === '[DONE]') continue;
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+        if (event.type === 'response.output_item.done' && event.item) items.push(event.item);
+        if (event.type === 'response.completed') completed = event.response;
+        if (event.type === 'response.completed' || event.type === 'response.failed') ended = true;
+        if (!socket.writable) continue;
+        socket.write(encodeWsFrame(data));
+        await drained(socket, ac.signal);
+      }
+    }
+  } catch (err) {
+    if (!ac.signal.aborted) streamError = `stream interrupted: ${err.cause?.message || err.message}`;
+  }
+  if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected mid-stream' });
+  // Codex ends a turn only on a terminal event: a stream cut before one must still end the turn.
+  if (!ended) {
+    streamError ||= 'the Bifrost stream ended before response.completed';
+    sendWsFailed(socket, mappedModel, streamError, 502);
+  }
+  if (completed) {
+    const output = Array.isArray(completed.output) && completed.output.length ? completed.output : items;
+    rememberWsTurn(history, { ...completed, output }, input);
+  }
+  const usage = completed?.usage || {};
+  log({
+    status: streamError ? 502 : 200,
+    tokens: { prompt: usage.input_tokens || 0, completion: usage.output_tokens || 0 },
+    ...(streamError ? { error: streamError } : {})
+  });
+}
+
 // One turn of the Codex WS transport. The socket loop runs turns one at a time and owns `ac`.
 async function handleWsResponseCreate(socket, payload, req, ac, history = null) {
   const clientFormat = 'responses';
@@ -1775,6 +2003,11 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
   }
   const { previous_response_id: _prev, ...rest } = payload;
   payload = { ...rest, input };
+
+  const bifrostModel = mapModel(payload.model || '', profile, clientFormat);
+  if (await crossesBifrost(req, profile, bifrostModel)) {
+    return wsBifrostTurn({ socket, payload, req, ac, history, input, profile, profileKey, mappedModel: bifrostModel });
+  }
 
   let ir;
   try {
@@ -2068,7 +2301,7 @@ if (!handedOver) server.listen(PORT, '127.0.0.1', () => {
     serialized(() => reconcile(cfg));
   }
   console.log(`[llm-switcher] Server running on http://127.0.0.1:${PORT}`);
-  console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui`);
+  console.log(`[llm-switcher] Web UI available at: http://127.0.0.1:${PORT}/ui (open it with \`switch ui\`)`);
   console.log(`[llm-switcher] Endpoints: /v1/messages (Claude Code) | /v1/responses (Codex)`);
   // Asynchronously discover latest tool models in the background without blocking startup
   refreshCatalog(STATE_DIR).catch(() => {});

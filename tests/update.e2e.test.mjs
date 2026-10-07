@@ -115,6 +115,8 @@ async function fixture(t, { registryUrl = 'http://127.0.0.1:9/' } = {}) {
       c.on('close', code => resolve({ code, out }));
     }),
     dashboardUrl: `http://127.0.0.1:${port}/ui`,
+    // How `switch ui` opens it: the token comes in the fragment, never in the page.
+    tokenUrl: () => `http://127.0.0.1:${port}/ui#token=${fs.readFileSync(path.join(data, 'admin.token'), 'utf8').trim()}`,
     api: (p, opts = {}) => fetch(`http://127.0.0.1:${port}${p}`, {
       ...opts,
       headers: { 'x-llm-switcher-token': fs.readFileSync(path.join(data, 'admin.token'), 'utf8').trim(), 'Content-Type': 'application/json' }
@@ -184,14 +186,23 @@ test('switch update asks the running gateway and waits for the new one', { timeo
 test('the dashboard Update now button installs the release and reloads on the new gateway', { timeout: 90000, skip: skipReason() }, async (t) => {
   const fx = await fixture(t, { registryUrl: await registry(t, '9.9.12') });
   await fx.start();
-  await fx.waitFor(fx.pid, 'the gateway');
+  const firstPid = await fx.waitFor(fx.pid, 'the gateway');
   fx.release('9.9.12');
   const browser = await launchBrowser();
   t.after(() => browser.close());
   const page = await browser.newPage();
-  await page.goto(fx.dashboardUrl);
+  await page.goto(fx.tokenUrl());
   await page.waitFor(`!document.getElementById('update-notice').hidden`, 'the update notice');
   await page.click('#update-now');
-  await page.waitFor(`document.getElementById('app-version')?.textContent === 'v9.9.12'`, 'the reloaded dashboard on the new version', 30000);
+  try {
+    // Longer than the 30 s the page polls for the new gateway, so a failure shows the page's own verdict.
+    await page.waitFor(`document.getElementById('app-version')?.textContent === 'v9.9.12'`, 'the reloaded dashboard on the new version', 40000);
+  } catch (err) {
+    // A CI runner cannot be watched: put what the gateway and the page saw into the failure.
+    const stage = await page.evaluate(`document.getElementById('update-status')?.textContent || ''`).catch(() => '(page gone)');
+    // The pid seen from this process tells a gateway that does not answer from a page that cannot reach it.
+    err.message += `\nupdate status on the page: ${stage}\npid on /health from the test: ${await fx.pid()} (first gateway ${firstPid})\ngateway log:\n${fx.log()}\npage problems: ${JSON.stringify(page.problems)}`;
+    throw err;
+  }
   assert.equal(await page.evaluate(`document.getElementById('update-notice').hidden`), true);
 });

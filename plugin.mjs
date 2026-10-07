@@ -1,5 +1,5 @@
 // ============================================================
-// plugin.mjs - installs the launch hook into the two coding tools, and edits no configuration.
+// plugin.mjs - installs the launch hook into the coding tools, and edits no configuration.
 //
 // WHY A HOOK AT ALL
 //   The shim raises a notice at launch, but only when the shim runs, and that needs the shim
@@ -37,6 +37,10 @@ export function claudeSkillsDir(env = process.env, home = os.homedir()) {
 }
 export function codexHome(env = process.env, home = os.homedir()) {
   return env.CODEX_HOME || path.join(home, '.codex');
+}
+// The global customization root of the Antigravity CLI.
+export function agyHome(home = os.homedir()) {
+  return path.join(home, '.gemini', 'antigravity-cli');
 }
 
 export function renderClaudePlugin(version = 'dev') {
@@ -171,24 +175,83 @@ function uninstallCodex(opts) {
   return { ok: true, path: file };
 }
 
+// ---- Antigravity CLI (agy) -------------------------------------------------------------------
+//
+// agy reads hooks.json from its customization root: one key per named hook. It runs a hook command
+// with its quotes kept literally, so the path goes unquoted, with forward slashes. A path with a
+// space cannot be written that way, and then agy is skipped.
+//
+// agy 1.2.14 loads this global file but does not run its hooks; only a workspace's .agents/hooks.json
+// runs (measured 2026-10-03). The entry is ready for a release that runs global hooks. Until then the
+// shim toast is the launch notice for agy.
+export const AGY_HOOK_NAME = 'llm-switcher-status';
+export const AGY_GLOBAL_HOOKS_NOTE = 'agy 1.2.14 loads global hooks but does not run them yet; the shim toast is the notice';
+
+function agyHooksPath(opts) {
+  return path.join(opts.agyHome || agyHome(), 'hooks.json');
+}
+
+export function agyHookCommand(script = HOOK_SCRIPT) {
+  const p = script.split(path.sep).join('/');
+  return /\s/.test(p) ? null : `node ${p} agy`;
+}
+
+const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+// A space in the path is a limit of agy, not a fault: the install is skipped, never failed.
+function installAgy(opts) {
+  const script = opts.hookScript || HOOK_SCRIPT;
+  const command = agyHookCommand(script);
+  if (!command) return { ok: true, skipped: true, reason: `${script} holds a space, and agy cannot run a quoted path` };
+  const file = agyHooksPath(opts);
+  const cur = readJsonFile(file);
+  if (cur.error) return { ok: false, reason: `${file} does not parse: ${cur.error}, so nothing was changed` };
+  if (!cur.missing && !isPlainObject(cur.value)) return { ok: false, reason: `${file} does not hold a JSON object, so nothing was changed` };
+  const doc = cur.missing ? {} : cur.value;
+  doc[AGY_HOOK_NAME] = { SessionStart: [{ type: 'command', command, timeout: 10 }] };
+  writeAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
+  return { ok: true, path: file };
+}
+
+function uninstallAgy(opts) {
+  const file = agyHooksPath(opts);
+  const cur = readJsonFile(file);
+  if (cur.missing) return { ok: true, path: file, absent: true };
+  if (cur.error) return { ok: false, reason: `${file} does not parse: ${cur.error}, so nothing was changed` };
+  // install never writes into such a file, so the hook cannot be in it.
+  if (!isPlainObject(cur.value)) return { ok: true, path: file, absent: true };
+  const doc = cur.value;
+  if (!Object.hasOwn(doc, AGY_HOOK_NAME)) return { ok: true, path: file, absent: true };
+  delete doc[AGY_HOOK_NAME];
+  // agy has no room for a mark in this file, so it is removed only when nothing else is left in it.
+  if (Object.keys(doc).length === 0) fs.rmSync(file, { force: true });
+  else writeAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
+  return { ok: true, path: file };
+}
+
 // ---- The three commands ----------------------------------------------------------------------
 
-function summarize(results) {
-  const out = { installed: [], failed: [], paths: {} };
-  for (const [tool, r] of Object.entries(results)) {
-    if (r.ok) out.installed.push(tool); else out.failed.push({ tool, reason: r.reason });
+// Each tool runs on its own: a fault in one file must not stop the other tools.
+function summarize(steps) {
+  const out = { installed: [], skipped: [], failed: [], paths: {} };
+  for (const [tool, step] of Object.entries(steps)) {
+    let r;
+    try { r = step(); } catch (err) { r = { ok: false, reason: err.message }; }
+    if (r.skipped) out.skipped.push({ tool, reason: r.reason });
+    else if (r.ok) out.installed.push(tool);
+    else out.failed.push({ tool, reason: r.reason });
     if (r.path) out.paths[tool] = r.path;
   }
   return out;
 }
 
-/** { installed: ['claude','codex'], failed: [{ tool, reason }], paths: { claude, codex } } */
+/** { installed: ['claude','codex','agy'], skipped: [{ tool, reason }], failed: [{ tool, reason }], paths } */
 export function installPlugin(opts = {}, version = 'dev') {
-  return summarize({ claude: installClaude(opts, version), codex: installCodex(opts) });
+  return summarize({ claude: () => installClaude(opts, version), codex: () => installCodex(opts), agy: () => installAgy(opts) });
 }
 
 export function uninstallPlugin(opts = {}) {
-  return summarize({ claude: uninstallClaude(opts), codex: uninstallCodex(opts) });
+  return summarize({ claude: () => uninstallClaude(opts), codex: () => uninstallCodex(opts), agy: () => uninstallAgy(opts) });
 }
 
 export function pluginStatus(opts = {}) {
@@ -197,8 +260,16 @@ export function pluginStatus(opts = {}) {
   const file = codexHooksPath(opts);
   const codexDoc = readJsonFile(file);
   const codexGroups = Array.isArray(codexDoc.value?.hooks?.SessionStart) ? codexDoc.value.hooks.SessionStart : [];
+  const agyDoc = readJsonFile(agyHooksPath(opts));
   return {
     claude: { installed: claudeManifest.value?.name === PLUGIN_NAME, path: dir, id: `${PLUGIN_NAME}@skills-dir` },
-    codex: { installed: codexGroups.some(isOurs), path: file }
+    codex: { installed: codexGroups.some(isOurs), path: file },
+    agy: {
+      installed: isPlainObject(agyDoc.value) && Boolean(agyDoc.value[AGY_HOOK_NAME]),
+      path: agyHooksPath(opts),
+      note: AGY_GLOBAL_HOOKS_NOTE,
+      ...(agyDoc.error ? { error: `does not parse: ${agyDoc.error}` }
+        : !agyDoc.missing && !isPlainObject(agyDoc.value) ? { error: 'does not hold a JSON object' } : {})
+    }
   };
 }

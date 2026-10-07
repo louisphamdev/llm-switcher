@@ -25,6 +25,9 @@ env-claude.cmd
 env-claude.sh
 route-claude.txt
 route-codex.txt
+env-agy.cmd
+env-agy.sh
+route-agy.txt
 gateway.port
 # blindfold --capture writes request and response bodies verbatim
 captures/
@@ -33,6 +36,7 @@ captures/
 docs/diagrams/*.visual-check.*
 # admin API token (mode 0600) — never commit
 admin.token
+gateway.secret
 blindfold.json
 ui-open.html
 # launch-file lock, rotated logs, and the tmp files of atomic writes

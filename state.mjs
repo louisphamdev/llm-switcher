@@ -35,8 +35,8 @@ if (DATA_DIR !== ROOT_DIR) {
 const LEGACY_TARGET_TOOL = { anthropic: 'claude', responses: 'codex' };
 // Migration input only: the pointer keys an unmigrated config may still carry.
 const LEGACY_TARGETS = ['anthropic', 'responses', 'openai-chat', 'vertex'];
-export const TOOLS = ['claude', 'codex'];
-export const COMMAND_WORDS = new Set(['claude', 'codex', 'on', 'off', 'status', 'doctor', 'ui']);
+export const TOOLS = ['claude', 'codex', 'agy'];
+export const COMMAND_WORDS = new Set(['claude', 'codex', 'agy', 'on', 'off', 'status', 'doctor', 'ui']);
 export const DEFAULT_PORT = 3456;
 export const DEFAULT_BLINDFOLD_PORT = 3457;
 // Codex with ChatGPT sign-in calls https://chatgpt.com/backend-api/codex.
@@ -53,6 +53,9 @@ export const CLAUDE_MODEL_SLOTS = ['opus', 'sonnet', 'haiku', 'fable'];
 // - subagent <-> `agents.default_subagent_model` (spawned agents)
 // No fast/fallback in the docs — those are custom keys, read only for backward compatibility.
 export const CODEX_MODEL_SLOTS = ['main', 'review', 'subagent'];
+// The Antigravity CLI (agy) picks its own model per call. One slot names the upstream model of its
+// agent calls; a '*' in the value stands for the model id that agy sent (antigravity/* = Bifrost).
+export const AGY_MODEL_SLOTS = ['main'];
 export const CHAT_MODEL_SLOTS = ['default'];
 export const VERTEX_MODEL_SLOTS = ['default'];
 
@@ -104,6 +107,38 @@ export function ensureAdminToken() {
   return token;
 }
 
+// The key of the proof that agy-relay.mjs checks. Random, never derived from admin.token: the
+// dashboard page carries admin.token, so a proof keyed by it can be made by anyone who loads /ui.
+export const gatewaySecretPath = path.join(path.dirname(configPath), 'gateway.secret');
+
+export function readGatewaySecret() {
+  try {
+    return fs.readFileSync(gatewaySecretPath, 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// A good secret is kept. A missing, empty or blank file is replaced through a rename, so a damaged
+// file never leaves agy without a key. Throws when it cannot write; never leaves a temporary file.
+export function ensureGatewaySecret() {
+  if (readGatewaySecret()) return;
+  const tmp = `${gatewaySecretPath}.${process.pid}.tmp`;
+  try {
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(tmp, crypto.randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, gatewaySecretPath);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw err;
+  }
+}
+
+export function relayProof(nonce, { port, pid }, secret = readGatewaySecret()) {
+  if (!secret) return '';
+  return crypto.createHmac('sha256', secret).update(['relay', port, pid, nonce].join('|')).digest('hex');
+}
+
 // `switch ui` must not put the token on a command line: /proc/<pid>/cmdline is readable by every
 // account. It opens this private file instead, which redirects to the dashboard with the token.
 export function writeDashboardLauncher(url) {
@@ -134,10 +169,13 @@ export const paths = {
   envClaudeSh: path.join(STATE_DIR, 'env-claude.sh'),
   envCodexCmd: path.join(STATE_DIR, 'env-codex.cmd'),
   envCodexSh: path.join(STATE_DIR, 'env-codex.sh'),
+  envAgyCmd: path.join(STATE_DIR, 'env-agy.cmd'),
+  envAgySh: path.join(STATE_DIR, 'env-agy.sh'),
   // One line per tool, written with that tool's env file: what the launcher shows the person at
   // launch. Empty exactly when the tool is not routed, so the launcher needs no second condition.
   routeClaude: path.join(STATE_DIR, 'route-claude.txt'),
   routeCodex: path.join(STATE_DIR, 'route-codex.txt'),
+  routeAgy: path.join(STATE_DIR, 'route-agy.txt'),
   // The gateway port of the last switch on. The shim scrubs a stale loopback base URL
   // against it, so a shell opened before a port change still reaches the right gateway.
   gatewayPort: path.join(STATE_DIR, 'gateway.port'),
@@ -404,7 +442,7 @@ function createCodexHalf(p) {
 
 export function validateProfileInput(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return 'Profile must be an object';
-  if (p.inFormat !== undefined) return 'inFormat is not supported; use "tool": "claude" or "tool": "codex"';
+  if (p.inFormat !== undefined) return 'inFormat is not supported; use "tool": "claude", "codex" or "agy"';
   if (p.blindfold !== undefined) return 'blindfold per-profile setting is deprecated';
   if (p.blindfoldPort !== undefined) return 'blindfoldPort per-profile setting is deprecated';
   if (p.blindfoldHost !== undefined) return 'blindfoldHost per-profile setting is deprecated';
@@ -592,9 +630,15 @@ export function migrateConfigInMemory(rawConfig) {
   }
 
   // Step 3: Pointer migration (R7b, Item 2)
+  // A present pointer follows its profile through a Step 1 rename: a profile keyed "agy" became
+  // "agy-profile" when agy turned into a command word, and a pointer left on "agy" would dangle.
+  const presentPointer = (tool) => {
+    const v = rawConfig.activeProfiles[tool];
+    return v ? (renameMap.get(v) || v) : v;
+  };
   const newActiveProfiles = {};
   if (rawConfig.activeProfiles && Object.hasOwn(rawConfig.activeProfiles, 'claude')) {
-    newActiveProfiles.claude = rawConfig.activeProfiles.claude;
+    newActiveProfiles.claude = presentPointer('claude');
   } else {
     let oldClaudeTarget = null;
     if (rawConfig.activeProfiles && Object.hasOwn(rawConfig.activeProfiles, 'anthropic')) {
@@ -619,7 +663,7 @@ export function migrateConfigInMemory(rawConfig) {
   }
 
   if (rawConfig.activeProfiles && Object.hasOwn(rawConfig.activeProfiles, 'codex')) {
-    newActiveProfiles.codex = rawConfig.activeProfiles.codex;
+    newActiveProfiles.codex = presentPointer('codex');
   } else {
     let oldCodexTarget = null;
     if (rawConfig.activeProfiles && Object.hasOwn(rawConfig.activeProfiles, 'responses')) {
@@ -642,6 +686,11 @@ export function migrateConfigInMemory(rawConfig) {
       newActiveProfiles.codex = null;
     }
   }
+
+  // agy has no legacy key and no single-pointer fallback: only its own pointer, and only to a
+  // profile made for agy.
+  const agyKey = rawConfig.activeProfiles && Object.hasOwn(rawConfig.activeProfiles, 'agy') ? presentPointer('agy') : null;
+  newActiveProfiles.agy = agyKey && cfg.profiles[agyKey]?.tool === 'agy' ? agyKey : null;
 
   cfg.activeProfiles = newActiveProfiles;
   delete cfg.activeProfile;
@@ -948,6 +997,8 @@ export function findProfileKey(cfg, name) {
 }
 
 export function profileAcceptsTarget(profile, target) {
+  // agy has no legacy spelling and no inFormat: only a profile made for it serves it.
+  if (target === 'agy') return profile?.tool === 'agy';
   if (profile?.tool) {
     if (target === 'claude' || target === 'anthropic') return profile.tool === 'claude';
     if (target === 'codex' || target === 'responses') return profile.tool === 'codex';
@@ -963,6 +1014,7 @@ export function profileAcceptsTarget(profile, target) {
 export function modelSlotsForProfile(profile) {
   if (profile?.tool === 'claude') return CLAUDE_MODEL_SLOTS;
   if (profile?.tool === 'codex') return CODEX_MODEL_SLOTS;
+  if (profile?.tool === 'agy') return AGY_MODEL_SLOTS;
   return MODEL_SLOTS_BY_FORMAT[profile?.inFormat] || MODEL_SLOTS_BY_FORMAT.auto;
 }
 
@@ -1127,7 +1179,8 @@ export function getActiveMap(cfg) {
       : Object.hasOwn(ap, legacy) ? ap[legacy]
         : cfg?.activeProfile ?? null
   );
-  return { claude: pointer('claude', 'anthropic'), codex: pointer('codex', 'responses') };
+  // agy is newer than the single legacy pointer, so only its own key can turn it on.
+  return { claude: pointer('claude', 'anthropic'), codex: pointer('codex', 'responses'), agy: ap.agy ?? null };
 }
 
 /**
@@ -1257,7 +1310,11 @@ export function computeLaunchState(cfg, port) {
   const pick = (t) => (hasProfile(cfg, map[t]) ? cfg.profiles[map[t]] : null);
   const claude = pick('claude');
   const codex = pick('codex');
-  const active = Boolean(claude || codex);
+  const agy = pick('agy');
+  // The interceptor serves Claude Code and Codex only. agy takes its endpoint from CLOUD_CODE_URL, so
+  // an agy-only switch on writes the launch files and starts no interceptor.
+  const intercepted = Boolean(claude || codex);
+  const active = Boolean(intercepted || agy);
 
   // One interceptor serves both tools (R3) and its port lives at the top level of config.json
   // (R3b). The per-profile port went with the per-profile host and prefix.
@@ -1286,7 +1343,7 @@ export function computeLaunchState(cfg, port) {
     // and the tool set. The tool set travels sorted as one string (Finding 6), which is also what
     // lets a running interceptor be updated in place instead of restarted.
     // null when no tool is active, which is how reconcileBlindfold knows to stop it.
-    blindfold: active
+    blindfold: intercepted
       ? {
         port: bfPort,
         activeTools: deriveActiveTools(cfg).join(','),
@@ -1299,15 +1356,20 @@ export function computeLaunchState(cfg, port) {
     // of the other tool, and a restart cannot leave a stale override behind.
     envClaude: [],
     envCodex: [],
+    envAgy: [],
     // The launcher notice, one line per tool. Empty for a tool that is not routed (A1).
     routeClaude: claude ? routeLine('claude', map.claude, claude) : '',
-    routeCodex: codex ? routeLine('codex', map.codex, codex) : ''
+    routeCodex: codex ? routeLine('codex', map.codex, codex) : '',
+    routeAgy: agy ? routeLine('agy', map.agy, agy) : ''
   };
 
   // NODE_EXTRA_CA_CERTS is deliberately absent from env-claude: the shim decides it at launch,
   // because only then does it know whether the user brought a CA of their own (R2).
   if (claude) state.envClaude = proxyPairs();
   if (codex) state.envCodex = [...proxyPairs(), ['CODEX_CA_CERTIFICATE', paths.blindfoldCA]];
+  // agy reaches the gateway directly over plain http: no proxy and no CA (Go on Windows reads only
+  // the system store). Remote control keeps its own host, so it never crosses the switcher.
+  if (agy) state.envAgy = [['CLOUD_CODE_URL', `http://127.0.0.1:${port}`]];
   return state;
 }
 
@@ -1402,13 +1464,17 @@ function writeToolFiles(pairs, shPath, cmdPath) {
 // tools from activeProfiles, and a colliding config is one this build will not migrate. This empties
 // only the file pair of the tool that was switched off, under the same lock, so the other tool's
 // launcher files are never opened (A13: emptied, never deleted).
+const TOOL_FILES = {
+  claude: () => [paths.envClaudeCmd, paths.envClaudeSh, paths.routeClaude],
+  codex: () => [paths.envCodexCmd, paths.envCodexSh, paths.routeCodex],
+  agy: () => [paths.envAgyCmd, paths.envAgySh, paths.routeAgy]
+};
+
 export function emptyToolEnvFiles(tool) {
   const codex = tool === 'codex';
   const codexRouteChanged = withLaunchLock(() => {
     const before = codex ? readOrEmpty(paths.envCodexSh) : '';
-    writeAtomic(codex ? paths.envCodexCmd : paths.envClaudeCmd, '');
-    writeAtomic(codex ? paths.envCodexSh : paths.envClaudeSh, '');
-    writeAtomic(codex ? paths.routeCodex : paths.routeClaude, '');
+    for (const f of (TOOL_FILES[tool] || TOOL_FILES.claude)()) writeAtomic(f, '');
     return before !== '';
   });
   return { codexRouteChanged, codexDaemon: codexRouteChanged ? restartCodexDaemon([]) : undefined };
@@ -1476,9 +1542,12 @@ function writeLaunchState(cfg, port) {
   try {
     writeToolFiles(st.envClaude, paths.envClaudeSh, paths.envClaudeCmd);
     writeToolFiles(st.envCodex, paths.envCodexSh, paths.envCodexCmd);
+    writeToolFiles(st.envAgy, paths.envAgySh, paths.envAgyCmd);
     writeAtomic(paths.routeClaude, st.routeClaude ? `${st.routeClaude}
 ` : '');
     writeAtomic(paths.routeCodex, st.routeCodex ? `${st.routeCodex}
+` : '');
+    writeAtomic(paths.routeAgy, st.routeAgy ? `${st.routeAgy}
 ` : '');
     st.codexRouteChanged = readOrEmpty(paths.envCodexSh) !== codexBefore;
     // Recorded on switch on so a shell opened while the gateway ran can still recognize its own
@@ -1505,7 +1574,7 @@ export function clearLaunchState(port) {
     writeAtomic(paths.envCmd, STUB_CMD);
     writeAtomic(paths.envSh, STUB_SH);
     for (const f of [paths.envClaudeCmd, paths.envClaudeSh, paths.envCodexCmd, paths.envCodexSh,
-      paths.routeClaude, paths.routeCodex]) {
+      paths.envAgyCmd, paths.envAgySh, paths.routeClaude, paths.routeCodex, paths.routeAgy]) {
       writeAtomic(f, '');
     }
     return codexBefore !== '';

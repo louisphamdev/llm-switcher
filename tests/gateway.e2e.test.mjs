@@ -688,12 +688,15 @@ test('Security: foreign Host / Origin are rejected (DNS rebinding & CSRF)', asyn
 
 // Any local process can reach loopback. Without a token it must get nothing from /api/*,
 // and a masked key must never be resolved for a baseURL the profile does not have.
-// One gateway serves one user on one machine: the dashboard opened at /ui, with no link from `switch ui`,
-// carries its own token. A page of another site and a rebound Host still get nothing.
-test('Dashboard: /ui opened directly carries the admin token, other sites do not get it', async () => {
+// Any process on the machine can GET /ui, another account's included, so the page carries no token.
+// The dashboard gets it from the #token of the private launcher that `switch ui` opens.
+test('Dashboard: /ui and / never carry the admin token, for this machine or another site', async () => {
   for (const p of ['/ui', '/']) {
-    const html = await (await fetch(url(p))).text();
-    assert.ok(html.includes(`<meta name="llm-switcher-token" content="${adminToken()}">`), `${p} has no token`);
+    const r = await fetch(url(p));
+    assert.equal(r.status, 200, p);
+    const html = await r.text();
+    assert.ok(html.includes('<title>'), `${p} serves the dashboard`);
+    assert.ok(!html.includes(adminToken()), `${p} carries the admin token`);
   }
   const foreign = await fetch(url('/ui'), { headers: { origin: 'https://evil.example' } });
   assert.equal(foreign.status, 403);
@@ -1158,6 +1161,8 @@ test('Direct passthrough waits for a slow client instead of buffering the whole 
     req.on('error', reject);
     req.end(JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 10, stream: true, messages: [{ role: 'user', content: 'DIRECT_BIG' }] }));
   });
+  // The end callback of the mock can run after the client's 'end' under load: 0 means not recorded yet.
+  assert.ok(await until(() => bigState.finishedAt, 2000), 'the upstream never finished');
   assert.ok(bigState.finishedAt >= resumedAt, `upstream finished ${resumedAt - bigState.finishedAt} ms before the client read anything`);
 });
 
@@ -1311,7 +1316,7 @@ test('/api/switch deactivate: the dashboard payload works, the CLI payload works
     // What the dashboard sends: the profile in `profile`, a boolean in `deactivate`.
     const dash = await post('/api/switch', { profile: 'chat', deactivate: true });
     assert.equal(dash.status, 200);
-    assert.deepEqual((await dash.json()).activeProfiles, { claude: null, codex: null });
+    assert.deepEqual((await dash.json()).activeProfiles, { claude: null, codex: null, agy: null });
 
     // The same profile is now inactive, so asking again must not report success.
     const again = await post('/api/switch', { profile: 'chat', deactivate: true });
@@ -1322,7 +1327,7 @@ test('/api/switch deactivate: the dashboard payload works, the CLI payload works
     assert.equal((await post('/api/switch', { profile: 'chat' })).status, 200);
     const cli = await post('/api/switch', { deactivate: 'chat' });
     assert.equal(cli.status, 200);
-    assert.deepEqual((await cli.json()).activeProfiles, { claude: null, codex: null });
+    assert.deepEqual((await cli.json()).activeProfiles, { claude: null, codex: null, agy: null });
 
     // `deactivate: true` with no profile names nothing.
     assert.equal((await post('/api/switch', { deactivate: true })).status, 400);

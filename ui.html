@@ -17,6 +17,7 @@
   <style>
     :root {
       color-scheme: dark;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
       --bg: #0c1017;
       --side: #10151e;
       --card: #141a25;
@@ -37,7 +38,7 @@
       --err: #fb7185;
       --err-soft: rgba(251, 113, 133, 0.12);
       --code: #5eead4;
-      --shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 12px -6px rgba(0, 0, 0, 0.55);
 
       /* Compatibility aliases */
       --surface: var(--side);
@@ -89,7 +90,7 @@
         --err: #be123c;
         --err-soft: rgba(190, 18, 60, 0.08);
         --code: #0f766e;
-        --shadow: 0 20px 50px rgba(20, 26, 37, 0.14);
+        --shadow: 0 1px 2px rgba(20, 26, 37, 0.08), 0 8px 12px -6px rgba(20, 26, 37, 0.16);
         --border-strong: #cbd5e1;
       }
     }
@@ -115,7 +116,7 @@
       --err: #be123c;
       --err-soft: rgba(190, 18, 60, 0.08);
       --code: #0f766e;
-      --shadow: 0 20px 50px rgba(20, 26, 37, 0.14);
+      --shadow: 0 1px 2px rgba(20, 26, 37, 0.08), 0 8px 12px -6px rgba(20, 26, 37, 0.16);
       --border-strong: #cbd5e1;
     }
 
@@ -589,7 +590,7 @@
     .switch { position: relative; width: 36px; height: 20px; flex: none; display: inline-block; vertical-align: middle; }
     .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; min-height: 0; }
     .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); box-shadow: inset 0 0 0 1.5px var(--faint); transition: background-color 0.25s, box-shadow 0.25s; pointer-events: none; }
-    .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.25s cubic-bezier(0.3, 1.4, 0.6, 1), width 0.15s; }
+    .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 999px; background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.25s var(--ease-out), width 0.15s; }
     .switch input:active + span::after { width: 20px; }
     .switch input:checked + span { background: var(--accent-strong); box-shadow: none; }
     .switch input:checked + span::after { transform: translateX(16px); }
@@ -623,7 +624,7 @@
       border: solid var(--accent-fg);
       border-width: 0 2px 2px 0;
       transform: rotate(45deg) scale(0);
-      transition: transform 0.15s cubic-bezier(0.3, 1.4, 0.6, 1);
+      transition: transform 0.15s var(--ease-out);
     }
     input[type="checkbox"]:not(.switch input):checked { background: var(--accent-strong); border-color: var(--accent-strong); }
     input[type="checkbox"]:not(.switch input):checked::before { transform: rotate(45deg) scale(1); }
@@ -642,7 +643,7 @@
       opacity: 1;
       transition: opacity 0.18s;
     }
-    .overlay .modal { transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+    .overlay .modal { transition: transform 0.18s var(--ease-out); }
     @starting-style { .overlay { opacity: 0; } .overlay .modal { transform: scale(0.96) translateY(8px); } }
     .modal {
       background: var(--card);
@@ -689,6 +690,7 @@
       scrollbar-width: none;
     }
     .tabs::-webkit-scrollbar { display: none; }
+    .tabs-wrap { padding: 0.85rem 1.25rem 0.5rem; background: var(--card2); }
     .tabs button.tab-btn {
       padding: 0.55rem 0.95rem;
       color: var(--muted);
@@ -707,6 +709,13 @@
       color: var(--fg);
       border-bottom-color: var(--accent);
       font-weight: 600;
+    }
+    /* A phone has no room for all three tabs at full padding, and the bar hides its scrollbar:
+       tighten them, and wrap rather than hide a tab when even that is not enough. */
+    @media (max-width: 480px) {
+      .tabs-wrap { padding-inline: 1rem; }
+      .tabs { flex-wrap: wrap; }
+      .tabs button.tab-btn { padding-inline: 0.6rem; }
     }
 
     /* Log Items */
@@ -753,7 +762,7 @@
       gap: 0.6rem;
       overflow: hidden;
       max-width: 90vw;
-      animation: fadeIn 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      animation: fadeIn 0.25s var(--ease-out);
     }
     .toast::before { content: ""; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
     .toast::after { content: ""; position: absolute; left: 0; bottom: 0; width: 100%; height: 2px; background: var(--accent); transform-origin: left; animation: toastbar 3.2s linear forwards; }
@@ -778,7 +787,7 @@
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
       opacity: 1;
       translate: 0 0;
-      transition: opacity 0.15s, translate 0.2s cubic-bezier(0.3, 1.4, 0.6, 1), display 0.15s;
+      transition: opacity 0.15s, translate 0.2s var(--ease-out), display 0.15s;
       transition-behavior: allow-discrete;
     }
     .tip[hidden] { display: none; opacity: 0; translate: 0 4px; }
@@ -932,7 +941,7 @@
     <div class="ph">
       <div class="title-box">
         <h1 id="page-title">Routes & Profiles</h1>
-        <p id="status-sub">Route Claude Code and Codex independently.</p>
+        <p id="status-sub">Route Claude Code, Codex and the Antigravity CLI independently.</p>
       </div>
       <div class="ph-actions" id="ph-actions">
         <!-- Rendered dynamically per route -->
@@ -978,6 +987,21 @@
                 </select>
               </div>
               <span id="badge-slot-codex" class="badge outline">OFF</span>
+            </div>
+
+            <!-- Antigravity CLI Target Row -->
+            <div class="row" id="card-slot-agy">
+              <span class="av logo" title="Antigravity CLI"><img src="/icons/antigravity.png" alt="Antigravity"></span>
+              <div class="who">
+                <div class="l">Antigravity CLI (agy)</div>
+                <div class="meta">Code Assist over <code>CLOUD_CODE_URL</code> · <code>/v1internal:*</code></div>
+              </div>
+              <div style="min-width:14rem;">
+                <select id="select-slot-agy" aria-label="Antigravity CLI route" onchange="switchCliTarget('agy', this.value)">
+                  <option value="">Official endpoint</option>
+                </select>
+              </div>
+              <span id="badge-slot-agy" class="badge outline">OFF</span>
             </div>
           </div>
 
@@ -1104,7 +1128,7 @@
 
       <form id="profile-form" onsubmit="saveProfile(event)" onkeydown="blockImplicitSubmit(event)" oninput="formDirty = true" onchange="formDirty = true" style="display:flex; flex-direction:column; overflow:hidden;">
         <!-- Modal Inset Tabs -->
-        <div style="padding:0.85rem 1.25rem 0.5rem; background:var(--card2);">
+        <div class="tabs-wrap">
           <div class="tabs">
             <button type="button" id="tab-button-general" class="tab-btn active" onclick="switchTab('tab-general')">General</button>
             <button type="button" id="tab-button-routing" class="tab-btn" onclick="switchTab('tab-routing')">Routing & Protocol</button>
@@ -1119,6 +1143,7 @@
               <span class="hint" style="font-weight:600; display:block; margin-bottom:0.4rem;">Template Quick-Fill:</span>
               <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('intact')">intact</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('agy-intact')">agy on intact</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('9router')">9Router</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('openrouter')">OpenRouter</button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="applyTemplate('vertex')">Vertex AI</button>
@@ -1140,7 +1165,7 @@
             </label>
 
             <label class="f">API Key
-              <input type="password" id="p-key-val" placeholder="sk-...">
+              <input type="password" id="p-key-val" placeholder="sk-..." autocomplete="off">
             </label>
           </div>
 
@@ -1152,6 +1177,7 @@
                   <option value="auto">All compatible tools (auto)</option>
                   <option value="claude">Claude Code only (claude)</option>
                   <option value="codex">Codex only (codex)</option>
+                  <option value="agy">Antigravity CLI only (agy)</option>
                 </select>
               </label>
               <label class="f">Outbound Format
@@ -1222,10 +1248,13 @@
   <script>
     // State & Globals
     const ADMIN_TOKEN_KEY = 'llm-switcher-admin-token';
-    const servedToken = document.querySelector('meta[name="llm-switcher-token"]')?.content;
+    // The token comes only in the #token of the private launcher that `switch ui` opens. The page itself
+    // never carries it: any process on the machine can load /ui. localStorage, not sessionStorage, so a
+    // bookmark or a new tab in the same browser keeps working after one `switch ui`.
+    const NO_TOKEN_HINT = 'This tab has no access token. Open the dashboard with `switch ui`.';
     const hashTokenMatch = location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
-    if (servedToken || hashTokenMatch) {
-      sessionStorage.setItem(ADMIN_TOKEN_KEY, servedToken || hashTokenMatch[1]);
+    if (hashTokenMatch) {
+      localStorage.setItem(ADMIN_TOKEN_KEY, hashTokenMatch[1]);
     }
     if (hashTokenMatch) {
       history.replaceState(null, '', location.pathname + location.search + '#/routes');
@@ -1253,13 +1282,13 @@
 
     // API Helper
     async function api(path, opts = {}) {
-      const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) || document.querySelector('meta[name="llm-switcher-token"]')?.content || '';
+      const token = localStorage.getItem(ADMIN_TOKEN_KEY) || '';
       const headers = {
         ...opts.headers,
         'x-llm-switcher-token': token
       };
       const res = await fetch(path, { ...opts, headers });
-      if (res.status === 401) showToast('Unauthorized: check admin.token in server directory', true);
+      if (res.status === 401) showToast(NO_TOKEN_HINT, true);
       if (res.status === 409) setTimeout(loadStatus, 0);
       return res;
     }
@@ -1425,6 +1454,8 @@
       const subEl = document.getElementById('status-sub');
       const actionsEl = document.getElementById('ph-actions');
       if (!titleEl || !subEl || !actionsEl) return;
+      // Without the token every call is a 401, and the empty state would read as "nothing routed".
+      const noToken = !localStorage.getItem(ADMIN_TOKEN_KEY);
 
       const activeMap = state.activeProfiles || (state.config?.activeProfiles || {});
       const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
@@ -1435,9 +1466,10 @@
           const parts = [];
           if (activeMap.claude) parts.push('Claude: ' + activeMap.claude);
           if (activeMap.codex) parts.push('Codex: ' + activeMap.codex);
+          if (activeMap.agy) parts.push('agy: ' + activeMap.agy);
           subEl.textContent = 'Port ' + state.port + ' · Active for ' + parts.join(' · ');
         } else {
-          subEl.textContent = 'Gateway is idle. Clients connect directly to official endpoints.';
+          subEl.textContent = noToken ? NO_TOKEN_HINT : 'Gateway is idle. Clients connect directly to official endpoints.';
         }
         actionsEl.innerHTML = `
           <button class="btn btn-primary" onclick="openProfileModal(true)">+ Add Profile</button>
@@ -1495,7 +1527,10 @@
       let iconFile = 'openai.png';
       let brandName = 'AI Provider';
 
-      if (k.includes('claude') || n.includes('claude') || t === 'claude' || t === 'anthropic' || u.includes('anthropic')) {
+      if (t === 'agy') {
+        iconFile = 'antigravity.png';
+        brandName = 'Antigravity CLI';
+      } else if (k.includes('claude') || n.includes('claude') || t === 'claude' || t === 'anthropic' || u.includes('anthropic')) {
         iconFile = 'claude.png';
         brandName = 'Anthropic Claude';
       } else if (k.includes('codex') || n.includes('codex') || t === 'codex' || t === 'responses') {
@@ -1566,12 +1601,20 @@
           { id: 'review', name: 'Review Model', placeholder: 'gpt-5.6-terra' },
           { id: 'subagent', name: 'Subagent Model', placeholder: 'gpt-5.6-luna' }
         ]
+      },
+      agy: {
+        title: 'Antigravity CLI Agent Model (Code Assist)',
+        // agy sizes its own window; * stands for the model agy picked (antigravity/* keeps it on intact).
+        slots: [
+          { id: 'main', name: 'Agent Model (* = the model agy picked)', placeholder: 'antigravity/* or claude/claude-opus-5' }
+        ]
       }
     };
 
     function getActiveSlotConfig(fmt) {
       if (fmt === 'claude' || fmt === 'anthropic') return SLOT_CONFIGS.claude;
       if (fmt === 'codex' || fmt === 'responses') return SLOT_CONFIGS.codex;
+      if (fmt === 'agy') return SLOT_CONFIGS.agy;
       return SLOT_CONFIGS.auto;
     }
 
@@ -1745,7 +1788,8 @@
       // Render CLI Targets Rows
       const slots = [
         { id: 'claude', name: 'Claude Code', key: 'claude' },
-        { id: 'codex', name: 'Codex', key: 'codex' }
+        { id: 'codex', name: 'Codex', key: 'codex' },
+        { id: 'agy', name: 'Antigravity CLI', key: 'agy' }
       ];
 
       for (const slot of slots) {
@@ -1757,7 +1801,8 @@
           select.innerHTML = '<option value="">Official endpoint</option>';
           for (const [key, p] of profilesList) {
             const tool = p.tool || 'auto';
-            if (tool === 'auto' || tool === slot.key) {
+            // agy has no auto profile: only a profile made for it can serve it.
+            if (tool === slot.key || (tool === 'auto' && slot.key !== 'agy')) {
               const opt = document.createElement('option');
               opt.value = key;
               opt.textContent = p.name + ' (' + key + ')';
@@ -1787,6 +1832,7 @@
         const activeCLIs = [];
         if (activeMap.claude === key) activeCLIs.push('Claude');
         if (activeMap.codex === key) activeCLIs.push('Codex');
+        if (activeMap.agy === key) activeCLIs.push('agy');
         const isActiveAny = activeCLIs.length > 0;
         const isEditing = (key === currentlyEditingKey);
 
@@ -1797,7 +1843,7 @@
         const toolAv = getToolAvatar(key, p);
         const routeBadge = (p.tool || 'auto') + ' → ' + (p.outFormat || p.mode || 'chat');
 
-        const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : 'auto';
+        const slotFmt = p.tool === 'claude' ? 'anthropic' : p.tool === 'codex' ? 'responses' : p.tool === 'agy' ? 'agy' : 'auto';
         const pCfg = getActiveSlotConfig(slotFmt);
         const modelChips = pCfg.slots.map(s => {
           const val = valueForSlot(p.defaultModels, s.id);
@@ -1960,6 +2006,17 @@
         mode: 'convert',
         thinkingMode: 'auto',
         defaultModels: { default: 'gpt-4o', sonnet: 'claude-3-7-sonnet', opus: 'claude-3-opus', haiku: 'claude-3-5-haiku' }
+      },
+      // agy on an intact Antigravity pool: antigravity/* keeps the model agy picked, and intact names
+      // the CLI as its own client (bifrost_ua), so the request crosses unchanged.
+      'agy-intact': {
+        name: 'Antigravity CLI on intact',
+        baseURL: 'http://127.0.0.1:8080/v1',
+        tool: 'agy',
+        outFormat: 'openai-chat',
+        mode: 'convert',
+        thinkingMode: 'auto',
+        defaultModels: { main: 'antigravity/*' }
       },
       '9router': {
         name: '9Router Client Proxy',
@@ -2688,15 +2745,22 @@
           return;
         }
         say('Installed v' + result.to + '. Restarting the gateway...');
+        let last = 'no check ran';
         for (let n = 0; n < 60; n++) {
           await new Promise(r => setTimeout(r, 500));
-          const pid = await gatewayPid();
-          if (pid && pid !== before) {
-            location.reload();
-            return;
+          try {
+            const r = await fetch('/health?challenge=ui', { cache: 'no-store' });
+            const pid = (await r.json()).pid ?? null;
+            if (pid && pid !== before) {
+              location.reload();
+              return;
+            }
+            last = pid ? 'the gateway from before the update (pid ' + pid + ')' : 'HTTP ' + r.status + ' with no pid';
+          } catch (err) {
+            last = err.message;
           }
         }
-        throw new Error('The new gateway did not answer. Read proxy.log.');
+        throw new Error('The new gateway did not answer (last check: ' + last + '). Read proxy.log.');
       } catch (err) {
         say(err.message);
         showToast('Update failed: ' + err.message, true);
@@ -2705,6 +2769,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      if (!localStorage.getItem(ADMIN_TOKEN_KEY)) showToast(NO_TOKEN_HINT, true);
       // Setup initial theme buttons state
       const currentTheme = document.documentElement.dataset.theme || 'dark';
       document.getElementById('btn-theme-dark')?.setAttribute('aria-pressed', currentTheme === 'dark');

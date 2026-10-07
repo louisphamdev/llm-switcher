@@ -6,7 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isNewer } from './version.mjs';
+import { isNewer, CURRENT_VERSION } from './version.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_URL = 'https://registry.npmjs.org/llm-switcher/latest';
@@ -90,9 +90,17 @@ export async function applyUpdate({
   root = ROOT,
   run = runCommand,
   logger = () => {},
-  registryUrl = process.env.LLM_SWITCHER_REGISTRY_URL || REGISTRY_URL
+  registryUrl = process.env.LLM_SWITCHER_REGISTRY_URL || REGISTRY_URL,
+  running = CURRENT_VERSION
 } = {}) {
-  return fs.existsSync(path.join(root, '.git'))
-    ? updateCheckout(root, run, logger)
-    : updateNpmInstall(root, run, logger, registryUrl);
+  const r = fs.existsSync(path.join(root, '.git'))
+    ? await updateCheckout(root, run, logger)
+    : await updateNpmInstall(root, run, logger, registryUrl);
+  // Newer code already on disk (a pull or an install outside the gateway) is an update for the
+  // running process: without the restart it keeps the old code and the old version forever.
+  const onDisk = readVersion(root);
+  if (!r.updated && isNewer(onDisk, running)) {
+    return { updated: true, from: running, to: onDisk, reason: `v${onDisk} is on disk, but the gateway ran v${running}.` };
+  }
+  return r;
 }

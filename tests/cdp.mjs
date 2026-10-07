@@ -41,16 +41,38 @@ export async function launchBrowser() {
     '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${dir}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu',
     '--disable-background-networking', '--window-size=1280,900',
-    ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
+    // macOS: no keychain prompt, which would block a headless run with no one to answer it.
+    '--use-mock-keychain', '--password-store=basic',
+    // Ubuntu 24.04 blocks the user namespaces the Chrome sandbox needs. The page is a local test.
+    ...(process.platform === 'linux' || process.getuid?.() === 0 ? ['--no-sandbox'] : []),
     'about:blank'
   ];
-  const child = spawn(findChromium(), args, { stdio: 'ignore', env: { ...process.env, HOME: dir } });
+  // POSIX: a process group of its own, so close() can stop the renderers and helpers too.
+  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir }, detached: process.platform !== 'win32' });
+  const stop = (signal) => {
+    try {
+      if (process.platform !== 'win32') process.kill(-child.pid, signal);
+      else child.kill(signal);
+    } catch { /* already gone */ }
+  };
+  // The tail of what Chromium printed: the only clue when it starts on a machine no one can watch.
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+  let exited = null;
+  child.once('exit', (code, signal) => { exited = signal || code; });
   let port = 0;
-  for (let i = 0; i < 150 && !port; i++) {
+  for (let i = 0; i < 300 && !port && exited === null; i++) {
     try { port = Number(fs.readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8').split('\n')[0]) || 0; } catch { /* not written yet */ }
     if (!port) await sleep(100);
   }
-  if (!port) { child.kill(); throw new Error('Chromium did not open a debugging port'); }
+  if (!port) {
+    // SIGKILL and a wait: a Chromium left running holds this test process open.
+    if (exited === null) {
+      stop('SIGKILL');
+      await new Promise(r => { child.once('exit', r); setTimeout(r, 3000); });
+    }
+    throw new Error(`Chromium did not open a debugging port (exit: ${exited ?? 'killed'})\n${stderr}`);
+  }
 
   const pages = [];
   return {
@@ -63,9 +85,12 @@ export async function launchBrowser() {
     },
     async close() {
       for (const p of pages) p.close();
-      child.kill();
+      // The whole group: a helper that outlives the main process keeps writing into the profile.
+      stop('SIGTERM');
       await new Promise(r => { child.once('exit', r); setTimeout(r, 2000); });
-      fs.rmSync(dir, { recursive: true, force: true });
+      stop('SIGKILL');
+      // On Windows a Chromium child process can hold a cache file for a moment after the exit (EBUSY).
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   };
 }

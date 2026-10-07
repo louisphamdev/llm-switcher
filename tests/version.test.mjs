@@ -63,6 +63,21 @@ test('the same version is no update; a stale cache asks the registry again', asy
   }
 });
 
+test('a release published after the last check shows within 5 minutes, not after 12 hours', async () => {
+  const reg = await registry((req, res) => res.end(JSON.stringify({ version: '99.0.0' })));
+  const stateDir = tmpState();
+  try {
+    const answeredBeforeTheRelease = { checkedAt: Date.now() - 6 * 60 * 1000, latest: CURRENT_VERSION };
+    fs.writeFileSync(path.join(stateDir, 'version-check.json'), JSON.stringify(answeredBeforeTheRelease));
+    const r = await checkForUpdate({ stateDir, url: reg.url });
+    assert.equal(reg.hits(), 1, 'a 6-minute-old answer is asked again');
+    assert.equal(r.updateAvailable, true);
+  } finally {
+    reg.close();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('an unreachable or broken registry gives no notice and never throws', async () => {
   const reg = await registry((req, res) => { res.statusCode = 500; res.end('down'); });
   const stateDir = tmpState();

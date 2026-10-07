@@ -62,6 +62,14 @@ test('a checkout level with its upstream does nothing', async (t) => {
   assert.match(r.reason, /latest/i);
 });
 
+test('a gateway that runs older code than its checkout restarts into it, with nothing to pull', async (t) => {
+  const fx = fixture(t);
+  fx.release('1.0.1');
+  git(fx.install, 'pull', '-q', '--ff-only');
+  const r = await applyUpdate({ root: fx.install, running: '1.0.0' });
+  assert.deepEqual({ updated: r.updated, from: r.from, to: r.to }, { updated: true, from: '1.0.0', to: '1.0.1' });
+});
+
 test('a checkout with local edits is left alone, even when upstream moved', async (t) => {
   const fx = fixture(t);
   fx.release('1.0.1');
@@ -113,6 +121,14 @@ test('an npm install on the latest version runs no install', async (t) => {
   const calls = [];
   const r = await applyUpdate({ root, registryUrl: await registry(t, '1.0.0'), run: async (...a) => { calls.push(a); return ''; } });
   assert.equal(r.updated, false);
+  assert.deepEqual(calls, []);
+});
+
+test('an npm install that a running gateway has not loaded yet restarts into it, with no install', async (t) => {
+  const root = npmInstall(t, '1.0.1');
+  const calls = [];
+  const r = await applyUpdate({ root, running: '1.0.0', registryUrl: await registry(t, '1.0.1'), run: async (...a) => { calls.push(a); return ''; } });
+  assert.deepEqual({ updated: r.updated, from: r.from, to: r.to }, { updated: true, from: '1.0.0', to: '1.0.1' });
   assert.deepEqual(calls, []);
 });
 

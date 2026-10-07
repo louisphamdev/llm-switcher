@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Cổng ngõ biên (Edge Gateway) chuyển đổi đa giao thức LLM siêu nhẹ, Zero-Dependency</b><br>
-  Cầu nối hai chiều giữa <b>Claude Code</b> và <b>Codex</b> với mọi nhà cung cấp LLM: OpenAI-compatible, Anthropic hoặc Vertex.<br>
+  Cầu nối hai chiều giữa <b>Claude Code</b>, <b>Codex</b> và <b>Antigravity CLI</b> với mọi nhà cung cấp LLM: OpenAI-compatible, Anthropic hoặc Vertex.<br>
   Chuyển đổi giao thức qua IR, cửa sổ context theo model chính thức, trích xuất thinking blocks và tự chữa lành đồ thị tin nhắn trước khi ra Internet.
 </p>
 
@@ -27,7 +27,7 @@
 > **LLM Switcher giải quyết triệt để vấn đề này ngay tại network edge cục bộ:**
 > - **100% Native Emulation:** Chuẩn hóa upstream API (intact, 9Router, Vertex, DeepSeek) thành luồng Anthropic SSE xịn (`thinking_delta` + `tool_use`) cho Claude Code, và Responses API event cho Codex.
 > - **Client-Side Edge Companion:** Cố tình tách biệt các tác vụ nặng như account pooling, key rotation cho **[intact](https://github.com/louisphamdev/intact)** (khuyên dùng) hoặc 9Router (cơ bản), giúp Switcher giữ vững tiêu chí Zero-Dependency siêu nhẹ.
-> - **Phạm vi Tập trung:** Tối ưu chuyên sâu cho **Claude Code** và **OpenAI Codex** (OpenCode đã hỗ trợ đổi model native ngay trong config; muốn pooling thì dùng intact; còn Antigravity thì không đáng để bận tâm làm 😏).
+> - **Phạm vi Tập trung:** Tối ưu chuyên sâu cho **Claude Code**, **OpenAI Codex** và **Antigravity CLI** (`agy`). OpenCode đã hỗ trợ đổi model native ngay trong config; muốn pooling thì dùng intact.
 
 ---
 
@@ -132,9 +132,9 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
 
 - **Kiến trúc Zero-Dependency:** Xây dựng 100% bằng thư viện chuẩn của Node.js (`http`, `fs`, `os`, `path`, `fetch`). Không cần chạy `npm install`, không kéo theo runtime Bun hay binary nặng, khởi động dưới 50ms.
 - **Chuyển đổi Giao thức 2 Chiều Đối xứng:**
-  - **4 Định dạng đầu vào (Client):** Anthropic Messages, OpenAI Chat Completions, Codex Responses API, Vertex `generateContent`.
+  - **3 Định dạng đầu vào (Client):** Anthropic Messages (Claude Code), Codex Responses API (Codex), Code Assist (Antigravity CLI).
   - **3 Định dạng đầu ra (Upstream):** OpenAI Chat, Anthropic Native, Vertex Native.
-- **Bifrost:** Claude Code tới tài khoản Claude Code trên intact đi nguyên vẹn. Chỉ key thay đổi. Không chuyển định dạng, không healer, không lọc. Gateway tự bật. [Bifrost](#bifrost-claude-code-tới-tài-khoản-claude-code-trên-intact)
+- **Bifrost:** Một coding tool tới tài khoản của chính nhà cung cấp của nó trên intact đi nguyên vẹn. Chỉ key thay đổi. Không chuyển định dạng, không healer, không lọc. Áp dụng cho Claude Code, Codex và Antigravity CLI. Gateway tự bật. [Bifrost](#bifrost-coding-tool-tới-tài-khoản-của-chính-nó-trên-intact)
 - **Multi-Active CLI Routing:** Kích hoạt cùng lúc Claude Code dùng Profile A, Codex dùng Profile B, Cursor dùng Profile C trên cùng 1 gateway mà không tranh chấp cấu hình.
 - **Trích xuất Thinking & Reasoning Chuyên sâu:** Kiểm chứng thực tế qua 48 tổ hợp mẫu response live. Tự động bóc tách `reasoning_content`, thẻ `<think>`, các block `thought` của Vertex và thought signature thành các `thinking_delta` chuẩn của Anthropic.
 - **Edge Healer Engine (Tự chữa lành tin nhắn):**
@@ -148,7 +148,12 @@ LLM Switcher hoạt động như một lớp trung gian mạng trong suốt (tra
 
 ---
 
-## Thay đổi gần đây (v1.2.0)
+## Thay đổi gần đây (v1.3.0)
+
+- **Antigravity CLI (`agy`):** Công cụ thứ ba, có profile riêng. `switch agy <profile>` định tuyến nó. agy tới gateway qua `CLOUD_CODE_URL`, nên không cần proxy và không cần chứng chỉ. Remote control vẫn chạy, vì nó dùng host riêng. [Cấu hình Antigravity CLI](#cấu-hình-antigravity-cli-agy)
+- **Bifrost cho agy và Codex:** Trên pool intact, request của agy và Codex đi nguyên vẹn, giống Claude Code từ trước.
+
+## Thay đổi trước đó (v1.2.0)
 
 - **Zero-Mutation Interceptor:** Định tuyến qua `HTTPS_PROXY`, tuyệt đối không can thiệp hay sửa file cấu hình của tool (`~/.claude/settings.json`, `~/.codex/config.toml`).
 - **Hỗ trợ đồng thời cả Claude Code & Codex:** Quản lý độc lập `{ claude, codex }`, chuyển đổi profile tức thì qua `POST /_control/active-tools` mà không cần restart cổng.
@@ -208,7 +213,8 @@ node "$(npm root -g)/llm-switcher/proxy.mjs"
 Khác biệt giữa các nền tảng, và hai tính năng không chạy ở mọi nơi, nằm trong
 [📖 `docs/cross-platform.md`](docs/cross-platform.md).
 
-Mở Bảng điều khiển Web Dashboard tại: **[http://127.0.0.1:3456/ui](http://127.0.0.1:3456/ui)**
+Mở Bảng điều khiển Web Dashboard bằng `switch ui`. Lệnh này mở `http://127.0.0.1:3456/ui` kèm token truy
+cập của bản cài này, và tab trình duyệt giữ token trong lúc tab còn mở.
 
 ---
 
@@ -226,12 +232,14 @@ Mỗi công cụ có file riêng, và chỉ shim tương ứng mới nạp:
 | --- | --- |
 | `env-claude.sh` / `env-claude.cmd` | shim `claude` |
 | `env-codex.sh` / `env-codex.cmd` | shim `codex` |
+| `env-agy.sh` / `env-agy.cmd` | shim `agy` |
 | `env.sh` / `env.cmd` | không ai. Stub trống, giữ lại chỉ để dòng rc cũ lặng lẽ |
 
 File của công cụ rỗng nghĩa là công cụ đó đang tắt: shim để nguyên môi trường và công cụ gọi thẳng
 endpoint chính thức. Trước khi nạp bất cứ thứ gì, shim cũng quét một `ANTHROPIC_BASE_URL`,
 `OPENAI_BASE_URL` hay `ANTHROPIC_DEFAULT_<TIER>_MODEL` cũ còn sót từ bản trước hoặc từ shell của
-bạn, nên `switch off` là off thật sự.
+bạn, nên `switch off` là off thật sự. Shim `agy` gỡ một `CLOUD_CODE_URL` trỏ vào gateway khi agy
+đang tắt.
 
 Trong thực tế bạn không bao giờ tự gọi các file này. `switch shim install` đặt `~/.llm-switcher/bin`
 vào `PATH`, và mọi lệnh `claude` hay `codex` — kể cả `claude --resume` trong một terminal hoàn toàn
@@ -274,6 +282,73 @@ codex
 Trên Windows, đặt `%USERPROFILE%\.llm-switcher\bin` trước thư mục Codex thật trong `PATH`. Sau đó, mở terminal mới.
 
 Shim tuyệt đối không sửa `~/.codex/config.toml`. Codex kết nối tới gateway qua `HTTPS_PROXY` và interceptor mạng, giữ nguyên tên model và context window chính thức. Danh sách model được phục vụ động tại `/v1/models`.
+
+### Cấu hình Antigravity CLI (agy)
+
+agy là client dòng lệnh của Google Antigravity. agy đọc biến `CLOUD_CODE_URL` và gửi mọi lệnh gọi
+Code Assist tới địa chỉ đó. Shim `agy` đặt biến này trỏ vào gateway, nên agy không cần proxy và
+không cần chứng chỉ.
+
+1. Đăng nhập agy bằng tài khoản Google của bạn. agy cần đăng nhập cho các lệnh gọi của chính nó.
+2. Tạo một profile có `"tool": "agy"`. Dashboard có sẵn template **agy on intact**.
+3. Chạy các lệnh sau, rồi mở terminal mới:
+   ```bash
+   switch shim install
+   switch agy <profile>
+   agy
+   ```
+
+Gateway định tuyến các lệnh gọi của agy như sau:
+
+| Lệnh gọi | Đi tới đâu |
+| --- | --- |
+| Lượt agent (`requestType: "agent"`) | Profile của agy: Bifrost trên intact, hoặc chuyển đổi sang upstream bất kỳ |
+| Tóm tắt checkpoint, danh sách model, quota, trạng thái đăng nhập, analytics | Google, bằng token của chính bạn |
+| Mọi lệnh gọi khi agy đang tắt | Google |
+
+Lệnh gọi tới Google giữ nguyên header và byte. Gateway chỉ bỏ header của chính nó
+(`x-llm-profile`, `x-profile`, `x-llm-switcher-token`, và header contract-lab `x-intact-probe`,
+`x-intact-trace`) và header của proxy đứng trước nó (`proxy-authorization`, `x-forwarded-*`,
+`x-real-ip`).
+
+Khi agy đang được định tuyến, gateway từ chối lượt agent mà nó không định tuyến được. Gateway không
+bao giờ gửi lượt đó sang Google thay thế:
+
+| Điều kiện | agy nhận |
+| --- | --- |
+| `config.json` chưa từng nạp được | 503 |
+| Request chỉ định một profile không tồn tại (`x-llm-profile`, `?profile=`) | 400 |
+| Body request không parse được | 400 |
+| Request không có model, và slot `main` chứa `*` | 400 |
+
+Profile có một slot model là `main`. Dấu `*` trong giá trị thay cho model mà agy đã chọn:
+
+- `antigravity/*` gửi `gemini-3.8-flash-high` tới intact dưới tên `antigravity/gemini-3.8-flash-high`.
+  intact nhận agy là client của chính pool Antigravity, nên request đi qua Bifrost.
+- `claude/claude-opus-5` gửi mọi lượt agent tới model đó. Gateway chuyển request Code Assist sang
+  định dạng của upstream, rồi chuyển câu trả lời về lại định dạng Code Assist.
+
+Remote control của agy dùng host riêng (`jetski-webchannel.googleapis.com`). Nó không dùng
+`CLOUD_CODE_URL`, nên vẫn chạy khi switcher định tuyến agy.
+
+Token Google của agy chỉ đi tới Google. Request Bifrost hay request đã chuyển đổi mang key của
+profile, không bao giờ mang token này.
+
+agy gửi token này dạng rõ tới `CLOUD_CODE_URL`. Vì vậy shim `agy` hỏi gateway bằng chứng danh tính
+trước khi giao biến này cho agy. Nếu cổng không trả lời đúng bằng chứng của bản cài này trong 3 giây,
+shim gỡ biến, in một dòng thông báo, và agy dùng endpoint chính thức.
+
+Gateway cũng có thể dừng trong lúc agy đang chạy (`switch off`, crash, cập nhật). Khi đó cổng của nó
+bỏ trống, và một chương trình khác có thể chiếm cổng. Vì vậy agy đã route không bao giờ nói chuyện
+trực tiếp với cổng gateway. Shim chạy agy sau một relay (`agy-relay.mjs`) giữ cổng loopback riêng
+suốt thời gian agy chạy. Với mỗi kết nối của agy, relay hỏi gateway bằng chứng danh tính trên chính
+socket đó, và chỉ gửi request trên socket ấy khi bằng chứng đúng. Nếu sai, agy nhận 502, và token
+vẫn nằm lại trong relay.
+
+Relay chỉ chấp nhận bằng chứng ký bằng `gateway.secret`, một khóa ngẫu nhiên nằm cạnh `admin.token`.
+Không trang và không route nào của gateway trả về khóa này, và không chương trình nào suy ra được nó từ
+`admin.token`. Nếu gateway đang
+chạy cũ hơn relay, agy nhận 502 kèm hướng dẫn khởi động lại (`switch off`, rồi `switch on`).
 
 ### Chế độ blindfold (tùy chọn)
 
@@ -405,18 +480,33 @@ Thêm server vào cấu hình MCP (ví dụ `opencode.jsonc`, `claude_desktop_co
 
 ---
 
-## Bifrost: Claude Code tới tài khoản Claude Code trên intact
+## Bifrost: coding tool tới tài khoản của chính nó trên intact
 
-Bifrost gửi request của Claude Code tới intact nguyên vẹn. Chỉ key thay đổi. Healer, `thinkingMode` và bước chuyển định dạng không chạy.
+Bifrost gửi request của một coding tool tới intact nguyên vẹn. Chỉ key thay đổi. Healer, `thinkingMode` và bước chuyển định dạng không chạy.
 
 Bifrost không có cấu hình. Gateway tự bật Bifrost cho từng request khi đủ hai điều kiện:
 
-1. intact trả `bifrost_ua` cho model đã map trong `GET /v1/models/{model}`. intact chỉ trả trường này cho model của tài khoản Claude Code.
+1. intact trả `bifrost_ua` cho model đã map trong `GET /v1/models/{model}`. intact chỉ trả trường này cho model của tài khoản thuộc nhà cung cấp của công cụ.
 2. `User-Agent` của client bắt đầu bằng giá trị `bifrost_ua`.
 
-Gateway giữ câu trả lời của intact 10 phút cho mỗi model. Nếu intact không trả lời, gateway giữ kết quả 30 giây và dùng đường thường.
+| Công cụ | `bifrost_ua` | Path trên intact |
+| --- | --- | --- |
+| Claude Code | `claude-cli/` | `/v1/messages` |
+| Codex (HTTP và WebSocket) | `codex_cli_rs/` | `/v1/responses` |
+| Antigravity CLI | `antigravity/cli/` | `/v1/v1internal:streamGenerateContent`, `/v1/v1internal:generateContent` |
 
-Gateway gửi mọi header của client, nguyên byte body và query string. Gateway bỏ credential của client và các header hop-by-hop, rồi đặt `x-api-key` bằng key của profile. Nếu profile map model, gateway đổi thêm trường `model`. Client khác, hoặc model không thuộc tài khoản Claude Code, đi đường thường của profile.
+Với agy, intact ghi thêm project của tài khoản được chọn vào request.
+
+Codex ghi tên client của nó trong `User-Agent`: `codex_cli_rs` cho giao diện terminal, `codex_exec`
+cho `codex exec`, `codex_vscode` và `codex_sdk_ts`. Gateway coi cả bốn là client Codex.
+
+Codex qua WebSocket cũng đi Bifrost. intact không giữ trạng thái WebSocket, nên gateway gửi mỗi lượt
+tới `/v1/responses` thành một request HTTP chứa toàn bộ hội thoại. Mỗi event của câu trả lời quay về
+Codex thành một frame WebSocket, giữ nguyên.
+
+Gateway giữ câu trả lời của intact 10 phút cho mỗi model. Chỉ câu trả lời 2xx được giữ lâu như vậy. Nếu intact không trả lời, hoặc trả lỗi (kể cả 404), gateway dùng đường thường. Gateway hỏi lại sau 30 giây (`LLM_SWITCHER_BIFROST_RETRY_MS`) và in một dòng cho mỗi chuỗi lỗi.
+
+Gateway gửi mọi header của client, nguyên byte body và query string. Gateway bỏ credential của client và các header hop-by-hop, rồi đặt `x-api-key` bằng key của profile. Nếu profile map model, gateway đổi thêm trường `model`. Client khác, hoặc model của tài khoản không thuộc nhà cung cấp của công cụ, đi đường thường của profile.
 
 ## Bảng Tra cứu Lệnh CLI (`switch`)
 
@@ -430,25 +520,27 @@ switch on [profile]            # Khởi động gateway và kích hoạt một p
 switch <profile>               # Kích hoạt một profile cho cả hai công cụ
 switch claude <profile>        # Đặt profile kích hoạt riêng cho Claude Code
 switch codex <profile>         # Đặt profile kích hoạt riêng cho Codex
+switch agy <profile>           # Đặt profile kích hoạt riêng cho Antigravity CLI
 switch port <number>           # Đổi cổng gateway (tự restart nếu đang chạy)
 switch service install         # Cài đặt gateway thành service chạy ngầm tự bật cùng máy; tự update mỗi lần đăng nhập
 switch service uninstall       # Gỡ bỏ service chạy ngầm
-switch shim install            # Route phiên Claude và Codex mới qua gateway
+switch shim install            # Route phiên Claude, Codex và agy mới qua gateway
 switch shim status             # Kiểm tra shim + phát hiện phiên đang chạy ngoài gateway
 switch shim uninstall          # Gỡ shim khỏi launcher
-switch plugin install          # Tuỳ chọn: nhắc nhở ngay trong Claude Code và Codex
+switch plugin install          # Tuỳ chọn: nhắc nhở ngay trong Claude Code, Codex và agy
 switch plugin status           # Xem nhắc nhở đó đã cài chưa
 switch plugin uninstall        # Gỡ nhắc nhở đó
 switch off                     # Tắt tất cả và quay về endpoint chính thức
 switch off claude              # Tắt Claude Code; Codex vẫn chạy tiếp
-switch off codex               # Tắt Codex; Claude Code vẫn chạy tiếp
+switch off codex               # Tắt Codex; các công cụ khác vẫn chạy tiếp
+switch off agy                 # Tắt Antigravity CLI; các công cụ khác vẫn chạy tiếp
 switch contract-probe [--model m] # Chạy các biến thể contract-lab qua gateway
 switch contract-check          # Chuyển các findings hợp đồng còn mở thành test case
 ```
 
-Target chỉ có `claude` và `codex`, và đó là hai target duy nhất. Một profile phục vụ đúng một công
-cụ: `tool` là `"claude"` hoặc `"codex"` (hoặc `null` khi profile đang tắt), nên `switch claude` và
-`switch codex` không bao giờ chỉ nhầm vào cùng một profile. Không còn target `openai` hay `vertex` —
+Target là `claude`, `codex` và `agy`. Một profile phục vụ đúng một công cụ: `tool` là `"claude"`,
+`"codex"` hoặc `"agy"` (hoặc `null` khi profile đang tắt), nên hai target không bao giờ chỉ nhầm vào
+cùng một profile. Không còn target `openai` hay `vertex` —
 các route đầu vào mà chúng đại diện đã bị gỡ.
 
 
@@ -545,6 +637,7 @@ Lệnh này ghi một file cho mỗi tool, và không mở file cấu hình nào
 | --- | --- | --- |
 | Claude Code | `~/.claude/skills/llm-switcher-status/` | Một thư mục có `.claude-plugin/plugin.json` nằm dưới skills directory sẽ được nạp như một plugin ở phiên kế tiếp. Không cần marketplace, không cần bước install. |
 | Codex | `~/.codex/hooks.json` | Codex tự đọc file này. `config.toml` không bị mở. |
+| Antigravity CLI | `~/.gemini/antigravity-cli/hooks.json` | agy đọc file này khi khởi động. agy 1.2.14 nạp file này nhưng chưa chạy hook toàn cục. Chỉ `.agents/hooks.json` trong workspace mới chạy. Cho tới khi có bản chạy hook toàn cục, toast của shim là nhắc nhở cho agy. agy không chạy được đường dẫn có dấu nháy, nên nếu đường dẫn của `hook-status.mjs` có dấu cách, lệnh cài bỏ qua agy và in `[Skip]`. |
 
 Nếu `~/.codex/hooks.json` đã có sẵn thì lệnh sẽ **merge**. Hook của bạn được giữ nguyên, và
 `switch plugin uninstall` chỉ lấy đi phần của switcher. Nếu file không parse được thì lệnh từ chối và
@@ -576,14 +669,15 @@ route.
   "port": 3456,
   "activeProfiles": {
     "claude": "claude-default",      // Profile active cho Claude Code (/v1/messages)
-    "codex": "codex-default"         // Profile active cho Codex (/v1/responses)
+    "codex": "codex-default",        // Profile active cho Codex (/v1/responses)
+    "agy": "agy-default"              // Profile active cho Antigravity CLI (/v1internal:*)
   },
   "blindfold": { "port": 3457 },     // Cổng interceptor. Cấp cao nhất, không bắt buộc, mặc định 3457
   "profiles": {
     "claude-default": {
       "name": "Intact Gateway",
       "mode": "convert",             // hybrid | convert | direct
-      "tool": "claude",              // claude | codex | null (profile đang tắt)
+      "tool": "claude",              // claude | codex | agy | null (profile đang tắt)
       "outFormat": "openai-chat",    // openai-chat | anthropic | vertex
       "thinkingMode": "auto",        // auto | native | off (xem Tuỳ chọn Nâng cao)
       "baseURL": "https://intact.example.com/v1", // hoặc https://api.9router.com/v1
@@ -605,7 +699,17 @@ route.
       // Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // tên chính thức cho main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // không bắt buộc: ghép một vai trò với tên public khác
-      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
+    },
+    "agy-default": {
+      "name": "agy qua intact",
+      "mode": "convert",
+      "tool": "agy",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.example.com/v1",
+      "apiKey": "sk-...",
+      // Một slot. * thay cho model agy đã chọn; antigravity/* đi Bifrost trên intact.
+      "defaultModels": { "main": "antigravity/*" }
     }
   },
   "debug": false,
@@ -657,6 +761,9 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 | `LLM_SWITCHER_CONFIG=/path/config.json` | Dùng file cấu hình nằm ngoài thư mục dữ liệu (proxy, `switch` và `mcp.mjs` đều hỗ trợ). |
 | `--port <n>` / `LLM_SWITCHER_PORT` | Ghi đè cổng lắng nghe của gateway (ưu tiên: flag > env > `config.port`). |
 | `LLM_SWITCHER_BLINDFOLD_PORT` | Ghi đè cổng lắng nghe của interceptor (ưu tiên: env > `config.blindfold.port` > 3457). Đảm bảo đặt cùng `LLM_SWITCHER_PORT` khi chạy instance thứ hai. |
+| `LLM_SWITCHER_CODE_ASSIST_URL` | Host Code Assist nhận các lệnh gọi của agy mà gateway không định tuyến (mặc định `https://daily-cloudcode-pa.googleapis.com`). |
+| `LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS` | Thời gian chờ không có dữ liệu của lệnh gọi đó, từ 1000 tới 2147483647 ms (mặc định 300000). Trước khi câu trả lời bắt đầu, agy nhận 504. Sau khi đã bắt đầu, kết nối bị cắt. |
+| `LLM_SWITCHER_BIFROST_RETRY_MS` | Thời gian trước khi gateway hỏi lại intact sau một lần tra cứu Bifrost thất bại (mặc định 30000 ms). |
 | Header `x-llm-profile: <key>` (tên khác `x-profile`) hoặc `?profile=<key>` | Định tuyến riêng 1 request qua profile chỉ định. Key không tồn tại trả HTTP 400 thay vì âm thầm dùng profile khác. |
 | `profile.thinkingMode` | `auto` (mặc định, cho gateway như intact hoặc 9Router): phục hồi thinking bị xoá, inject hướng dẫn `<think>` cho model không có reasoning, gửi `thinking` + `reasoning_effort`. `native` (API OpenAI nghiêm ngặt): chỉ gửi `reasoning_effort` khi client yêu cầu, không sửa prompt, dùng `max_completion_tokens`. `off`: không bao giờ gửi tham số reasoning. |
 | `profile.endpoints.countTokens` | Ghi đè URL `count_tokens` của Anthropic. |
@@ -667,7 +774,7 @@ Nhờ cách chia này, fingerprint của provider không bao giờ là rule tron
 ## Mô hình Bảo mật
 
 - Gateway chỉ lắng nghe `127.0.0.1` và từ chối request có `Host` không phải loopback (chống DNS rebinding) hoặc `Origin` không phải chính dashboard (chống CSRF).
-- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. Gateway đặt token này vào trang dashboard, nên mở thẳng `http://127.0.0.1:3456/ui` là dùng được. Lớp kiểm tra Host và Origin ngăn trang web khác đọc trang và token. MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
+- Admin API (`/api/*`) bắt buộc header `x-llm-switcher-token`. Gateway tạo token trong file `admin.token`, cạnh `config.json`, với mode 0600. Trang dashboard không chứa token này, vì chương trình nào trên máy cũng tải được trang. `switch ui` mở dashboard qua một file riêng tư (mode 0600), file này đưa token cho tab trình duyệt qua phần fragment của URL, rồi trang xóa nó khỏi thanh địa chỉ. Tab mở thẳng `http://127.0.0.1:3456/ui` mà không qua file này sẽ hiện thông báo bảo dùng `switch ui`. MCP server đọc token từ file. `/v1/*` và `/health` không cần token.
 - API key không bao giờ gửi xuống trình duyệt: `/api/status` trả profile đã che key, dashboard giữ nguyên key đã lưu nếu bạn không nhập key mới. Key đã lưu chỉ được gửi tới `baseURL` và `endpoints` đã lưu của chính profile đó. Lần lưu nào đổi một trong hai thì phải nhập lại key.
 - Mỗi thay đổi từ dashboard mang theo revision của config mà trang đã tải. Nếu tab khác, CLI hoặc MCP server đã lưu trước đó, gateway trả 409 và trang tải lại thay vì ghi đè thay đổi kia.
 - Credential của client (`x-api-key`, `authorization`, `x-goog-api-key`) **không** được chuyển tiếp lên upstream. Các header `x-*` khác, `traceparent` và `tracestate` được chuyển tiếp. Gateway bỏ header điều khiển của chính nó (`x-profile`, `x-llm-profile`) và header định danh mạng (`x-forwarded-*`, `x-real-ip`).

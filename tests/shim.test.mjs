@@ -452,3 +452,205 @@ test('the Windows shim raises the toast only while this tool is routed', (t) => 
   assert.match(off.out, /ran/);
   assert.equal(off.asked, '', 'a tool that is off raises no toast');
 });
+
+test('shim status follows the Windows lookup: an .exe earlier on PATH wins over the shim', () => {
+  const dirA = fs.mkdtempSync(path.join(STATE, 'real-'));
+  const shimDir = fs.mkdtempSync(path.join(STATE, 'shim-'));
+  fs.writeFileSync(path.join(dirA, 'agy.exe'), '');
+  fs.writeFileSync(path.join(shimDir, 'agy.cmd'), '');
+  const opts = { pathEnv: [dirA, shimDir].join(';'), shimDir, platform: 'win32', pathExt: '.COM;.EXE;.BAT;.CMD' };
+  const st = shimStatus(['agy'], opts);
+  assert.equal(st.shims[0].effective, path.join(dirA, 'agy.exe'));
+  assert.equal(st.shims[0].active, false, 'the real agy.exe runs first, so the shim is not active');
+  const fixed = shimStatus(['agy'], { ...opts, pathEnv: [shimDir, dirA].join(';') });
+  assert.equal(fixed.shims[0].active, true);
+});
+
+// ---- agy: the shim proves the gateway before it hands over CLOUD_CODE_URL -----------------------
+// agy sends its Google token in clear text to CLOUD_CODE_URL. A process that took the gateway port
+// must therefore never receive it: the shim asks for the identity proof first.
+const { identityProof } = await import(pathToFileURL(path.join(ROOT, 'state.mjs')).href);
+const AGY_TOKEN = 'a'.repeat(64);
+// Outside STATE: the other tests empty STATE file by file.
+const AGY_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agyconfig-'));
+const AGY_CONFIG = path.join(AGY_CONFIG_DIR, 'config.json');
+test.after(() => fs.rmSync(AGY_CONFIG_DIR, { recursive: true, force: true }));
+fs.writeFileSync(path.join(path.dirname(AGY_CONFIG), 'admin.token'), AGY_TOKEN);
+// The relay key of this test install: the relay of a routed agy checks every connection with it.
+const AGY_SECRET = 'd'.repeat(64);
+fs.writeFileSync(path.join(path.dirname(AGY_CONFIG), 'gateway.secret'), AGY_SECRET);
+// Stands in for agy: sends one request with its Google token to CLOUD_CODE_URL, when it has one.
+const AGY_REQUEST = path.join(AGY_CONFIG_DIR, 'agy-request.mjs');
+fs.writeFileSync(AGY_REQUEST, `
+import http from 'node:http';
+const url = process.env.CLOUD_CODE_URL;
+if (url) await new Promise((resolve) => {
+  const req = http.request(url + '/v1internal:loadCodeAssist', { method: 'POST', agent: false, headers: { authorization: 'Bearer google-secret' } },
+    (res) => { res.resume(); res.on('end', () => { console.log('STATUS ' + res.statusCode); resolve(); }); });
+  req.on('error', (e) => { console.log('ERROR ' + e.message); resolve(); });
+  req.end('{}');
+});
+`);
+const VERIFY = path.join(ROOT, 'verify-gateway.mjs');
+// Async on purpose: the /health listener lives in this process, and a spawnSync would block it.
+const { spawn: spawnAsync } = await import('node:child_process');
+function runAsync(cmd, args, opts) {
+  return new Promise((resolve) => {
+    const child = spawnAsync(cmd, args, opts);
+    let out = '', err = '';
+    child.stdout?.on('data', d => { out += d; });
+    child.stderr?.on('data', d => { err += d; });
+    const timer = setTimeout(() => child.kill(), 30000);
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout: out, stderr: err }); });
+  });
+}
+const NOTICE = /did not prove it is this switcher/;
+
+// A gateway listener: 'real' signs like this gateway (both proofs), 'forged' sends wrong proofs,
+// 'silent' never answers. `server.seen` holds the Authorization of every request that is not a probe.
+async function agyListener(kind) {
+  const http = await import('node:http');
+  const net = await import('node:net');
+  const crypto = await import('node:crypto');
+  const seen = [];
+  const server = kind === 'silent'
+    ? net.createServer((sock) => sock.on('error', () => {}))
+    : http.createServer((req, res) => {
+      const port = server.address().port;
+      const u = new URL(req.url, 'http://x');
+      res.setHeader('content-type', 'application/json');
+      if (u.pathname !== '/health') {
+        seen.push(req.headers.authorization || '');
+        req.resume();
+        return res.end('{"answeredBy":"gateway"}');
+      }
+      const nonce = u.searchParams.get('challenge');
+      const real = kind === 'real';
+      const proof = real ? identityProof(nonce, { role: 'gateway', port, pid: 4242 }, AGY_TOKEN) : 'forged';
+      const relayProof = real ? crypto.createHmac('sha256', AGY_SECRET).update(['relay', port, 4242, nonce].join('|')).digest('hex') : 'forged';
+      res.end(JSON.stringify({ status: 'ok', proxy: 'llm-switcher', port, pid: 4242, proof, relayProof }));
+    });
+  server.seen = seen;
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  return server;
+}
+
+async function runAgyWindowsShim(port) {
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyshim-'));
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyfake-'));
+  fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), `@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\nnode "${AGY_REQUEST}"\r\n`);
+  for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
+  fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+  fs.writeFileSync(path.join(STATE, 'env-agy.cmd'), `SET "CLOUD_CODE_URL=http://127.0.0.1:${port}"\r\n`);
+  const shim = path.join(shimDir, 'agy.cmd');
+  fs.writeFileSync(shim, renderShim('agy', 'win32'), 'utf8');
+  const started = Date.now();
+  const child = await runAsync('cmd.exe', ['/d', '/c', shim], {
+    env: { ...process.env, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [fakeDir, shimDir, path.join(process.env.SystemRoot, 'System32'), path.dirname(process.execPath)].join(path.delimiter) }
+  });
+  fs.rmSync(shimDir, { recursive: true, force: true });
+  fs.rmSync(fakeDir, { recursive: true, force: true });
+  return { out: child.stdout || '', err: child.stderr || '', ms: Date.now() - started };
+}
+
+for (const [kind, routed] of [['forged', false], ['silent', false], ['real', true]]) {
+  test(`the Windows agy shim with a ${kind} listener on the gateway port ${routed ? 'keeps' : 'drops'} CLOUD_CODE_URL`, async (t) => {
+    if (process.platform !== 'win32') return t.skip('cmd.exe only');
+    const server = await agyListener(kind);
+    t.after(() => server.close());
+    const port = server.address().port;
+    const { out, err, ms } = await runAgyWindowsShim(port);
+    if (routed) {
+      // agy gets the port of its own relay, which proves the gateway on every connection.
+      const relayPort = Number((out.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
+      assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out}`);
+      // The request really crossed the relay and reached this gateway, token included.
+      assert.match(out, /STATUS 200/, out);
+      assert.deepEqual(server.seen, ['Bearer google-secret']);
+      assert.doesNotMatch(err, NOTICE);
+    } else {
+      assert.match(out, /CCU=\[\]/, 'the token must not go to a port that did not prove itself');
+      assert.match(err, NOTICE);
+      assert.deepEqual(server.seen ?? [], [], 'the listener never received the token');
+    }
+    assert.ok(ms < 8000, `the shim took ${ms} ms`);
+  });
+}
+
+for (const [kind, routed] of [['forged', false], ['silent', false], ['real', true]]) {
+  test(`the POSIX agy shim with a ${kind} listener on the gateway port ${routed ? 'keeps' : 'drops'} CLOUD_CODE_URL`, async (t) => {
+    if (process.platform === 'win32') return t.skip('posix only');
+    const server = await agyListener(kind);
+    t.after(() => server.close());
+    const port = server.address().port;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyposix-'));
+    fs.writeFileSync(path.join(dir, 'agy'), `#!/usr/bin/env bash\necho "CCU=[\${CLOUD_CODE_URL:-}]"\nnode "${AGY_REQUEST}"\n`);
+    fs.chmodSync(path.join(dir, 'agy'), 0o755);
+    for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
+    fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+    fs.writeFileSync(path.join(STATE, 'env-agy.sh'), `export CLOUD_CODE_URL='http://127.0.0.1:${port}'\n`);
+    const started = Date.now();
+    const out = await runAsync(path.join(RENDER_DIR, 'agy'), [], {
+      env: { ...process.env, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [RENDER_DIR, dir, '/usr/bin:/bin', NODE_DIR].join(path.delimiter) }
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (routed) {
+      const relayPort = Number((out.stdout.match(/CCU=\[http:\/\/127\.0\.0\.1:(\d+)\]/) || [])[1]);
+      assert.ok(relayPort > 0 && relayPort !== port, `agy must get the relay port, not ${port}: ${out.stdout}`);
+      assert.match(out.stdout, /STATUS 200/, out.stdout);
+      assert.deepEqual(server.seen, ['Bearer google-secret']);
+      assert.doesNotMatch(out.stderr, NOTICE);
+    } else {
+      assert.match(out.stdout, /CCU=\[\]/);
+      assert.match(out.stderr, NOTICE);
+      assert.deepEqual(server.seen ?? [], [], 'the listener never received the token');
+    }
+    assert.ok(Date.now() - started < 8000, `the shim took ${Date.now() - started} ms`);
+  });
+}
+
+test('verify-gateway accepts only 127.0.0.1 with a real port, whatever listens', async (t) => {
+  const server = await agyListener('real');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const run = async (u) => (await runAsync(process.execPath, [VERIFY, u], { env: { ...process.env, LLM_SWITCHER_CONFIG: AGY_CONFIG } })).status;
+  assert.equal(await run(`http://127.0.0.1:${port}`), 0, 'the real gateway passes');
+  assert.notEqual(await run('http://127.0.0.1/'), 0, 'no port');
+  assert.notEqual(await run(`http://localhost:${port}`), 0, 'localhost can resolve to ::1, which the probe never checked');
+  assert.notEqual(await run(`http://other.example:${port}`), 0);
+  assert.notEqual(await run('not a url'), 0);
+});
+
+// While agy is off, a gateway address left in the shell from an earlier run is the switcher's own
+// value and goes; an address the person set for another host is theirs and stays.
+for (const [value, kept] of [['http://127.0.0.1:3456', false], ['https://cloudcode.corp.example', true]]) {
+  test(`the Windows agy shim, with agy off, ${kept ? 'keeps' : 'scrubs'} CLOUD_CODE_URL=${value}`, async (t) => {
+    if (process.platform !== 'win32') return t.skip('cmd.exe only');
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyoff-'));
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyofffake-'));
+    t.after(() => { fs.rmSync(shimDir, { recursive: true, force: true }); fs.rmSync(fakeDir, { recursive: true, force: true }); });
+    fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), '@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\n');
+    for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
+    const shim = path.join(shimDir, 'agy.cmd');
+    fs.writeFileSync(shim, renderShim('agy', 'win32'), 'utf8');
+    const out = await runAsync('cmd.exe', ['/d', '/c', shim], {
+      env: { ...process.env, CLOUD_CODE_URL: value, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [fakeDir, shimDir, path.join(process.env.SystemRoot, 'System32'), path.dirname(process.execPath)].join(path.delimiter) }
+    });
+    assert.ok(out.stdout.includes(`CCU=[${kept ? value : ''}]`), out.stdout);
+    assert.doesNotMatch(out.stderr, NOTICE, 'no gateway check runs while agy is off');
+  });
+
+  test(`the POSIX agy shim, with agy off, ${kept ? 'keeps' : 'scrubs'} CLOUD_CODE_URL=${value}`, async (t) => {
+    if (process.platform === 'win32') return t.skip('posix only');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyoffposix-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, 'agy'), '#!/usr/bin/env bash\necho "CCU=[${CLOUD_CODE_URL:-}]"\n');
+    fs.chmodSync(path.join(dir, 'agy'), 0o755);
+    for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
+    const out = await runAsync(path.join(RENDER_DIR, 'agy'), [], {
+      env: { ...process.env, CLOUD_CODE_URL: value, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [RENDER_DIR, dir, '/usr/bin:/bin', NODE_DIR].join(path.delimiter) }
+    });
+    assert.ok(out.stdout.includes(`CCU=[${kept ? value : ''}]`), out.stdout);
+    assert.doesNotMatch(out.stderr, NOTICE);
+  });
+}

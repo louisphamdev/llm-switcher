@@ -2,7 +2,8 @@
   "port": 3456,
   "activeProfiles": {
     "claude": "claude-default",
-    "codex": "codex-default"
+    "codex": "codex-default",
+    "agy": "agy-default"
   },
   "blindfold": {
     "port": 3457
@@ -39,6 +40,17 @@
         "main": "gemini-3.8-flash",
         "review": "gemini-3.7-flash-medium",
         "subagent": "gemini-3.6-flash-low"
+      }
+    },
+    "agy-default": {
+      "name": "agy default (Antigravity CLI -> intact Antigravity pool, Bifrost)",
+      "mode": "convert",
+      "tool": "agy",
+      "outFormat": "openai-chat",
+      "baseURL": "https://YOUR-INTACT-HOST/v1",
+      "apiKey": "sk-REPLACE-ME",
+      "defaultModels": {
+        "main": "antigravity/*"
       }
     }
   },

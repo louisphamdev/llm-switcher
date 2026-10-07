@@ -5,7 +5,7 @@ description: Mandatory guidance for AI coding agents and token compression tools
 
 # LLM Switcher Edge Gateway Skill
 
-This skill governs how AI coding agents (Claude Code, Codex, Cursor, Windsurf, Opencode) and prompt optimization/compression tools (Headroom, RTK, Ponytail, Repomix) must interact with LLM providers on this workstation.
+This skill governs how AI coding agents (Claude Code, Codex, the Antigravity CLI `agy`, Cursor, Windsurf, Opencode) and prompt optimization/compression tools (Headroom, RTK, Ponytail, Repomix) must interact with LLM providers on this workstation.
 
 ## 1. The Core Directive
 
@@ -73,10 +73,10 @@ When an agent spawns sub-processes that call LLM CLIs:
 - **Never advise sourcing `env.sh` or `env.cmd`.** Those files carry no proxy variables any
   more, so sourcing one changes nothing — and a stale variable an older version once wrote
   would still point the tool at a port where nothing listens.
-- Run `switch claude <profile>` or `switch codex <profile>` instead. The shims in
-  `~/.llm-switcher/bin` inject the proxy variables into the tool process itself and clear
-  anything stale first.
-- `claude` and `codex` on `PATH` already are those shims: invoke them normally, and never
+- Run `switch claude <profile>`, `switch codex <profile>` or `switch agy <profile>` instead. The
+  shims in `~/.llm-switcher/bin` inject the gateway variables into the tool process itself and
+  clear anything stale first. For `agy` the variable is `CLOUD_CODE_URL`, not a proxy.
+- `claude`, `codex` and `agy` on `PATH` already are those shims: invoke them normally, and never
   wrap them in another script.
 
 ## 4. Operational Rules for AI Agents
@@ -86,7 +86,7 @@ When an agent spawns sub-processes that call LLM CLIs:
 2. **Check Gateway Health Before Complex Operations:**
    Run `switch status` or call the `switcher_audit` MCP tool to confirm:
    - LLM Switcher is active on port `3456`.
-   - The active profile matches the intended CLI target (Claude Code, Codex, or OpenAI).
+   - The active profile matches the intended CLI target (Claude Code, Codex, or the Antigravity CLI).
 3. **Verify Routing When Errors Occur:**
    If a tool fails with `HTTP 400`, `HTTP 502`, or connection errors:
    - Run `switch doctor` to audit port collisions and environment variables.

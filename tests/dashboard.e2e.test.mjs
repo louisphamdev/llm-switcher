@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import { launchBrowser, skipReason } from './cdp.mjs';
 import { startDashboardFixture } from './dashboard-fixture.mjs';
 
-const TOOLS = ['claude', 'codex'];
-const LABEL = { claude: 'Claude', codex: 'Codex' };
+const TOOLS = ['claude', 'codex', 'agy'];
+const LABEL = { claude: 'Claude', codex: 'Codex', agy: 'agy' };
 const MASKED = '__LLM_SWITCHER_KEEP_KEY__';
 // A profile's `tool` in config.json is one tool, or nothing for a profile that serves both.
-const VALID_TOOLS = [undefined, null, 'claude', 'codex'];
+const VALID_TOOLS = [undefined, null, 'claude', 'codex', 'agy'];
 
 describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   let fx, browser, page;
@@ -20,11 +20,51 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     fx = await startDashboardFixture();
     browser = await launchBrowser();
     page = await browser.newPage();
+    // Once per tab, as the launcher of `switch ui` does; the tab keeps the token from then on.
+    await page.goto(fx.tokenUrl());
+  });
+
+  // Close the tab itself, then raise the main one: a tab left in the background gets throttled
+  // timers and no animation frames, which stalls every later test.
+  async function closeTab(tab) {
+    await tab.send('Page.close').catch(() => {});
+    tab.close();
+    await page.send('Page.bringToFront');
+  }
+
+  it('a new tab, opened from a bookmark after switch ui ran once, shows the profiles', async () => {
+    const fresh = await browser.newPage();
+    try {
+      await fresh.goto(fx.dashboardUrl + '#/routes');
+      await fresh.waitFor(`document.querySelectorAll('#profiles-grid .pcard').length === ${Object.keys(fx.config().profiles).length}`, 'the profile cards');
+    } finally {
+      await closeTab(fresh);
+    }
+  });
+
+  it('a browser that never got the launcher token says so on the page, not only in a toast', async () => {
+    const fresh = await browser.newPage();
+    try {
+      await fresh.goto(fx.dashboardUrl + '#/routes');
+      await fresh.evaluate(`localStorage.clear(), sessionStorage.clear()`);
+      await fresh.reload();
+      await fresh.waitFor(`/switch ui/.test(document.getElementById('status-sub')?.textContent || '')`, 'the switch ui hint in the header');
+    } finally {
+      await closeTab(fresh);
+      // The storage is shared by the origin, so the main tab needs the token again. A #hash change
+      // alone fires no load event, so leave the page first.
+      await page.goto('about:blank');
+      await page.goto(fx.tokenUrl());
+    }
   });
 
   after(async () => {
-    await browser?.close();
-    await fx?.stop();
+    // The gateway must stop even when the browser cleanup throws, or it holds this process open.
+    try {
+      await browser?.close();
+    } finally {
+      await fx?.stop();
+    }
   });
 
   beforeEach(async () => {
@@ -59,8 +99,8 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   const readScreen = () => page.evaluate(`(() => {
     const text = id => document.getElementById(id)?.textContent.trim();
     return {
-      badges: { claude: text('badge-slot-claude'), codex: text('badge-slot-codex') },
-      selects: { claude: document.getElementById('select-slot-claude').value, codex: document.getElementById('select-slot-codex').value },
+      badges: { claude: text('badge-slot-claude'), codex: text('badge-slot-codex'), agy: text('badge-slot-agy') },
+      selects: { claude: document.getElementById('select-slot-claude').value, codex: document.getElementById('select-slot-codex').value, agy: document.getElementById('select-slot-agy').value },
       aside: text('status-aside-indicator'),
       cards: [...document.querySelectorAll('#profiles-grid .pcard')].map(c => ({
         key: c.querySelector('.mono.faint').textContent.trim(),
@@ -75,8 +115,8 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     const active = cfg.activeProfiles;
     const on = TOOLS.filter(t => active[t]);
     return {
-      badges: { claude: active.claude || 'OFF', codex: active.codex || 'OFF' },
-      selects: { claude: active.claude || '', codex: active.codex || '' },
+      badges: { claude: active.claude || 'OFF', codex: active.codex || 'OFF', agy: active.agy || 'OFF' },
+      selects: { claude: active.claude || '', codex: active.codex || '', agy: active.agy || '' },
       aside: on.length ? `Active (${on.length})` : 'Idle',
       cards: Object.keys(cfg.profiles).map(key => {
         const tools = TOOLS.filter(t => active[t] === key);
@@ -100,7 +140,8 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   async function expectScreenMatchesDisk(step, opts) {
     const cfg = fx.config();
     const served = (await fx.api('/api/status')).json;
-    assert.deepEqual(served.activeProfiles, cfg.activeProfiles, `${step}: the gateway reports routes that are not on disk`);
+    // A config written before agy existed has no agy key: on disk that means agy is off.
+    assert.deepEqual(served.activeProfiles, { agy: null, ...cfg.activeProfiles }, `${step}: the gateway reports routes that are not on disk`);
     assert.deepEqual(await readScreen(), expectedScreen(cfg), `${step}: the page and the file disagree`);
     expectQuiet(step, opts);
   }
@@ -139,22 +180,22 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     it('turns one profile off and on again for the tool it serves, and leaves the other tool alone', async () => {
       await act(() => page.click(switchOf('intact-claude')));
       assert.match(await toast(), /intact-claude deactivated/);
-      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: 'intact-codex' });
+      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: 'intact-codex', agy: null });
       await expectScreenMatchesDisk('claude profile off');
 
       await act(() => page.click(switchOf('intact-claude')));
       assert.match(await toast(), /intact-claude activated/);
-      assert.deepEqual(fx.config().activeProfiles, { claude: 'intact-claude', codex: 'intact-codex' });
+      assert.deepEqual(fx.config().activeProfiles, { claude: 'intact-claude', codex: 'intact-codex', agy: null });
       await expectScreenMatchesDisk('claude profile back on');
     });
 
     it('turns a profile that serves both tools on for both, and off again', async () => {
       await act(() => page.click(switchOf('shared')));
-      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: 'shared' });
+      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: 'shared', agy: null });
       await expectScreenMatchesDisk('shared on');
 
       await act(() => page.click(switchOf('shared')));
-      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null });
+      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null, agy: null });
       await expectScreenMatchesDisk('shared off');
     });
 
@@ -173,11 +214,11 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   describe('the route list of each tool', () => {
     it('sets a route for one tool and can return it to the official endpoint', async () => {
       await act(() => page.select('#select-slot-claude', 'shared'));
-      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: 'intact-codex' });
+      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: 'intact-codex', agy: null });
       await expectScreenMatchesDisk('claude to shared');
 
       await act(() => page.select('#select-slot-codex', ''));
-      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: null });
+      assert.deepEqual(fx.config().activeProfiles, { claude: 'shared', codex: null, agy: null });
       await expectScreenMatchesDisk('codex to official');
     });
 
@@ -191,7 +232,7 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
   describe('the buttons that turn every route off and on', () => {
     it('"Use official endpoints" in the page header turns every route off', async () => {
       await act(() => page.clickText('#ph-actions button', 'Use official endpoints'));
-      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null });
+      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null, agy: null });
       await expectScreenMatchesDisk('all off');
       const labels = await page.evaluate(`[...document.querySelectorAll('#ph-actions button')].map(b => b.textContent.trim())`);
       assert.deepEqual(labels, ['+ Add Profile', 'Activate compatible routes', 'Refresh']);
@@ -200,13 +241,13 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     it('turning every route off and on again gives each tool its route back', async () => {
       await act(() => page.clickText('#ph-actions button', 'Use official endpoints'));
       await act(() => page.clickText('#ph-actions button', 'Activate compatible routes'));
-      assert.deepEqual(fx.config().activeProfiles, { claude: 'intact-claude', codex: 'intact-codex' }, 'off and on lost a route');
+      assert.deepEqual(fx.config().activeProfiles, { claude: 'intact-claude', codex: 'intact-codex', agy: null }, 'off and on lost a route');
       await expectScreenMatchesDisk('off and on');
     });
 
     it('"Toggle All" in the sidebar does the same as the header button', async () => {
       await act(() => page.click('.prefs button.btn-outline'));
-      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null });
+      assert.deepEqual(fx.config().activeProfiles, { claude: null, codex: null, agy: null });
       await expectScreenMatchesDisk('sidebar toggle');
     });
   });
@@ -747,6 +788,23 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
         assert.ok(box.navBottom <= box.asideBottom + 1,
           `the navigation is drawn outside the sidebar (nav bottom ${box.navBottom}, sidebar bottom ${box.asideBottom}, sidebar height ${box.asideHeight})`);
         assert.equal(await page.visible('aside nav a'), true, 'no navigation link is visible at 400 px');
+      } finally {
+        await page.resize(1280, 900);
+      }
+    });
+
+    it('shows every dialog tab whole on a phone', async () => {
+      await page.resize(390, 844);
+      try {
+        await editProfile('intact-claude');
+        await page.waitFor('document.getElementById("profile-modal-overlay").style.display === "grid"', 'the dialog');
+        const cut = await page.evaluate(`(() => {
+          const bar = document.querySelector('#profile-form .tabs').getBoundingClientRect();
+          return [...document.querySelectorAll('#profile-form .tabs .tab-btn')]
+            .filter(b => { const r = b.getBoundingClientRect(); return r.left < bar.left - 0.5 || r.right > bar.right + 0.5; })
+            .map(b => b.textContent.trim());
+        })()`);
+        assert.deepEqual(cut, [], 'these tabs are cut off by the tab bar at 390 px');
       } finally {
         await page.resize(1280, 900);
       }

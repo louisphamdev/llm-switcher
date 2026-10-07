@@ -11,7 +11,8 @@ export const CURRENT_VERSION = (() => {
 
 const REGISTRY_URL = 'https://registry.npmjs.org/llm-switcher/latest';
 const CACHE_FILE = 'version-check.json';
-const MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// A release shows on the dashboard within minutes; one small GET per 5 minutes.
+const MAX_AGE_MS = 5 * 60 * 1000;
 
 const parse = (v) => {
   const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(v ?? ''));
@@ -30,7 +31,7 @@ export function isNewer(latest, current) {
 const updateCommand = () => (fs.existsSync(path.join(ROOT, '.git')) ? `git -C "${ROOT}" pull` : 'npm install -g llm-switcher@latest');
 
 /**
- * Asks the registry at most once per 12 hours; a failed ask also waits, so an offline machine is not
+ * Asks the registry at most once per 5 minutes; a failed ask also waits, so an offline machine is not
  * slowed on every call. Never throws: without an answer there is simply no notice.
  */
 export async function checkForUpdate({ stateDir, url = process.env.LLM_SWITCHER_REGISTRY_URL || REGISTRY_URL } = {}) {

@@ -66,8 +66,11 @@ ${envBlock}  <key>StandardOutPath</key>
 // Task Scheduler reads the command and its arguments from two elements, so no path goes through
 // the quoting rules of a /TR command line. A task made with /TR also stops after 72 hours by
 // default; PT0S removes that limit.
-export function scheduledTaskXml({ nodeBin, script, port, userId, autoupdate = false }) {
-  const args = autoupdate ? `"${script}" --port ${port} --autoupdate` : `"${script}" --port ${port}`;
+// node.exe is a console program: started directly at logon it opens a terminal window, and closing that
+// window stops the gateway. conhost --headless gives it a console that nobody sees.
+export function scheduledTaskXml({ nodeBin, script, port, userId, autoupdate = false, systemRoot = process.env.SystemRoot || 'C:\\Windows' }) {
+  const conhost = path.win32.join(systemRoot, 'System32', 'conhost.exe');
+  const args = `--headless "${nodeBin}" "${script}" --port ${port}${autoupdate ? ' --autoupdate' : ''}`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -95,7 +98,7 @@ export function scheduledTaskXml({ nodeBin, script, port, userId, autoupdate = f
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${xmlEscape(nodeBin)}</Command>
+      <Command>${xmlEscape(conhost)}</Command>
       <Arguments>${xmlEscape(args)}</Arguments>
     </Exec>
   </Actions>

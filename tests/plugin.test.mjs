@@ -20,9 +20,11 @@ function dirs(t) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const claudeSkillsDir = path.join(home, '.claude', 'skills');
   const codexHome = path.join(home, '.codex');
+  // Every tool gets a home of its own here: a test must never write the hooks of this machine.
+  const agyHome = path.join(home, '.gemini', 'antigravity-cli');
   fs.mkdirSync(claudeSkillsDir, { recursive: true });
   fs.mkdirSync(codexHome, { recursive: true });
-  return { home, claudeSkillsDir, codexHome, opts: { claudeSkillsDir, codexHome } };
+  return { home, claudeSkillsDir, codexHome, agyHome, opts: { claudeSkillsDir, codexHome, agyHome } };
 }
 
 const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -55,7 +57,7 @@ test('install writes a plugin for Claude Code and a hooks file for Codex, and re
   const { claudeSkillsDir, codexHome, opts } = dirs(t);
   const first = installPlugin(opts);
   assert.deepEqual(first.failed, [], 'nothing failed');
-  assert.deepEqual(first.installed.sort(), ['claude', 'codex']);
+  assert.deepEqual(first.installed.sort(), ['agy', 'claude', 'codex']);
 
   const manifest = path.join(claudeSkillsDir, 'llm-switcher-status', '.claude-plugin', 'plugin.json');
   assert.ok(fs.existsSync(manifest), 'the manifest is what makes the folder a plugin');
