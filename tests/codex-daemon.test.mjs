@@ -12,7 +12,7 @@ process.env.HOME = path.join(root, 'home');
 process.env.LLM_SWITCHER_STATE_DIR = path.join(root, 'state');
 delete process.env.CODEX_HOME;
 fs.mkdirSync(process.env.LLM_SWITCHER_STATE_DIR, { recursive: true });
-const { restartCodexDaemon, applyLaunchState, clearLaunchState, emptyToolEnvFiles, STATE_DIR } = await import('../state.mjs');
+const { restartCodexDaemon, applyLaunchState, clearLaunchState, emptyToolEnvFiles, computeLaunchState, STATE_DIR } = await import('../state.mjs');
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 // A machine where the codex shim routes through `stateDir` and a daemon is running.
@@ -42,8 +42,37 @@ test('a route change restarts the running daemon with the new Codex variables', 
   assert.equal(m.calls[0].cmd, m.bin);
   assert.deepEqual(m.calls[0].args, ['app-server', 'daemon', 'restart']);
   assert.equal(m.calls[0].env.HTTPS_PROXY, 'http://127.0.0.1:3457');
-  assert.equal(m.calls[0].env.CODEX_CA_CERTIFICATE, '/ca.pem');
   assert.equal(m.calls[0].env.PATH, '/bin');
+});
+
+// Codex reads this path when it builds its TLS client and cannot start without it, and its daemon
+// keeps the environment it started with. A path that is not on disk therefore does not route Codex,
+// it takes Codex down, and the daemon then fails its own update with "Failed to read CA certificate
+// file" -- which is what a caller sees as a daemon error while using Codex.
+test('a CA that is not on disk is never handed to Codex', () => {
+  const m = machine('/switcher/state');
+  restartCodexDaemon(ROUTE, { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' } });
+  assert.equal(m.calls[0].env.CODEX_CA_CERTIFICATE, undefined,
+    'a CA the switcher never built must not reach the daemon');
+});
+
+test('a CA that is on disk is passed through, so the interceptor still works', () => {
+  const m = machine('/switcher/state');
+  const ca = path.join(m.home, 'certs', 'ca.pem');
+  fs.mkdirSync(path.dirname(ca), { recursive: true });
+  fs.writeFileSync(ca, '-----BEGIN CERTIFICATE-----\n');
+  restartCodexDaemon([...ROUTE.filter(([k]) => k !== 'CODEX_CA_CERTIFICATE'), ['CODEX_CA_CERTIFICATE', ca]],
+    { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' }, ca });
+  assert.equal(m.calls[0].env.CODEX_CA_CERTIFICATE, ca, 'a CA that exists is the whole point of the route');
+});
+
+// The route a restart hands over is the last word: the pairs win, so a CA in them reaches the daemon
+// whatever the environment already held. This is the path that ends in a dead daemon.
+test('the route written into env-codex carries the CA only when it exists', () => {
+  const st = computeLaunchState({ activeProfiles: { codex: 'p' }, profiles: { p: { tool: 'codex', baseURL: 'http://x/v1', apiKey: 'k' } } }, 3456);
+  const withCa = st.envCodex.find(([k]) => k === 'CODEX_CA_CERTIFICATE');
+  assert.ok(!withCa || fs.existsSync(withCa[1]),
+    `env-codex points Codex at ${withCa ? withCa[1] : 'nothing'}; a missing CA stops Codex entirely`);
 });
 
 test('switching Codex off restarts the daemon without the switcher variables, and keeps the user\'s own proxy', () => {

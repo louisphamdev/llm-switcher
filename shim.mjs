@@ -96,6 +96,13 @@ if [ -O "$SWITCHER_DIR" ] && [ -O "$SWITCHER_DIR/${envFile}" ] && [ -f "$SWITCHE
 else
   TOOL_ACTIVE=0
 fi
+# Codex builds its TLS client from this at startup and cannot start at all without reading it, so a
+# CA that is not on disk takes Codex down instead of routing it. The shim cannot build the file, but
+# it can refuse to hand over a path that is already dead, which leaves Codex on the system roots.
+if [ -n "\${CODEX_CA_CERTIFICATE:-}" ] && [ ! -f "\${CODEX_CA_CERTIFICATE}" ]; then
+  printf '[llm-switcher] %s not found; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
+  unset CODEX_CA_CERTIFICATE
+fi
 ${name !== 'agy' ? '' : `
 # The gateway proves itself before agy's token goes to it; any doubt keeps agy on its official endpoint.
 if [ "$TOOL_ACTIVE" = "1" ] && ! node "${GATEWAY_CHECK}" "\${CLOUD_CODE_URL:-}" >/dev/null 2>&1; then

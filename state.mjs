@@ -1366,7 +1366,14 @@ export function computeLaunchState(cfg, port) {
   // NODE_EXTRA_CA_CERTS is deliberately absent from env-claude: the shim decides it at launch,
   // because only then does it know whether the user brought a CA of their own (R2).
   if (claude) state.envClaude = proxyPairs();
-  if (codex) state.envCodex = [...proxyPairs(), ['CODEX_CA_CERTIFICATE', paths.blindfoldCA]];
+  // Codex builds its TLS client from CODEX_CA_CERTIFICATE the moment it starts, and a path it cannot
+  // read is fatal: it dies before its first request, and its long-lived daemon then fails its own
+  // update with "Failed to read CA certificate file". So the CA is only offered when it is really
+  // there. A missing one leaves Codex on the system roots, which is a working Codex rather than none.
+  if (codex) {
+    state.envCodex = proxyPairs();
+    if (fs.existsSync(paths.blindfoldCA)) state.envCodex.push(['CODEX_CA_CERTIFICATE', paths.blindfoldCA]);
+  }
   // agy reaches the gateway directly over plain http: no proxy and no CA (Go on Windows reads only
   // the system store). Remote control keeps its own host, so it never crosses the switcher.
   if (agy) state.envAgy = [['CLOUD_CODE_URL', `http://127.0.0.1:${port}`]];
@@ -1516,8 +1523,12 @@ export function restartCodexDaemon(pairs, {
   const env = { ...baseEnv };
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) if (LOOPBACK_URL.test(env[k] || '')) delete env[k];
   for (const k of ['NO_PROXY', 'no_proxy']) if (env[k] === '127.0.0.1,localhost') delete env[k];
-  if (env.CODEX_CA_CERTIFICATE === ca) delete env.CODEX_CA_CERTIFICATE;
+  // The daemon keeps the environment it started with, so a CA it cannot read outlives the switcher
+  // writing it: the daemon comes back up unable to build a TLS client and fails its own update with
+  // "Failed to read CA certificate file". The check has to come after the route is applied, because a
+  // dead CA can arrive in the route as well as in the environment it was already carrying.
   for (const [k, v] of pairs) env[k] = v;
+  if (!env.CODEX_CA_CERTIFICATE || !fs.existsSync(env.CODEX_CA_CERTIFICATE)) delete env.CODEX_CA_CERTIFICATE;
 
   try {
     const child = spawnFn(bin, ['app-server', 'daemon', 'restart'], { env, stdio: 'ignore', detached: true });
