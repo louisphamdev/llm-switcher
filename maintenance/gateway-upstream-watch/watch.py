@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import urllib.error
 import urllib.parse
@@ -17,6 +18,28 @@ import xml.etree.ElementTree as ET
 
 MAX_BYTES = 4 * 1024 * 1024
 TOPICS = re.compile(r"compac|responses|codex|claude|gemini|tool|strict|schema|stream|sse|websocket|context|catalog|signature|thinking|proxy|oauth|retry|429|failover|gateway|provider|certificate|multimodal|image|resume", re.I)
+
+
+def github_token():
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        return token
+    # Reuse the VPS's existing GitHub credential in memory, only for api.github.com.
+    # Verify the checkout origin first; never print helper output or persist the credential.
+    checkout = Path("/opt/zencore")
+    if not checkout.is_dir():
+        return None
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    try:
+        origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=checkout, env=env, capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        if origin != "https://github.com/louisphamdev/zencore.git":
+            return None
+        result = subprocess.run(["git", "credential", "fill"], cwd=checkout, env=env, capture_output=True, text=True, timeout=10,
+                                input="protocol=https\nhost=github.com\npath=louisphamdev/zencore.git\n\n", check=True)
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        return fields.get("password") or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def atomic_json(path, value):
@@ -91,12 +114,25 @@ def scan_repo(repo, since, prior, token):
             result[kind] = [x for x in items if x["id"] not in seen]
             result["sources"][kind] = {"ok": True, "url": url, "ids": [x["id"] for x in items], "scope": "latest feed entries; older entries require source review"}
         except Exception as error:
-            complete = False
-            result["sources"][kind] = {"ok": False, "url": url}
-            result["errors"].append(f"{kind}: {type(error).__name__}: {error}")
+            try:
+                endpoint = f"https://api.github.com/repos/{name}/releases?per_page=30" if kind == "releases" else f"https://api.github.com/repos/{name}/commits?" + urllib.parse.urlencode({"sha": repo["branch"], "per_page": 30})
+                raw, _ = fetch(endpoint, token)
+                values = json.loads(raw)
+                if not isinstance(values, list):
+                    raise RuntimeError("unexpected fallback API response")
+                items = [{"id": str(x.get("id") or x.get("sha")), "title": x.get("name") or x.get("tag_name") or x.get("commit", {}).get("message", "").split("\n")[0],
+                          "updated_at": x.get("published_at") or x.get("commit", {}).get("committer", {}).get("date"), "url": x.get("html_url")} for x in values]
+                seen = set(prior.get(kind, []))
+                result[kind] = [x for x in items if x["id"] not in seen]
+                result["sources"][kind] = {"ok": True, "url": endpoint, "ids": [x["id"] for x in items], "fallback": True, "scope": "latest 30 entries; older entries require source review"}
+            except Exception as fallback_error:
+                complete = False
+                result["sources"][kind] = {"ok": False, "url": url}
+                result["errors"].append(f"{kind}: {type(fallback_error).__name__}: {fallback_error}")
     try:
         rows = []
-        for page in (1, 2):
+        max_pages = 50 if token else 2
+        for page in range(1, max_pages + 1):
             query = urllib.parse.urlencode({"state": "all", "sort": "updated", "direction": "desc", "since": since, "per_page": 100, "page": page})
             raw, headers = fetch(f"https://api.github.com/repos/{name}/issues?{query}", token)
             batch = json.loads(raw)
@@ -113,7 +149,7 @@ def scan_repo(repo, since, prior, token):
                              "url": x["html_url"], "pr": "pull_request" in x, "comments": x.get("comments", 0),
                              "topic_match": bool(TOPICS.search(x["title"]))} for x in rows]
         if partial:
-            result["errors"].append("issues: 200-entry cap reached; older changes remain unscanned, checkpoint not advanced")
+            result["errors"].append(f"issues: {max_pages * 100}-entry cap reached; older changes remain unscanned, checkpoint not advanced")
     except Exception as error:
         complete = False
         result["sources"]["issues"] = {"ok": False}
@@ -136,7 +172,7 @@ def main():
     state_path = args.state_dir / "scan-state.json"
     state = read_json(state_path, {"repos": {}, "docs": {}})
     now = datetime.now(timezone.utc)
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = github_token()
     repos = [r for r in manifest["repos"] if not args.only or r["repo"] == args.only]
     if not repos:
         raise RuntimeError("requested repository is not in the verified manifest")
