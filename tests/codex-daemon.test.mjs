@@ -12,6 +12,7 @@ import { buildCerts } from '../blindfold/certs.mjs';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-codex-daemon-'));
 process.env.HOME = path.join(root, 'home');
 process.env.LLM_SWITCHER_STATE_DIR = path.join(root, 'state');
+process.env.LLM_SWITCHER_BLINDFOLD_CERTS = path.join(root, 'certs');
 delete process.env.CODEX_HOME;
 fs.mkdirSync(process.env.LLM_SWITCHER_STATE_DIR, { recursive: true });
 const { restartCodexDaemon, applyLaunchState, clearLaunchState, emptyToolEnvFiles, computeLaunchState, STATE_DIR, INTERCEPT_HOSTS, usableCACertificate } = await import('../state.mjs');
