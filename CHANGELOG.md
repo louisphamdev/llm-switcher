@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.3 — 2026-10-08
+
+- **Interactive Summarization Model Selection & Presets:** Replace raw text input for Idle Compaction's summarization model with a fully searchable combobox dropdown and quick 1-click preset chips. Users can pick directly from deterministic heuristic mode (`""`), slot aliases (`haiku`, `subagent`, `sonnet`, `main`), configured profile models (`zencore/*`, `codex/*`), and discovered catalog models, or type to filter in real-time. Selection automatically saves and updates active highlights across both light and dark themes.
+
 ## Release 1.6.2 — 2026-10-08
 
 - **Per-Model Slot Target Thinking Effort:** Support granular reasoning effort configuration per model slot (`profile.modelEfforts`). Individual slot selectors in the dashboard allow setting target effort levels (`auto`, `none`, `low`, `medium`, `high`, `xhigh`, `max`) independently for each model tier (e.g. Sonnet, Opus, Haiku, Codex roles) with automatic fallback to profile-level defaults.

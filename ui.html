@@ -551,6 +551,7 @@
 
     /* Model slot combobox: one listbox per slot, provider prefix dimmed, match in the accent. */
     .combo { position: relative; }
+    .combo[data-open] { z-index: 50; }
     .slot-note { font-size: 0.72rem; color: var(--faint); }    /* Kept in the page when empty: a live region added later is often not read. */
     .slot-note:empty { margin-top: -0.25rem; }
     .combo > input { padding-right: 2.25rem; font-family: var(--font-mono); font-size: 0.8rem; }
@@ -1104,13 +1105,22 @@
                 </div>
               </div>
 
-              <div class="row">
-                <div class="who">
+              <div class="row" style="align-items:flex-start;">
+                <div class="who" style="padding-top:0.25rem;">
                   <div class="l">Summarization Model</div>
-                  <div class="meta">Upstream model ID to generate turn summaries (empty = deterministic truncation)</div>
+                  <div class="meta">Select from discovered/profile models or enter custom ID (empty = deterministic truncation)</div>
                 </div>
-                <div style="min-width:16rem; flex:1; max-width:26rem; margin-left:auto;">
-                  <input type="text" id="idle-compact-model" placeholder="empty = no model call (deterministic)" maxlength="512" onchange="saveIdleCompact()" style="font-family:var(--font-mono); font-size:0.8rem;" title="Upstream model used to generate turn summary text">
+                <div style="min-width:18rem; flex:1; max-width:28rem; margin-left:auto; display:flex; flex-direction:column; gap:0.4rem;">
+                  <div class="combo" id="combo-compact-model">
+                    <input type="text" id="idle-compact-model" placeholder="empty = deterministic truncation" maxlength="512" onchange="saveIdleCompact()" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="idle-compact-model-list" autocomplete="off" spellcheck="false" style="font-family:var(--font-mono); font-size:0.8rem;" title="Upstream model used to generate turn summary text">
+                    <button type="button" class="combo-toggle" tabindex="-1" aria-label="Show available summary models">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+                    </button>
+                    <ul class="combo-list" id="idle-compact-model-list" role="listbox" aria-label="Available summarization models" hidden></ul>
+                  </div>
+                  <div id="compact-model-presets" style="display:flex; flex-wrap:wrap; align-items:center; gap:0.35rem;">
+                    <!-- Quick Presets rendered dynamically -->
+                  </div>
                 </div>
               </div>
 
@@ -2062,7 +2072,10 @@
       const elKb = document.getElementById('idle-compact-kb');
       if (elKb) elKb.value = (c.minBytes ?? 65536) / 1024;
       const elModel = document.getElementById('idle-compact-model');
-      if (elModel) elModel.value = c.model || '';
+      if (elModel) {
+        elModel.value = c.model || '';
+        updateCompactModelPresets(c.model || '');
+      }
       const elCodex = document.getElementById('idle-compact-codex');
       if (elCodex) elCodex.checked = !!c.codex;
       const elKeep = document.getElementById('idle-compact-keep');
@@ -2112,7 +2125,62 @@
       }
     }
 
+    async function ensureCatalogLoaded() {
+      if (cachedCatalog) return cachedCatalog;
+      try {
+        const res = await api('/api/catalog');
+        if (res.ok) cachedCatalog = await res.json();
+      } catch {}
+      return cachedCatalog;
+    }
+
+    function setCompactModel(model) {
+      const inp = document.getElementById('idle-compact-model');
+      if (inp) {
+        inp.value = model;
+        saveIdleCompact();
+        updateCompactModelPresets(model);
+      }
+    }
+
+    function updateCompactModelPresets(currentModel) {
+      const container = document.getElementById('compact-model-presets');
+      if (!container) return;
+      if (currentModel === undefined) {
+        currentModel = document.getElementById('idle-compact-model')?.value.trim() || '';
+      }
+
+      const presets = [
+        { id: '', label: 'Deterministic (none)' },
+        { id: 'haiku', label: 'haiku' },
+        { id: 'subagent', label: 'subagent' }
+      ];
+
+      const profiles = state.config?.profiles || {};
+      let added = 0;
+      for (const p of Object.values(profiles)) {
+        if (p.defaultModels) {
+          for (const [slot, m] of Object.entries(p.defaultModels)) {
+            if (m && added < 2 && !presets.some(x => x.id === m)) {
+              presets.push({ id: m, label: m.includes('/') ? m.split('/')[1] : m });
+              added++;
+            }
+          }
+        }
+      }
+
+      container.innerHTML = `<span class="hint" style="font-size:0.75rem; align-self:center; margin-right:0.2rem;">Quick Presets:</span>` +
+        presets.map(p => {
+          const active = (p.id === currentModel);
+          const style = active
+            ? 'padding:0.18rem 0.5rem; font-size:0.75rem; border-color:var(--accent); color:var(--accent); background:var(--accent-soft); font-weight:600;'
+            : 'padding:0.18rem 0.5rem; font-size:0.75rem;';
+          return `<button type="button" class="btn btn-outline btn-sm" style="${style}" onclick="setCompactModel('${escapeHtml(p.id)}')">${escapeHtml(p.label)}</button>`;
+        }).join('');
+    }
+
     async function loadIdleCompact() {
+      ensureCatalogLoaded();
       try {
         const r = await api('/api/idle-compact');
         if (r.ok) showIdleCompact((await r.json()).idleCompact);
@@ -2789,7 +2857,14 @@
     function wireCombo(combo) {
       const input = combo.querySelector('input');
       combo.activeIndex = -1;
-      input.addEventListener('input', () => { combo.dataset.filter = '1'; combo.activeIndex = -1; openCombo(combo); });
+      input.addEventListener('input', () => {
+        combo.dataset.filter = '1';
+        combo.activeIndex = -1;
+        openCombo(combo);
+        if (input.id === 'idle-compact-model') {
+          updateCompactModelPresets(input.value.trim());
+        }
+      });
       input.addEventListener('keydown', onComboKeydown);
       input.addEventListener('blur', () => closeCombo(combo));
       // Keep the focus in the field while the list or the arrow is used.
@@ -2853,6 +2928,12 @@
       const list = combo.querySelector('.combo-list');
       const q = combo.dataset.filter ? input.value.trim().toLowerCase() : '';
       const current = input.value.trim();
+
+      if (input.id === 'idle-compact-model') {
+        renderCompactModelOptions(combo, q, current);
+        return;
+      }
+
       const matches = loadedModels.filter(m => !q || m.toLowerCase().includes(q)).slice(0, 200);
       combo.matches = matches;
       if (!loadedModels.length) {
@@ -2876,6 +2957,119 @@
       setComboActive(combo, combo.activeIndex);
     }
 
+    function getAvailableCompactModels() {
+      const items = [];
+      const seen = new Set();
+
+      const add = (id, label, desc, category) => {
+        if (!seen.has(id)) {
+          seen.add(id);
+          items.push({ id, label: label || id, desc: desc || '', category });
+        }
+      };
+
+      // 1. Deterministic option (empty string)
+      add('', 'Deterministic Truncation (no external call)', 'Pure heuristic context truncation · Zero latency & zero tokens', 'Deterministic');
+
+      // 2. Profile role/slot aliases (recommended for routing)
+      add('haiku', 'haiku (Claude Haiku Slot)', 'Auto-resolves to active profile Claude Haiku model', 'Slot Aliases');
+      add('subagent', 'subagent (Codex Subagent Slot)', 'Auto-resolves to active profile Codex Subagent model', 'Slot Aliases');
+      add('sonnet', 'sonnet (Claude Sonnet Slot)', 'Auto-resolves to active profile Claude Sonnet model', 'Slot Aliases');
+      add('main', 'main (Codex Main Slot)', 'Auto-resolves to active profile Codex Main model', 'Slot Aliases');
+
+      // 3. Models configured in current profiles
+      const profiles = state.config?.profiles || {};
+      for (const [profKey, p] of Object.entries(profiles)) {
+        const profName = p.name || profKey;
+        if (p.defaultModels) {
+          for (const [slot, m] of Object.entries(p.defaultModels)) {
+            if (m) add(m, m, `${profName} · ${slot} slot`, 'Profile Models');
+          }
+        }
+        if (Array.isArray(p.publicModels)) {
+          for (const m of p.publicModels) {
+            if (m) add(m, m, `${profName}`, 'Profile Models');
+          }
+        }
+      }
+
+      // 4. Discovered Catalog models
+      if (cachedCatalog) {
+        if (Array.isArray(cachedCatalog.claude?.models)) {
+          for (const m of cachedCatalog.claude.models) {
+            if (m.id) add(m.id, m.id, `Claude Catalog · ${m.tier || ''}`, 'Catalog');
+          }
+        }
+        if (Array.isArray(cachedCatalog.codex?.models)) {
+          for (const m of cachedCatalog.codex.models) {
+            if (m.id) add(m.id, m.id, `Codex Catalog · ${m.role || ''}`, 'Catalog');
+          }
+        }
+      }
+
+      // 5. Popular lightweight models
+      const popular = [
+        { id: 'zencore/muse-spark-1.3-contributor-free', desc: 'ZenCore contributor fast model' },
+        { id: 'zencore/exo-free', desc: 'ZenCore free pool fast model' },
+        { id: 'claude-3-5-haiku-20241022', desc: 'Anthropic lightweight summarizer' },
+        { id: 'gpt-4o-mini', desc: 'OpenAI low-cost summarizer' },
+        { id: 'gemini-2.5-flash', desc: 'Google Gemini fast summarizer' }
+      ];
+      for (const p of popular) {
+        add(p.id, p.id, p.desc, 'Recommended');
+      }
+
+      return items;
+    }
+
+    function renderCompactModelOptions(combo, q, current) {
+      const input = combo.querySelector('input');
+      const list = combo.querySelector('.combo-list');
+      const allItems = getAvailableCompactModels();
+
+      const filtered = allItems.filter(item => {
+        if (!q) return true;
+        if (item.id === '' && ('deterministic'.includes(q) || 'none'.includes(q) || 'empty'.includes(q) || 'heuristic'.includes(q))) return true;
+        return item.id.toLowerCase().includes(q) || item.label.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q);
+      }).slice(0, 150);
+
+      combo.matches = filtered.map(item => item.id);
+
+      if (!filtered.length) {
+        list.innerHTML = '<li class="combo-empty">No matching model found. The typed model will be used directly.</li>';
+        return;
+      }
+
+      if (!(combo.activeIndex >= 0 && combo.activeIndex < filtered.length)) {
+        combo.activeIndex = filtered.findIndex(item => item.id === current);
+      }
+
+      list.innerHTML = filtered.map((item, i) => {
+        const isSelected = item.id === current;
+        let badgeClass = 'badge outline';
+        if (item.category === 'Deterministic') badgeClass = 'badge ok';
+        else if (item.category === 'Slot Aliases') badgeClass = 'badge accent';
+        else if (item.category === 'Profile Models') badgeClass = 'badge';
+
+        const cut = item.id.lastIndexOf('/') + 1;
+        const prefix = cut ? `<span class="pfx">${markMatch(item.id.slice(0, cut), q)}</span>` : '';
+        const mainText = item.id ? `${prefix}${markMatch(item.id.slice(cut), q)}` : markMatch(item.label, q);
+
+        return `<li class="combo-opt" role="option" id="${input.id}-opt-${i}" data-i="${i}" aria-selected="${i === combo.activeIndex}" style="display:flex; flex-direction:column; gap:0.18rem; padding:0.45rem 0.6rem; border-bottom:1px solid rgba(255,255,255,0.04);" onmousedown="event.preventDefault(); chooseComboOption(this)">`
+          + `<div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; width:100%;">`
+          +   `<span class="id" style="font-weight:600;">${mainText}</span>`
+          +   `<div style="display:flex; align-items:center; gap:0.4rem; flex:none;">`
+          +     `<span class="${badgeClass}" style="font-size:0.68rem; padding:0.1rem 0.35rem;">${escapeHtml(item.category)}</span>`
+          +     (isSelected ? '<span class="cur" style="font-weight:600;">active</span>' : '')
+          +   `</div>`
+          + `</div>`
+          + (item.desc && item.id ? `<div style="font-size:0.72rem; color:var(--muted); font-family:var(--font-sans);">${escapeHtml(item.desc)}</div>` : '')
+          + `</li>`;
+      }).join('');
+
+      setComboActive(combo, combo.activeIndex);
+    }
+
     function setComboActive(combo, i) {
       const input = combo.querySelector('input');
       combo.activeIndex = i;
@@ -2894,12 +3088,18 @@
 
     function chooseComboOption(li) {
       const combo = li.closest('.combo');
-      const model = combo?.matches?.[Number(li.dataset.i)];
-      if (!model) return;
-      combo.querySelector('input').value = model;
+      const idx = Number(li.dataset.i);
+      const model = combo?.matches?.[idx];
+      if (model === undefined) return;
+      const input = combo.querySelector('input');
+      input.value = model;
       formDirty = true;
       closeCombo(combo);
       updateWindowNotes();
+      if (input.id === 'idle-compact-model') {
+        saveIdleCompact();
+        updateCompactModelPresets(model);
+      }
     }
 
     function onComboKeydown(e) {
@@ -3240,6 +3440,10 @@
       document.getElementById('p-outformat')?.addEventListener('change', syncEffortOptions);
       document.getElementById('p-url')?.addEventListener('input', syncEffortOptions);
       document.getElementById('p-tool')?.addEventListener('change', syncEffortOptions);
+
+      // Wire Idle Compaction summarization model combobox
+      const compactCombo = document.getElementById('combo-compact-model');
+      if (compactCombo) wireCombo(compactCombo);
 
       // Trigger initial route
       handleRoute();
