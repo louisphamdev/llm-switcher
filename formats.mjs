@@ -24,7 +24,8 @@
 // }
 // ============================================================
 
-import { sanitizeToolName } from './toolvocab.mjs';
+import { sanitizeToolName, toolNameMapForIR } from './toolvocab.mjs';
+import { decodeCompaction, COMPACTION_INSTRUCTION } from './compaction.mjs';
 
 export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
 
@@ -466,20 +467,26 @@ function anthropicToIR(payload) {
             toolCalls.push({ id: part.id, name: part.name, args: part.input ?? {} });
           } else if (part.type === 'tool_result') {
             let resultText = '';
+            const images = [];
             if (typeof part.content === 'string') resultText = part.content;
             else if (Array.isArray(part.content)) {
-              // Don't stuff image base64 into text (token blowup); keep only a placeholder.
               resultText = part.content.map(c => {
                 if (typeof c === 'string') return c;
                 if (c?.type === 'text') return c.text || '';
-                if (c?.type === 'image') return '[image omitted]';
+                if (c?.type === 'image') {
+                  const url = c.source?.type === 'base64' ? `data:${c.source.media_type || 'image/jpeg'};base64,${c.source.data}`
+                    : c.source?.type === 'url' ? c.source.url : null;
+                  if (!url) throw new Error('Unsupported image in tool result');
+                  images.push({ type: 'image_url', image_url: { url } });
+                  return '';
+                }
                 return JSON.stringify(c);
               }).filter(Boolean).join('\n');
             } else if (part.content) resultText = JSON.stringify(part.content);
             if (part.is_error && !resultText.toLowerCase().startsWith('error')) {
               resultText = `[Tool Error] ${resultText}`;
             }
-            ir.messages.push({ role: 'tool', toolCallId: part.tool_use_id, content: resultText || '(empty tool output)' });
+            ir.messages.push({ role: 'tool', toolCallId: part.tool_use_id, content: resultText || '(empty tool output)', ...(images.length ? { images } : {}) });
           }
         }
         const out = { role: msg.role };
@@ -500,6 +507,7 @@ function anthropicToIR(payload) {
       .filter(t => t && t.name)
       .map(t => ({
         name: t.name, description: t.description || '',
+        ...(typeof t.strict === 'boolean' ? { strict: t.strict } : {}),
         parameters: sanitizeJsonSchema(t.input_schema || {}),
         // A client tool is `{"name","input_schema"}`, optionally typed "custom". A dated type is a
         // server tool: Anthropic runs it, its result reaches the caller without the caller executing
@@ -645,7 +653,7 @@ function responsesOutputToText(out) {
 }
 
 // OpenAI Responses API (Codex) -> IR.
-function responsesToIR(payload) {
+function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
   const ir = baseIR();
   ir.model = payload.model || '';
   ir.stream = payload.stream === true;
@@ -720,6 +728,13 @@ function responsesToIR(payload) {
         ir.messages.push({ role: 'tool', toolCallId: item.call_id || item.id, content: responsesOutputToText(item.output) });
       } else if (item.type === 'additional_tools' && Array.isArray(item.tools)) {
         toolList.push(...item.tools);
+      } else if (item.type === 'compaction') {
+        if (allowOpaqueCompaction && !item.encrypted_content?.startsWith('llm-gateway-compact-v1:')) { ir.opaqueCompaction = true; continue; }
+        pushText('user', `Conversation summary from an earlier turn:\n${decodeCompaction(item.encrypted_content)}`);
+      } else if (item.type === 'compaction_trigger') {
+        if (item !== input.at(-1)) throw new Error('compaction_trigger must be the last input item');
+        ir.compaction = true;
+        pushText('user', COMPACTION_INSTRUCTION);
       }
     }
   }
@@ -737,7 +752,7 @@ function responsesToIR(payload) {
       }
       if (t.type === 'function' && t.name) {
         const name = responsesToolName(namespace, t.name);
-        ir.tools.push({ name, description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}) });
+        ir.tools.push({ name, description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}), ...(typeof t.strict === 'boolean' ? { strict: t.strict } : {}) });
         ir.toolMeta[name] = { kind: 'function', name: t.name, namespace: namespace || null };
       } else if (t.type === 'custom' && t.name) {
         const name = responsesToolName(namespace, t.name);
@@ -769,6 +784,7 @@ function responsesToIR(payload) {
     ir.thinking = thinkingFromReasoningParam(payload.reasoning);
   }
   ir.responseFormat = responseFormatIR(payload.text?.format);
+  if (ir.compaction) { ir.tools = []; ir.toolChoice = 'none'; ir.responseFormat = null; }
   return ir;
 }
 
@@ -871,10 +887,10 @@ function lowerSchemaTypes(schema) {
 // that reaches here anyway is an error, never a silent fallback to another protocol (a different
 // API key!). The UPSTREAM formats are a different axis: emitUpstreamBody still speaks openai-chat,
 // anthropic and vertex to whatever provider the profile points at.
-function parseToIR(clientFormat, payload) {
+function parseToIR(clientFormat, payload, opts = {}) {
   switch (clientFormat) {
     case 'anthropic': return anthropicToIR(payload);
-    case 'responses': return responsesToIR(payload);
+    case 'responses': return responsesToIR(payload, opts);
     case 'codeassist': return codeAssistToIR(payload);
     default: throw new Error(`Unsupported input format: ${clientFormat}. Only anthropic (Claude Code), responses (Codex) and codeassist (agy) accept requests.`);
   }
@@ -948,7 +964,8 @@ function healToolPairs(messages) {
 
   const orphanText = (m) => ({
     role: 'user',
-    content: `[Tool Result${m.toolCallId ? ` (${m.toolCallId})` : ''}]: ${m.content ?? ''}`
+    content: m.images?.length ? [{ type: 'text', text: `[Tool Result${m.toolCallId ? ` (${m.toolCallId})` : ''}]: ${m.content ?? ''}` }, ...m.images]
+      : `[Tool Result${m.toolCallId ? ` (${m.toolCallId})` : ''}]: ${m.content ?? ''}`
   });
   const flush = () => {
     if (pending) {
@@ -1023,7 +1040,10 @@ function normThinkingEffort(effort) {
 //             the client requests thinking, don't touch the system prompt, use `max_completion_tokens`.
 //  - 'off'    : never send reasoning params, never inject prompts.
 function irToChatBody(ir, model, opts = {}) {
+  const toolName = toolNameMapForIR(ir).name;
   const messages = [];
+  const pendingImages = [];
+  const flushImages = () => { if (pendingImages.length) messages.push({ role: 'user', content: pendingImages.splice(0) }); };
   const mode = normThinkingMode(opts.thinkingMode);
   const clientWantsThinking = Boolean(ir.thinking && ir.thinking.type !== 'disabled');
   const modelIsThinking = hasNativeReasoning(model);
@@ -1051,13 +1071,15 @@ function irToChatBody(ir, model, opts = {}) {
   for (const m of healToolPairs(ir.messages)) {
     if (m.role === 'tool') {
       messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content ?? '' });
+      if (m.images?.length) pendingImages.push({ type: 'text', text: `Images returned by tool call ${m.toolCallId}:` }, ...m.images);
       continue;
     }
+    flushImages();
     const out = { role: m.role === 'assistant' ? 'assistant' : 'user' };
     if (m.content !== undefined) out.content = m.content;
     if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length) {
       out.tool_calls = m.toolCalls.map(tc => {
-        const call = { id: tc.id, type: 'function', function: { name: sanitizeToolName(tc.name), arguments: stringifyArgs(tc.args) } };
+        const call = { id: tc.id, type: 'function', function: { name: toolName(tc.name), arguments: stringifyArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) call.extra_content = { google: { thought_signature: sig } };
         return call;
@@ -1067,6 +1089,7 @@ function irToChatBody(ir, model, opts = {}) {
     if (out.content === undefined) out.content = '';
     messages.push(out);
   }
+  flushImages();
 
   const body = { model, messages, stream: ir.stream === true };
   if (body.stream) body.stream_options = { include_usage: true };
@@ -1074,14 +1097,14 @@ function irToChatBody(ir, model, opts = {}) {
   if (tools.length) {
     body.tools = tools.map(t => ({
       type: 'function',
-      function: { name: sanitizeToolName(t.name), description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}) }
+      function: { name: toolName(t.name), description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}), ...(typeof t.strict === 'boolean' ? { strict: t.strict } : {}) }
     }));
   }
   if (ir.toolChoice) {
     if (typeof ir.toolChoice === 'string') {
       body.tool_choice = ir.toolChoice === 'required' ? 'required' : ir.toolChoice;
     } else if (ir.toolChoice.name) {
-      body.tool_choice = { type: 'function', function: { name: sanitizeToolName(ir.toolChoice.name) } };
+      body.tool_choice = { type: 'function', function: { name: toolName(ir.toolChoice.name) } };
     }
   }
   if (typeof ir.params.maxTokens === 'number') {
@@ -1165,20 +1188,22 @@ function contentToAnthropicBlocks(c) {
 
 // IR -> Anthropic Messages body.
 function irToAnthropicBody(ir, model, opts = {}) {
+  const toolName = toolNameMapForIR(ir).name;
   const messages = [];
 
   for (const m of healToolPairs(ir.messages)) {
     if (m.role === 'tool') {
       messages.push({
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content ?? '' }]
+        content: [{ type: 'tool_result', tool_use_id: m.toolCallId,
+          content: m.images?.length ? [...contentToAnthropicBlocks(m.content), ...contentToAnthropicBlocks(m.images)] : m.content ?? '' }]
       });
       continue;
     }
     if (m.role === 'assistant') {
       const blocks = contentToAnthropicBlocks(m.content).filter(b => b.type === 'text');
       for (const tc of (m.toolCalls || [])) {
-        blocks.push({ type: 'tool_use', id: tc.id, name: sanitizeToolName(tc.name), input: parseArgs(tc.args) });
+        blocks.push({ type: 'tool_use', id: tc.id, name: toolName(tc.name), input: parseArgs(tc.args) });
       }
       if (blocks.length) messages.push({ role: 'assistant', content: blocks });
       continue;
@@ -1222,15 +1247,15 @@ function irToAnthropicBody(ir, model, opts = {}) {
   const anthropicTools = clientTools(ir);
   if (anthropicTools.length) {
     body.tools = anthropicTools.map(t => ({
-      name: sanitizeToolName(t.name), description: t.description || '',
-      input_schema: sanitizeJsonSchema(t.parameters || {})
+      name: toolName(t.name), description: t.description || '',
+      input_schema: sanitizeJsonSchema(t.parameters || {}), ...(typeof t.strict === 'boolean' ? { strict: t.strict } : {})
     }));
   }
   if (ir.toolChoice) {
     if (typeof ir.toolChoice === 'string') {
       body.tool_choice = ir.toolChoice === 'required' ? { type: 'any' } : { type: ir.toolChoice };
     } else if (ir.toolChoice.name) {
-      body.tool_choice = { type: 'tool', name: sanitizeToolName(ir.toolChoice.name) };
+      body.tool_choice = { type: 'tool', name: toolName(ir.toolChoice.name) };
     }
   }
   if (ir.params.parallelToolCalls === false && body.tool_choice) body.tool_choice.disable_parallel_tool_use = true;
@@ -1286,7 +1311,10 @@ function dataUrlToInlineData(url) {
 
 // IR -> Vertex generateContent body.
 function irToVertexBody(ir, model, opts = {}) {
+  const toolName = toolNameMapForIR(ir, { allowHyphens: false }).name;
   const contents = [];
+  const pendingImages = [];
+  const flushImages = () => { if (pendingImages.length) push('user', pendingImages.splice(0)); };
   const textPartsOf = (c) => {
     if (typeof c === 'string') return c ? [{ text: c }] : [];
     if (Array.isArray(c)) {
@@ -1295,7 +1323,8 @@ function irToVertexBody(ir, model, opts = {}) {
         if (p.type === 'text' && p.text) parts.push({ text: p.text });
         else if (p.type === 'image_url') {
           const inline = dataUrlToInlineData(p.image_url?.url);
-          if (inline) parts.push(inline);
+          if (!inline) throw new Error('Vertex image conversion requires a base64 data URL; remote image URLs are not supported on this route.');
+          parts.push(inline);
         }
       }
       return parts;
@@ -1329,13 +1358,15 @@ function irToVertexBody(ir, model, opts = {}) {
         resp = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed ?? '' };
       } catch { resp = { result: m.content ?? '' }; }
       // Gemini API & Vertex only accept roles 'user' | 'model' (functionResponse lives in the 'user' role).
-      push('user', [{ functionResponse: { name: sanitizeToolName(m.name || 'tool', { allowHyphens: false }), response: resp } }]);
+      push('user', [{ functionResponse: { name: toolName(m.name || 'tool'), response: resp } }]);
+      if (m.images?.length) pendingImages.push({ text: `Images returned by tool call ${m.toolCallId}:` }, ...textPartsOf(m.images));
       continue;
     }
+    flushImages();
     if (m.role === 'assistant') {
       const parts = textPartsOf(m.content).filter(p => p.text);
       (m.toolCalls || []).forEach((tc, j) => {
-        const part = { functionCall: { name: sanitizeToolName(tc.name, { allowHyphens: false }), args: parseArgs(tc.args) } };
+        const part = { functionCall: { name: toolName(tc.name), args: parseArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) part.thoughtSignature = sig;
         // Only the first functionCall of each step in the current turn is checked.
@@ -1347,6 +1378,7 @@ function irToVertexBody(ir, model, opts = {}) {
     }
     push('user', textPartsOf(m.content));
   }
+  flushImages();
 
   const body = { contents };
   if (ir.system && ir.system.trim()) {
@@ -1356,7 +1388,7 @@ function irToVertexBody(ir, model, opts = {}) {
   if (vertexTools.length) {
     body.tools = [{
       functionDeclarations: vertexTools.map(t => ({
-        name: sanitizeToolName(t.name, { allowHyphens: false }), description: t.description || '',
+        name: toolName(t.name), description: t.description || '',
         parameters: toGeminiSchema(t.parameters || { type: 'object', properties: {} })
       }))
     }];
@@ -1364,7 +1396,7 @@ function irToVertexBody(ir, model, opts = {}) {
   if (ir.toolChoice) {
     const mode = ir.toolChoice === 'none' ? 'NONE' : ir.toolChoice === 'auto' ? 'AUTO' : 'ANY';
     const fcc = { mode };
-    if (typeof ir.toolChoice === 'object' && ir.toolChoice.name) fcc.allowedFunctionNames = [sanitizeToolName(ir.toolChoice.name, { allowHyphens: false })];
+    if (typeof ir.toolChoice === 'object' && ir.toolChoice.name) fcc.allowedFunctionNames = [toolName(ir.toolChoice.name)];
     if (body.tools) body.toolConfig = { functionCallingConfig: fcc };
   }
   const gc = {};

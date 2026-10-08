@@ -184,7 +184,7 @@ test('a release on npm is installed before the checkout is asked at all', async 
   const r = await applyUpdate({ root: fx.install, registryUrl: await registry(t, '1.0.1'), run: recording(calls) });
 
   const order = calls.map(c => c[0]);
-  assert.deepEqual(order.slice(0, 2), ['npm', 'git'], `npm first, then the checkout: ${order.join(' ')}`);
+  assert.deepEqual(order.slice(0, 2), [process.platform === 'win32' ? 'cmd.exe' : 'npm', 'git'], `npm first, then the checkout: ${order.join(' ')}`);
   assert.deepEqual(calls[0].slice(-3), ['install', '-g', 'llm-switcher@1.0.1']);
   // npm put the release in the global prefix, which is not this directory, so the checkout is what
   // moved -- and that is the version this gateway runs, which is the only reason the pull happened.
@@ -226,7 +226,7 @@ test('an npm install that fails does not stop a checkout from updating', async (
   const logs = [];
   // npm refuses the version a fixture registry names, the way a real registry would.
   const run = async (cmd, args, opts) => {
-    if (cmd === 'npm') throw new Error('npm install failed: notarget No matching version found');
+    if (cmd === 'npm' || cmd === 'cmd.exe') throw new Error('npm install failed: notarget No matching version found');
     return recording([])(cmd, args, opts);
   };
   const r = await applyUpdate({ root: fx.install, registryUrl: await registry(t, '1.0.1'), run, logger: m => logs.push(m) });

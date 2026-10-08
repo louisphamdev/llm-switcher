@@ -220,7 +220,35 @@ export function sanitizeToolName(name, { allowHyphens = true } = {}) {
  *
  * A list with no tools, or one where nothing can be confused, leaves every call untouched.
  */
-export function createToolVocab(declared) {
+export function createToolNameMap(names, options = {}) {
+  const originals = [...new Set(names.filter(n => typeof n === 'string' && n))].sort();
+  const forward = new Map();
+  const reverse = new Map();
+  // Reserve unchanged names before allocating aliases, independent of declaration order.
+  for (const name of originals) {
+    if (sanitizeToolName(name, options) === name) { forward.set(name, name); reverse.set(name, name); }
+  }
+  for (const name of originals) {
+    if (forward.has(name)) continue;
+    const base = sanitizeToolName(name, options);
+    let alias = base;
+    for (let salt = 0; reverse.has(alias); salt++) {
+      const hash = crypto.createHash('sha256').update(`${name}\0${salt}`).digest('hex').slice(0, 12);
+      alias = `${base.slice(0, 51)}_${hash}`;
+    }
+    forward.set(name, alias); reverse.set(alias, name);
+  }
+  return { forward, reverse, name: n => forward.get(n) || sanitizeToolName(n, options) };
+}
+
+export function toolNameMapForIR(ir, options = {}) {
+  const names = [...(ir.tools || []).map(t => t.name),
+    ...(ir.messages || []).flatMap(m => [...(m.toolCalls || []).map(t => t.name), ...(m.name ? [m.name] : [])]),
+    ...(ir.toolChoice?.name ? [ir.toolChoice.name] : [])];
+  return createToolNameMap(names, options);
+}
+
+export function createToolVocab(declared, { allowHyphens = true, names = [] } = {}) {
   // Only a tool the caller executes can be a rename target. A tool the provider runs answers in
   // band and its result reaches the caller without the caller executing anything; handing such a
   // call back as a client tool moves the work, silently, to the machine the user is sitting at.
@@ -229,17 +257,12 @@ export function createToolVocab(declared) {
   const byName = new Map();
   const candidates = [];
   const shortenedToOriginal = new Map();
+  const aliases = createToolNameMap([...tools.map(t => t.name), ...names], { allowHyphens });
 
   for (const t of tools) {
     const caps = capabilitiesOf(t.name);
-    const safeChat = sanitizeToolName(t.name, { allowHyphens: true });
-    const safeVertex = sanitizeToolName(t.name, { allowHyphens: false });
-    if (safeChat !== t.name) {
-      shortenedToOriginal.set(safeChat, t.name);
-    }
-    if (safeVertex !== t.name) {
-      shortenedToOriginal.set(safeVertex, t.name);
-    }
+    const alias = aliases.forward.get(t.name);
+    if (alias !== t.name) shortenedToOriginal.set(alias, t.name);
     const entry = { tool: t, name: t.name, namespace: namespaceOf(t.name), caps };
     // Keyed by the exact spelling: a client checks tool names exactly, so `read` is not the same
     // tool as `Read` to it, and that difference is the whole reason this layer exists.

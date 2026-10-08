@@ -27,7 +27,9 @@ import {
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
 import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows } from './windows.mjs';
-import { createToolVocab, NULL_TOOL_VOCAB } from './toolvocab.mjs';
+import { createToolVocab, NULL_TOOL_VOCAB, toolNameMapForIR } from './toolvocab.mjs';
+import { readUpstreamPayloads } from './upstream-stream.mjs';
+import { compactionResponse, emitCompaction, expandGatewayCompactions, collectCompaction } from './compaction.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
@@ -454,53 +456,13 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
   return { url: ov['openai-chat'] || `${base}/chat/completions`, headers };
 }
 
-// Read the upstream stream: accept both SSE `data:` and raw JSON lines (Vertex framing).
-async function* readUpstreamPayloads(upstreamRes) {
-  const reader = upstreamRes.body.getReader();
-  const decoder = new TextDecoder('utf8');
-  let buffer = '';
-  let finished = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        finished = true;
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        const parsed = parsePayloadLine(line);
-        if (parsed) yield parsed;
-      }
-    }
-    buffer += decoder.decode();
-    const tail = parsePayloadLine(buffer);
-    if (tail) yield tail;
-  } finally {
-    // A consumer that stops early (an in-band error) must close the upstream connection too.
-    if (!finished) await reader.cancel().catch(() => {});
-    try { reader.releaseLock(); } catch {}
-  }
-}
-
-function parsePayloadLine(line) {
-  let s = line.trim();
-  if (!s) return null;
-  if (s.startsWith('data:')) s = s.slice(5).trim();
-  else if (s.startsWith('event:') || s.startsWith(':') || s.startsWith('id:') || s.startsWith('retry:')) return null;
-  if (!s || s === '[DONE]' || !s.startsWith('{')) return null;
-  try { return JSON.parse(s); } catch { return null; }
-}
-
 // The tool vocabulary the caller declared, so a model that answers with a name from its own
 // training is written back in the caller's words instead of ending the turn with "No such tool
 // available". Built once per request from the tools the caller actually sent, so a request that
 // declared none pays nothing and a turn where the model agreed with the list changes nothing.
-function toolVocabFor(ir) {
+function toolVocabFor(ir, outFormat) {
   if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
-  if (!ir._vocab) ir._vocab = createToolVocab(ir.tools);
+  if (!ir._vocab) ir._vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
   return ir._vocab;
 }
 
@@ -937,7 +899,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
 
   let ir;
   try {
-    ir = parseToIR(clientFormat, payload);
+    ir = parseToIR(clientFormat, payload, { allowOpaqueCompaction: true });
   } catch (e) {
     sendClientError(res, clientFormat, 400, `Cannot parse ${clientFormat} request: ${e.message}`);
     return;
@@ -955,7 +917,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   const shrunk = await maybeCompactIdle(req, clientFormat, payload, ir, profile, profileKey, bodyBuffer);
   if (shrunk) {
     try {
-      const compactedIR = parseToIR(clientFormat, shrunk.payload);
+      const compactedIR = parseToIR(clientFormat, shrunk.payload, { allowOpaqueCompaction: true });
       payload = shrunk.payload;
       bodyBuffer = shrunk.bodyBuffer;
       ir = compactedIR;
@@ -1008,7 +970,9 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const headers = bifrostHeaders(req, profile);
       if (traceId) headers['x-intact-trace'] = traceId;
       try {
-        const r = await forwardAnthropicDirect(res, payload, bodyBuffer, bifrostURL(profile, clientFormat, req, opts), headers, mappedModel, ac.signal, profile, true);
+        const nativePayload = clientFormat === 'responses' ? expandGatewayCompactions(payload) : payload;
+        const nativeBytes = nativePayload === payload ? bodyBuffer : Buffer.from(JSON.stringify(nativePayload));
+        const r = await forwardAnthropicDirect(res, nativePayload, nativeBytes, bifrostURL(profile, clientFormat, req, opts), headers, mappedModel, ac.signal, profile, true);
         answered = !r.error && r.status >= 200 && r.status < 300;
         log({ status: r.status, tokens: r.tokens, responsePreview: '(bifrost)', error: r.error || undefined });
       } catch (err) {
@@ -1038,6 +1002,10 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       return;
     }
 
+    if (ir.opaqueCompaction) {
+      sendClientError(res, clientFormat, 400, 'Cannot convert native or legacy compaction state; resume through its original Responses provider.');
+      return log({ status: 400, error: 'unsupported compaction state' });
+    }
     const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
     const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
     if (traceId) headers['x-intact-trace'] = traceId;
@@ -1063,6 +1031,24 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     const normalize = createUpstreamNormalizer(outFormat);
     const col = createCollector();
 
+    if (ir.compaction) {
+      try {
+        await collectCompaction(upstreamRes, outFormat, ir.stream, normalize, col);
+        if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+        const response = compactionResponse(col, requestedModel || mappedModel, text => splitThinkTags(text).text);
+        if (ir.stream) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+          emitCompaction(response, (event, data) => sendSSE(res, event, data)); res.end();
+        } else sendJson(res, 200, response);
+        answered = true;
+        return log({ status: 200, responsePreview: '(compaction)', tokens: { prompt: col.prompt, completion: col.completion() } });
+      } catch (err) {
+        if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+        sendClientError(res, clientFormat, 502, err.message);
+        return log({ status: 502, error: err.message });
+      }
+    }
+
     // ---- non-stream ----
     if (!ir.stream) {
       let json;
@@ -1085,7 +1071,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const out = clientMessage(clientFormat, {
         model: requestedModel || mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
         finish: col.finish, prompt: col.prompt, completion, cached: col.cached,
-        reasoning: col.reasoning, sig: col.sig, vocab: toolVocabFor(ir)
+        reasoning: col.reasoning, sig: col.sig, vocab: toolVocabFor(ir, outFormat)
       });
       sendJson(res, 200, out);
       answered = true;
@@ -1102,7 +1088,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir) });
+    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir, outFormat) });
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
     const streamError = await pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal: ac.signal, sink: res, tag: profileKey });
@@ -2019,7 +2005,7 @@ function sendWsFailed(socket, model, message, status = 500, tap = null, code = n
 // previous_response_id; the server keeps the rest. The gateway keeps it per socket, bounded.
 const WS_HISTORY_MAX = 8;
 // Only these output items are valid input for the next turn; reasoning items are not replayed.
-const WS_REPLAY_TYPES = new Set(['message', 'function_call', 'custom_tool_call', 'local_shell_call']);
+const WS_REPLAY_TYPES = new Set(['message', 'function_call', 'custom_tool_call', 'local_shell_call', 'compaction']);
 
 function wsInputItems(input) {
   if (typeof input === 'string') return input ? [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input }] }] : [];
@@ -2169,7 +2155,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
 
   const bifrostModel = mapModel(payload.model || '', profile, clientFormat);
   if (await crossesBifrost(req, profile, bifrostModel)) {
-    return wsBifrostTurn({ socket, payload, req, ac, history, input, profile, profileKey, mappedModel: bifrostModel });
+    return wsBifrostTurn({ socket, payload: expandGatewayCompactions(payload), req, ac, history, input, profile, profileKey, mappedModel: bifrostModel });
   }
 
   let ir;
@@ -2224,6 +2210,21 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
     const normalize = createUpstreamNormalizer(outFormat);
     const col = createCollector();
 
+    if (ir.compaction) {
+      try {
+        await collectCompaction(upstreamRes, outFormat, true, normalize, col);
+        if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+        const response = compactionResponse(col, requestedModel || mappedModel, text => splitThinkTags(text).text);
+        emitCompaction(response, (event, data) => { tapWsEvent(halfTap, event, data); if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(data))); });
+        rememberWsTurn(history, response, []); answered = true;
+        return log({ status: 200, responsePreview: '(compaction)', tokens: { prompt: col.prompt, completion: col.completion() } });
+      } catch (err) {
+        if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
+        sendWsFailed(socket, mappedModel, err.message, 502, halfTap);
+        return log({ status: 502, error: err.message });
+      }
+    }
+
     let completedResponse = null;
     const renderer = createResponsesStream((e, d) => {
       tapWsEvent(halfTap, e, d);
@@ -2231,7 +2232,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
-    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir) });
+    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir, outFormat) });
 
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));

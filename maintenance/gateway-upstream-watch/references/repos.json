@@ -1,0 +1,570 @@
+{
+  "version": 1,
+  "verified_at": "2026-10-08",
+  "scope": "Repositories with a direct client, protocol, gateway, compression or ZenCore runtime relationship; discovery runs weekly. Not a claim that every GitHub fork is relevant.",
+  "repos": [
+    {
+      "repo": "louisphamdev/intact",
+      "url": "https://github.com/louisphamdev/intact",
+      "branch": "master",
+      "group": "own",
+      "reason": "Deployment and local converter changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "louisphamdev/llm-switcher",
+      "url": "https://github.com/louisphamdev/llm-switcher",
+      "branch": "main",
+      "group": "own",
+      "reason": "Deployment and local converter changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "louisphamdev/zencore",
+      "url": "https://github.com/louisphamdev/zencore",
+      "branch": "main",
+      "group": "own",
+      "reason": "Deployment and local converter changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "NousResearch/hermes-agent",
+      "url": "https://github.com/NousResearch/hermes-agent",
+      "branch": "main",
+      "group": "client",
+      "reason": "Client wire contract, configuration, context and transport changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "anomalyco/opencode",
+      "url": "https://github.com/anomalyco/opencode",
+      "branch": "dev",
+      "group": "client",
+      "reason": "Client wire contract, configuration, context and transport changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "anthropics/claude-code",
+      "url": "https://github.com/anthropics/claude-code",
+      "branch": "main",
+      "group": "client",
+      "reason": "Client wire contract, configuration, context and transport changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "google-gemini/gemini-cli",
+      "url": "https://github.com/google-gemini/gemini-cli",
+      "branch": "main",
+      "group": "client",
+      "reason": "Client wire contract, configuration, context and transport changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "openai/codex",
+      "url": "https://github.com/openai/codex",
+      "branch": "main",
+      "group": "client",
+      "reason": "Client wire contract, configuration, context and transport changes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "1rgs/claude-code-proxy",
+      "url": "https://github.com/1rgs/claude-code-proxy",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "BerriAI/litellm",
+      "url": "https://github.com/BerriAI/litellm",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "Portkey-AI/gateway",
+      "url": "https://github.com/Portkey-AI/gateway",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "QuantumNous/new-api",
+      "url": "https://github.com/QuantumNous/new-api",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "SaladDay/cc-switch-cli",
+      "url": "https://github.com/SaladDay/cc-switch-cli",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "The-NeXT-AI/ai-gateway",
+      "url": "https://github.com/The-NeXT-AI/ai-gateway",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "decolua/9router",
+      "url": "https://github.com/decolua/9router",
+      "branch": "master",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "diegosouzapw/OmniRoute",
+      "url": "https://github.com/diegosouzapw/OmniRoute",
+      "branch": "release/v3.8.52",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "farion1231/cc-switch",
+      "url": "https://github.com/farion1231/cc-switch",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "maximhq/bifrost",
+      "url": "https://github.com/maximhq/bifrost",
+      "branch": "dev",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "musistudio/claude-code-router",
+      "url": "https://github.com/musistudio/claude-code-router",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "router-for-me/CLIProxyAPI",
+      "url": "https://github.com/router-for-me/CLIProxyAPI",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "songquanpeng/one-api",
+      "url": "https://github.com/songquanpeng/one-api",
+      "branch": "main",
+      "group": "peer",
+      "reason": "Comparable gateway conversion, routing, compaction and failover fixes",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "Kludex/starlette",
+      "url": "https://github.com/Kludex/starlette",
+      "branch": "main",
+      "group": "runtime",
+      "reason": "ZenCore ASGI streaming and response lifecycle dependency; canonical repository redirects from encode/starlette",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "anomalyco/models.dev",
+      "url": "https://github.com/anomalyco/models.dev",
+      "branch": "dev",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "anthropics/anthropic-sdk-python",
+      "url": "https://github.com/anthropics/anthropic-sdk-python",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "anthropics/anthropic-sdk-typescript",
+      "url": "https://github.com/anthropics/anthropic-sdk-typescript",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "googleapis/js-genai",
+      "url": "https://github.com/googleapis/js-genai",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "googleapis/python-genai",
+      "url": "https://github.com/googleapis/python-genai",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "modelcontextprotocol/modelcontextprotocol",
+      "url": "https://github.com/modelcontextprotocol/modelcontextprotocol",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "modelcontextprotocol/python-sdk",
+      "url": "https://github.com/modelcontextprotocol/python-sdk",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "modelcontextprotocol/typescript-sdk",
+      "url": "https://github.com/modelcontextprotocol/typescript-sdk",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "openai/openai-node",
+      "url": "https://github.com/openai/openai-node",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "openai/openai-openapi",
+      "url": "https://github.com/openai/openai-openapi",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "openai/openai-python",
+      "url": "https://github.com/openai/openai-python",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "vercel/ai",
+      "url": "https://github.com/vercel/ai",
+      "branch": "main",
+      "group": "protocol-sdk",
+      "reason": "Authoritative protocol schemas, SDK serialization and tool compatibility",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "DietrichGebert/ponytail",
+      "url": "https://github.com/DietrichGebert/ponytail",
+      "branch": "main",
+      "group": "compression",
+      "reason": "History and tool-output transformations before gateway forwarding",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "headroomlabs-ai/headroom",
+      "url": "https://github.com/headroomlabs-ai/headroom",
+      "branch": "main",
+      "group": "compression",
+      "reason": "History and tool-output transformations before gateway forwarding",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "rtk-ai/rtk",
+      "url": "https://github.com/rtk-ai/rtk",
+      "branch": "develop",
+      "group": "compression",
+      "reason": "History and tool-output transformations before gateway forwarding",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "yamadashy/repomix",
+      "url": "https://github.com/yamadashy/repomix",
+      "branch": "main",
+      "group": "compression",
+      "reason": "History and tool-output transformations before gateway forwarding",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "encode/httpx",
+      "url": "https://github.com/encode/httpx",
+      "branch": "master",
+      "group": "runtime",
+      "reason": "ZenCore HTTP streaming, validation and transport dependencies",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "url": "https://github.com/fastapi/fastapi",
+      "branch": "master",
+      "group": "runtime",
+      "reason": "ZenCore HTTP streaming, validation and transport dependencies",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "pydantic/pydantic",
+      "url": "https://github.com/pydantic/pydantic",
+      "branch": "main",
+      "group": "runtime",
+      "reason": "ZenCore HTTP streaming, validation and transport dependencies",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    },
+    {
+      "repo": "python-jsonschema/jsonschema",
+      "url": "https://github.com/python-jsonschema/jsonschema",
+      "branch": "main",
+      "group": "runtime",
+      "reason": "ZenCore HTTP streaming, validation and transport dependencies",
+      "verified_at": "2026-10-08",
+      "archived": false,
+      "fork": false,
+      "parent": null
+    }
+  ],
+  "docs": [
+    "https://code.claude.com/docs/en/llm-gateway-protocol",
+    "https://code.claude.com/docs/en/llm-gateway-connect",
+    "https://code.claude.com/docs/en/model-config",
+    "https://code.claude.com/docs/en/env-vars",
+    "https://platform.claude.com/docs/en/build-with-claude/streaming",
+    "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+    "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool",
+    "https://developers.openai.com/api/docs/guides/compaction",
+    "https://developers.openai.com/api/docs/guides/function-calling",
+    "https://developers.openai.com/api/docs/guides/websocket-mode",
+    "https://learn.chatgpt.com/docs/auth#custom-ca-bundles",
+    "https://learn.chatgpt.com/docs/enterprise/connect-to-a-gateway"
+  ],
+  "watch_issues": [
+    {
+      "repo": "router-for-me/CLIProxyAPI",
+      "number": 6466,
+      "url": "https://github.com/router-for-me/CLIProxyAPI/issues/6466"
+    },
+    {
+      "repo": "router-for-me/CLIProxyAPI",
+      "number": 6305,
+      "url": "https://github.com/router-for-me/CLIProxyAPI/issues/6305"
+    },
+    {
+      "repo": "router-for-me/CLIProxyAPI",
+      "number": 6468,
+      "url": "https://github.com/router-for-me/CLIProxyAPI/issues/6468"
+    },
+    {
+      "repo": "router-for-me/CLIProxyAPI",
+      "number": 6408,
+      "url": "https://github.com/router-for-me/CLIProxyAPI/issues/6408"
+    },
+    {
+      "repo": "BerriAI/litellm",
+      "number": 36540,
+      "url": "https://github.com/BerriAI/litellm/issues/36540"
+    },
+    {
+      "repo": "BerriAI/litellm",
+      "number": 41361,
+      "url": "https://github.com/BerriAI/litellm/issues/41361"
+    },
+    {
+      "repo": "BerriAI/litellm",
+      "number": 36655,
+      "url": "https://github.com/BerriAI/litellm/issues/36655"
+    },
+    {
+      "repo": "openai/codex",
+      "number": 46489,
+      "url": "https://github.com/openai/codex/issues/46489"
+    },
+    {
+      "repo": "openai/codex",
+      "number": 51962,
+      "url": "https://github.com/openai/codex/issues/51962"
+    },
+    {
+      "repo": "anthropics/claude-code",
+      "number": 98464,
+      "url": "https://github.com/anthropics/claude-code/issues/98464"
+    },
+    {
+      "repo": "musistudio/claude-code-router",
+      "number": 1842,
+      "url": "https://github.com/musistudio/claude-code-router/issues/1842"
+    },
+    {
+      "repo": "musistudio/claude-code-router",
+      "number": 1852,
+      "url": "https://github.com/musistudio/claude-code-router/issues/1852"
+    },
+    {
+      "repo": "decolua/9router",
+      "number": 3816,
+      "url": "https://github.com/decolua/9router/issues/3816"
+    },
+    {
+      "repo": "decolua/9router",
+      "number": 3750,
+      "url": "https://github.com/decolua/9router/issues/3750"
+    },
+    {
+      "repo": "farion1231/cc-switch",
+      "number": 5536,
+      "url": "https://github.com/farion1231/cc-switch/issues/5536"
+    },
+    {
+      "repo": "farion1231/cc-switch",
+      "number": 7951,
+      "url": "https://github.com/farion1231/cc-switch/issues/7951"
+    },
+    {
+      "repo": "diegosouzapw/OmniRoute",
+      "number": 15421,
+      "url": "https://github.com/diegosouzapw/OmniRoute/issues/15421"
+    }
+  ]
+}
