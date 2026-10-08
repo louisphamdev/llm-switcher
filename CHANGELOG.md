@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.2 — 2026-10-08
+
+- **Per-Model Slot Target Thinking Effort:** Support granular reasoning effort configuration per model slot (`profile.modelEfforts`). Individual slot selectors in the dashboard allow setting target effort levels (`auto`, `none`, `low`, `medium`, `high`, `xhigh`, `max`) independently for each model tier (e.g. Sonnet, Opus, Haiku, Codex roles) with automatic fallback to profile-level defaults.
+- **Dedicated Idle Compaction Navigation & Collapsible View:** Separate Idle Compaction into its own sidebar menu (`#/compact`) with dedicated overview telemetry cards. Automatically collapse detailed configuration cards when inactive, and replace button-like unit badges with clean native typography and tooltips.
+- **Accurate Bifrost Passthrough Detection:** Refine Bifrost passthrough indicators to activate only for genuine intact-routed native prefix models, keeping reasoning effort selectors fully accessible for normal OpenAI/Anthropic/Vertex/Gemini endpoints.
+
 ## Release 1.6.1 — 2026-10-08
 
 - **Durable Gateway Prefix Cache:** Replace external Claude Code and Codex transcript/database

@@ -594,7 +594,13 @@ describe('dashboard, driven in a real browser', { skip: skipReason() }, () => {
     const view = () => page.evaluate(`[...document.querySelectorAll('.view-panel')].filter(p => p.style.display !== 'none').map(p => p.id)`);
 
     it('opens each page from the sidebar and follows the back button', async () => {
-      for (const [nav, id, title] of [['models', 'view-models', 'Dynamic Model Catalog'], ['logs', 'view-logs', 'Request Inspector'], ['doctor', 'view-doctor', 'System Health & Doctor'], ['routes', 'view-routes', 'Routes & Profiles']]) {
+      for (const [nav, id, title] of [
+        ['compact', 'view-compact', 'Idle Compaction'],
+        ['models', 'view-models', 'Dynamic Model Catalog'],
+        ['logs', 'view-logs', 'Request Inspector'],
+        ['doctor', 'view-doctor', 'System Health & Doctor'],
+        ['routes', 'view-routes', 'Routes & Profiles']
+      ]) {
         await act(() => page.click(`#sideNav a[data-nav="${nav}"]`));
         assert.deepEqual(await view(), [id], `${nav}: wrong page`);
         assert.equal(await page.text('#page-title'), title);

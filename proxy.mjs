@@ -810,10 +810,39 @@ async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profile
   return rewrite(compacted.history);
 }
 
-function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req) {
+function resolveSlot(requestedModel, mappedModel, profile, clientFormat) {
+  if (clientFormat === 'codeassist') return 'main';
+  const clean = String(requestedModel || '').replace(/\[1m\]/gi, '').trim().toLowerCase();
+  if (clientFormat === 'responses') {
+    if (clean.includes('review')) return 'review';
+    if (clean.includes('subagent')) return 'subagent';
+    return 'main';
+  }
+  if (clean.includes('fable')) return 'fable';
+  if (clean.includes('opus')) return 'opus';
+  if (clean.includes('haiku')) return 'haiku';
+  if (clean.includes('sonnet')) return 'sonnet';
+  if (profile?.defaultModels) {
+    for (const [s, m] of Object.entries(profile.defaultModels)) {
+      if (m && (m === mappedModel || m === requestedModel || String(m).toLowerCase() === clean)) return s;
+    }
+  }
+  return 'default';
+}
+
+function resolveThinkingEffort(profile, slot, mappedModel) {
+  if (profile?.modelEfforts && typeof profile.modelEfforts === 'object') {
+    if (slot && profile.modelEfforts[slot]) return profile.modelEfforts[slot];
+    if (mappedModel && profile.modelEfforts[mappedModel]) return profile.modelEfforts[mappedModel];
+  }
+  return profile?.thinkingEffort || 'auto';
+}
+
+function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null) {
+  const effort = resolveThinkingEffort(profile, slot, mappedModel);
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
     thinkingMode: profile.thinkingMode,
-    thinkingEffort: profile.thinkingEffort,
+    thinkingEffort: effort,
   });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);
@@ -998,7 +1027,8 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       return;
     }
 
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
+    const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
@@ -1227,6 +1257,14 @@ function validateProfileInput(p) {
   if (p.mode && !VALID_MODES.includes(p.mode)) return `Invalid mode "${p.mode}"`;
   if (p.thinkingMode && !THINKING_MODES.includes(p.thinkingMode)) return `Invalid thinkingMode "${p.thinkingMode}"`;
   if (p.thinkingEffort && !VALID_EFFORTS.includes(p.thinkingEffort)) return `Invalid thinkingEffort "${p.thinkingEffort}"`;
+  if (p.modelEfforts !== undefined) {
+    if (!p.modelEfforts || typeof p.modelEfforts !== 'object' || Array.isArray(p.modelEfforts)) {
+      return 'modelEfforts must be an object';
+    }
+    for (const [slot, eff] of Object.entries(p.modelEfforts)) {
+      if (eff && !VALID_EFFORTS.includes(eff)) return `Invalid modelEfforts.${slot} value "${eff}"`;
+    }
+  }
   if (p.baseURL !== undefined) {
     try {
       const u = new URL(p.baseURL);
@@ -1827,8 +1865,11 @@ async function routeConfigApi(res, method, pathname, body) {
       return sendJson(res, 400, { error: 'The stored API key is sent only to the baseURL and endpoints it was saved with. Enter the key again to use a new URL.' });
     }
     merged.apiKey = keepsKey ? (existing.apiKey || '') : String(profile.apiKey || '');
-    for (const k of ['outFormat', 'optimizerURL', 'thinkingMode']) {
+    for (const k of ['outFormat', 'optimizerURL', 'thinkingMode', 'thinkingEffort']) {
       if (Object.hasOwn(profile, k) && !profile[k]) delete merged[k];
+    }
+    if (Object.hasOwn(profile, 'modelEfforts')) {
+      merged.modelEfforts = profile.modelEfforts || {};
     }
     // The merge above keeps a key the payload does not mention, so a retired one has to be dropped
     // here: the window comes from the model's own list now, and a flag left in config.json would
@@ -2147,7 +2188,8 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
 
   let answered = false; // set only after a complete answer; the half upload depends on it
   try {
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req);
+    const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
 

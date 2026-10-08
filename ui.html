@@ -905,6 +905,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>
         Routes & Profiles<span class="ct" id="ct-routes"></span>
       </a>
+      <a class="nav-link" href="#/compact" data-nav="compact">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14h6m0 0v6m0-6L3 21"/><path d="M20 10h-6m0 0V4m0 6l7-7"/><circle cx="12" cy="12" r="2"/></svg>
+        Idle Compaction<span class="ct" id="ct-compact"></span>
+      </a>
       <a class="nav-link" href="#/models" data-nav="models">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
         Model Catalog<span class="ct" id="ct-models"></span>
@@ -952,78 +956,6 @@
       <!-- VIEW 1: Routes & Profiles -->
       <div id="view-routes" class="view-panel" style="display:none;">
         <div class="sec">
-          <!-- Idle compaction -->
-          <div class="card">
-            <div class="cardh">
-              <h2 style="font-size:1.02rem; font-weight:600;">Idle compaction</h2>
-              <span class="badge outline" id="badge-idle-compact">OFF</span>
-            </div>
-            <p style="margin:.2rem 0 .7rem; color:var(--muted); font-size:.86rem;">
-              Shorten matching conversation history after a configured pause. The gateway keeps a
-              stable shortened prefix for later requests and preserves every new turn. Client
-              transcripts stay unchanged; a pause does not prove the provider cache has expired.
-            </p>
-            <div class="row">
-              <label class="cb" style="display:flex; align-items:center; gap:.5rem;">
-                <input type="checkbox" id="idle-compact-enabled" onchange="saveIdleCompact()">
-                <span>Shorten a conversation that was idle too long</span>
-              </label>
-            </div>
-            <div class="row">
-              <div class="who">
-                <div class="l">Pause that counts as losing the cache</div>
-                <div class="meta">minutes · choose a pause for your provider</div>
-              </div>
-              <div style="min-width:9rem;">
-                <input type="number" id="idle-compact-minutes" min="1" max="1440" step="any" class="inp"
-                       style="width:100%;" onchange="saveIdleCompact()">
-              </div>
-            </div>
-            <div class="row">
-              <div class="who">
-                <div class="l">Context it must be larger than</div>
-                <div class="meta">KB · below this nothing is touched</div>
-              </div>
-              <div style="min-width:9rem;">
-                <input type="number" id="idle-compact-kb" min="8" max="4096" step="any" class="inp"
-                       style="width:100%;" onchange="saveIdleCompact()">
-              </div>
-            </div>
-            <div class="row">
-              <div class="who">
-                <div class="l">Model that writes the summary</div>
-                <div class="meta">a cheaper model writes a cheaper and worse summary</div>
-              </div>
-              <div style="min-width:16rem; flex:1;">
-                <input type="text" id="idle-compact-model" class="inp" style="width:100%;"
-                       placeholder="empty = no model call" maxlength="512"
-                       onchange="saveIdleCompact()">
-              </div>
-            </div>
-            <div class="row">
-              <label class="cb" style="display:flex; align-items:center; gap:.5rem;">
-                <input type="checkbox" id="idle-compact-codex" onchange="saveIdleCompact()">
-                <span>Also shorten Codex requests (off by default; keeps native history)</span>
-              </label>
-            </div>
-            <details style="margin:.7rem 0;">
-              <summary>Advanced budgets</summary>
-              <div class="row"><label for="idle-compact-keep">Recent messages to retain</label>
-                <input id="idle-compact-keep" type="number" min="1" max="100" value="6" class="inp"
-                  style="width:9rem;" onchange="saveIdleCompact()"></div>
-              <div class="row"><label for="idle-compact-user-chars">Characters per earlier text message</label>
-                <input id="idle-compact-user-chars" type="number" min="128" max="24000" value="3000" class="inp"
-                  style="width:9rem;" onchange="saveIdleCompact()"></div>
-              <div class="row"><label for="idle-compact-summary-chars">Maximum summary characters</label>
-                <input id="idle-compact-summary-chars" type="number" min="256" max="128000" value="24000" class="inp"
-                  style="width:9rem;" onchange="saveIdleCompact()"></div>
-              <div class="row"><label for="idle-compact-lookback">Cache lifetime in hours</label>
-                <input id="idle-compact-lookback" type="number" min="1" max="168" step="any" value="72" class="inp"
-                  style="width:9rem;" onchange="saveIdleCompact()"></div>
-            </details>
-            <span id="idle-compact-status" class="meta" aria-live="polite"></span>
-          </div>
-
           <!-- Active Coding CLI Targets -->
           <div class="card">
             <div class="cardh">
@@ -1085,6 +1017,186 @@
 
           <!-- Profiles Grid -->
           <div id="profiles-grid" class="pgrid"></div>
+        </div>
+      </div>
+
+      <!-- VIEW: Idle Prefix Cache & Compaction -->
+      <div id="view-compact" class="view-panel" style="display:none;">
+        <div class="sec">
+          <!-- Overview Stats -->
+          <div class="stats">
+            <div class="stat">
+              <div class="k">Compaction Engine</div>
+              <div class="v" id="stat-compact-status" style="color:var(--muted); font-size:1.4rem;">Disabled</div>
+              <div class="status" id="stat-compact-indicator" style="margin-top:0.3rem;">Prefix caching inactive</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Inactivity Pause</div>
+              <div class="v" id="stat-compact-pause" style="color:var(--accent); font-size:1.4rem;">15 min</div>
+              <div class="hint" style="margin-top:0.3rem;">Trigger pause threshold</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Min Size Threshold</div>
+              <div class="v" id="stat-compact-size" style="color:var(--mint); font-size:1.4rem;">64 KB</div>
+              <div class="hint" style="margin-top:0.3rem;">Smaller payloads bypassed</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Cache Lookback</div>
+              <div class="v" id="stat-compact-lookback" style="color:var(--code); font-size:1.4rem;">72 hrs</div>
+              <div class="hint" style="margin-top:0.3rem;">Storage retention window</div>
+            </div>
+          </div>
+
+          <!-- Hero Master Card -->
+          <div class="card pad">
+            <div class="sech">
+              <div>
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                  <h2 style="font-size:1.05rem; font-weight:600;">Idle Prefix Cache &amp; Compaction</h2>
+                  <span class="badge outline" id="badge-idle-compact">OFF</span>
+                </div>
+                <p class="hint" style="margin-top:0.35rem; max-width:54rem; line-height:1.45;">
+                  Shortens long conversation histories when an agent session remains inactive past a configured pause.
+                  The edge gateway maintains a canonical shortened prefix for resumed turns, cutting context tokens while keeping client transcripts 100% untouched.
+                </p>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.8rem;">
+                <label class="switch" title="Toggle Idle Compaction">
+                  <input type="checkbox" id="idle-compact-enabled" onchange="saveIdleCompact()">
+                  <span></span>
+                </label>
+              </div>
+            </div>
+            <div id="idle-compact-status" style="margin-top:0.75rem; font-size:0.82rem; min-height:1.2rem;" aria-live="polite"></div>
+          </div>
+
+          <!-- Configuration Section (Hidden when inactive) -->
+          <div id="idle-compact-config-section" style="display:none; flex-direction:column; gap:1.25rem;">
+            <!-- Card 1: Core Policy & Trigger Thresholds -->
+            <div class="card">
+              <div class="cardh">
+                <h3 style="font-size:0.95rem; font-weight:600;">Compaction Policy &amp; Triggers</h3>
+                <span class="badge ok">Gateway Invariant</span>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Inactivity Pause Threshold</div>
+                  <div class="meta">Elapsed idle minutes after which the conversation prefix is compacted</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-minutes" min="1" max="1440" step="any" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Inactivity pause threshold in minutes (1 – 1440 min)" placeholder="15">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.2rem; user-select:none;">min</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Minimum Context Payload</div>
+                  <div class="meta">Context threshold; conversations smaller than this are kept untouched</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-kb" min="8" max="4096" step="any" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Minimum context payload size in kilobytes (8 – 4096 KB)" placeholder="64">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.2rem; user-select:none;">KB</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Summarization Model</div>
+                  <div class="meta">Upstream model ID to generate turn summaries (empty = deterministic truncation)</div>
+                </div>
+                <div style="min-width:16rem; flex:1; max-width:26rem; margin-left:auto;">
+                  <input type="text" id="idle-compact-model" placeholder="empty = no model call (deterministic)" maxlength="512" onchange="saveIdleCompact()" style="font-family:var(--font-mono); font-size:0.8rem;" title="Upstream model used to generate turn summary text">
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Shorten Codex CLI Sessions</div>
+                  <div class="meta">Off by default; Codex retains native turn history in local SQLite storage</div>
+                </div>
+                <label class="switch" title="Toggle Codex compaction" style="margin-left:auto;">
+                  <input type="checkbox" id="idle-compact-codex" onchange="saveIdleCompact()">
+                  <span></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Card 2: Context Retention & Budget Controls -->
+            <div class="card">
+              <div class="cardh">
+                <h3 style="font-size:0.95rem; font-weight:600;">Context Retention &amp; Cache Budgets</h3>
+                <span class="badge accent">Turn Budgets</span>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Verbatim Recent Turns</div>
+                  <div class="meta">Number of most recent turns always preserved byte-for-byte</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-keep" min="1" max="100" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Number of most recent turns to retain verbatim (1 – 100 turns)" placeholder="6">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.4rem; user-select:none;">turns</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Character Budget Per Earlier Turn</div>
+                  <div class="meta">Maximum character budget preserved per earlier conversation turn</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-user-chars" min="128" max="24000" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Character budget limit per earlier text turn (128 – 24000 chars)" placeholder="3000">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.4rem; user-select:none;">chars</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Maximum Summary Length</div>
+                  <div class="meta">Upper character limit allocated for generated turn summary blocks</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-summary-chars" min="256" max="128000" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Upper character limit allocated for generated summary (256 – 128000 chars)" placeholder="24000">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.4rem; user-select:none;">chars</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Cache Prefix Retention Window</div>
+                  <div class="meta">Duration in hours before idle cached prefixes are pruned from state disk</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="idle-compact-lookback" min="1" max="168" step="any" onchange="saveIdleCompact()" style="width:7.5rem; text-align:right;" title="Duration in hours before idle cached prefixes are pruned (1 – 168 hours)" placeholder="72">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:2.4rem; user-select:none;">hours</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 3: Architecture & Safety Invariants -->
+            <div class="card pad">
+              <h3 style="font-size:0.95rem; font-weight:600; margin-bottom:0.75rem;">Edge Gateway Invariants &amp; Storage Safety</h3>
+              <div class="sec">
+                <div class="copyline">
+                  <code>Zero Client Mutation: Transcripts on client disk (Claude Code / Codex) are never modified.</code>
+                </div>
+                <div class="copyline">
+                  <code>Atomic CAS Cache: Compare-and-swap generation counters prevent stale compaction races.</code>
+                </div>
+                <div class="copyline">
+                  <code>Private State Storage: Cached prefixes saved under ~/.llm-switcher/state/idle-compact/ (0600 permissions).</code>
+                </div>
+                <div class="copyline">
+                  <code>Deterministic Safety: If no summary model is configured, gateway uses pure heuristic truncation without external calls.</code>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1263,30 +1375,6 @@
             </div>
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.9rem;">
-              <label class="f">Thinking Mode
-                <select id="p-thinking-mode">
-                  <option value="auto">AUTO (restores reasoning, strips tags safely)</option>
-                  <option value="native">NATIVE (strict reasoning_effort)</option>
-                  <option value="off">OFF (never send thinking)</option>
-                </select>
-              </label>
-              <label class="f" id="f-thinking-effort">Thinking Effort
-                <select id="p-thinking-effort">
-                  <option value="auto">Auto (inherit from client tool)</option>
-                  <option value="low">Low (fast, light reasoning)</option>
-                  <option value="medium">Medium (balanced reasoning)</option>
-                  <option value="high">High (deep reasoning)</option>
-                  <option value="xhigh">Extra High (complex problem solving)</option>
-                  <option value="max">Max (maximum reasoning depth)</option>
-                </select>
-              </label>
-            </div>
-
-            <div id="bifrost-hint" style="display:none; padding:0.6rem 0.85rem; border-radius:6px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.25); font-size:0.82rem; color:#60a5fa; line-height:1.4;">
-              ⚡ <strong>Bifrost Passthrough:</strong> Routing byte-for-byte to intact without format conversion. Thinking effort is controlled natively by your client tool.
-            </div>
-
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.9rem;">
               <label class="f">Routing Mode
                 <select id="p-mode">
                   <option value="convert">CONVERT (Bi-directional translation)</option>
@@ -1300,11 +1388,46 @@
           <!-- TAB 3: Models -->
           <div id="tab-models" class="tab-content" style="display:none; gap:0.9rem; flex-direction:column;">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
-              <h3 id="model-slot-heading" style="font-size:0.92rem; font-weight:600;">Model Slots Mapping</h3>
+              <div>
+                <h3 id="model-slot-heading" style="font-size:0.92rem; font-weight:600; margin:0;">Model Slots Mapping</h3>
+                <span class="hint" style="font-size:0.75rem;">Configure target model and individual thinking effort for each slot</span>
+              </div>
               <div id="models-status" class="models-status" aria-live="polite"></div>
             </div>
 
             <div id="slot-fields" style="display:grid; gap:0.75rem;"></div>
+
+            <!-- Global Reasoning Policy -->
+            <div style="border-top:1px solid var(--line); padding-top:0.85rem; margin-top:0.35rem; display:grid; gap:0.85rem;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h4 style="font-size:0.88rem; font-weight:600; margin:0;">Reasoning Mode &amp; Policy</h4>
+                <span class="hint">Controls reasoning behavior across all model slots</span>
+              </div>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.9rem;">
+                <label class="f">Thinking Mode
+                  <select id="p-thinking-mode">
+                    <option value="auto">AUTO (restores reasoning, strips tags safely)</option>
+                    <option value="native">NATIVE (strict reasoning_effort)</option>
+                    <option value="off">OFF (never send thinking to any model)</option>
+                  </select>
+                </label>
+                <label class="f" id="f-thinking-effort" style="display:none;">Global Fallback Effort
+                  <select id="p-thinking-effort">
+                    <option value="auto">Auto (inherit from client tool)</option>
+                    <option value="low">Low (fast, light reasoning)</option>
+                    <option value="medium">Medium (balanced reasoning)</option>
+                    <option value="high">High (deep reasoning)</option>
+                    <option value="xhigh">Extra High (complex problem solving)</option>
+                    <option value="max">Max (maximum reasoning depth)</option>
+                  </select>
+                </label>
+              </div>
+
+              <div id="bifrost-hint" style="display:none; padding:0.6rem 0.85rem; border-radius:6px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.25); font-size:0.82rem; color:#60a5fa; line-height:1.4;">
+                ⚡ <strong>Bifrost Passthrough:</strong> Byte-for-byte routing to intact without format conversion. Thinking effort is controlled natively by your client tool.
+              </div>
+            </div>
           </div>
 
           <!-- Test Connection Box -->
@@ -1512,7 +1635,7 @@
     function handleRoute() {
       const hash = window.location.hash || '#/routes';
       const route = hash.replace(/^#\/?/, '').split('/')[0] || 'routes';
-      const validRoutes = ['routes', 'models', 'logs', 'doctor'];
+      const validRoutes = ['routes', 'compact', 'models', 'logs', 'doctor'];
       const activeRoute = validRoutes.includes(route) ? route : 'routes';
 
       // Update active nav link
@@ -1533,6 +1656,7 @@
       updateHeader(activeRoute);
 
       // Lazy load view content
+      if (activeRoute === 'compact') loadIdleCompact();
       if (activeRoute === 'models') renderCatalogView();
       if (activeRoute === 'logs') loadInspectorLogs();
     }
@@ -1550,7 +1674,6 @@
       const activeTargets = Object.entries(activeMap).filter(([_, v]) => Boolean(v));
 
       if (route === 'routes') {
-        loadIdleCompact();
         titleEl.textContent = 'Routes & Profiles';
         if (activeTargets.length > 0) {
           const parts = [];
@@ -1565,6 +1688,14 @@
           <button class="btn btn-primary" onclick="openProfileModal(true)">+ Add Profile</button>
           <button class="btn btn-outline" id="btn-toggle-routes" onclick="toggleProxy()">${activeTargets.length > 0 ? 'Use official endpoints' : 'Activate compatible routes'}</button>
           <button class="btn btn-outline" onclick="loadStatus()">Refresh</button>
+        `;
+      } else if (route === 'compact') {
+        loadIdleCompact();
+        titleEl.textContent = 'Idle Compaction';
+        subEl.textContent = 'Edge gateway prefix compaction and cache pruning for long sessions.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline" onclick="loadIdleCompact()">Refresh</button>
+          <button class="btn btn-primary" onclick="saveIdleCompact()">Save Configuration</button>
         `;
       } else if (route === 'models') {
         titleEl.textContent = 'Dynamic Model Catalog';
@@ -1713,6 +1844,11 @@
       return defaultModels[slotId] || '';
     }
 
+    function effortForSlot(modelEfforts, slotId) {
+      if (!modelEfforts) return 'auto';
+      return modelEfforts[slotId] || 'auto';
+    }
+
     function renderModelSlots(slotFmt, p) {
       const container = document.getElementById('slot-fields');
       const heading = document.getElementById('model-slot-heading');
@@ -1725,11 +1861,27 @@
 
       for (const s of cfg.slots) {
         const val = currentProfileBuffer ? valueForSlot(currentProfileBuffer.defaultModels, s.id) : valueForSlot(p?.defaultModels, s.id);
+        const effVal = currentProfileBuffer ? effortForSlot(currentProfileBuffer.modelEfforts, s.id) : effortForSlot(p?.modelEfforts, s.id);
 
         const slotRow = document.createElement('div');
-        slotRow.style.cssText = 'display:flex; flex-direction:column; gap:0.25rem;';
+        slotRow.className = 'slot-row-card';
+        slotRow.style.cssText = 'display:flex; flex-direction:column; gap:0.35rem; padding:0.6rem 0.75rem; border-radius:6px; background:var(--card-bg, rgba(255,255,255,0.02)); border:1px solid var(--line);';
         slotRow.innerHTML = `
-          <label for="p-${s.id}" style="font-size:0.82rem; font-weight:500;">${escapeHtml(s.name)}</label>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+            <label for="p-${s.id}" style="font-size:0.82rem; font-weight:600; margin:0;">${escapeHtml(s.name)}</label>
+            <div style="display:flex; align-items:center; gap:0.35rem;">
+              <label for="p-effort-${s.id}" style="font-size:0.75rem; color:var(--muted); margin:0;">Target Effort:</label>
+              <select id="p-effort-${s.id}" class="slot-effort inp" onchange="formDirty = true" style="height:26px; padding:0 0.4rem; font-size:0.78rem; border-radius:4px; min-width:6.8rem;">
+                <option value="auto">Auto (Default)</option>
+                <option value="none">None (0)</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra High</option>
+                <option value="max">Max</option>
+              </select>
+            </div>
+          </div>
           <div class="combo">
             <input type="text" id="p-${s.id}" oninput="updateWindowNotes()" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="p-${s.id}-list" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(s.placeholder)}" value="${escapeHtml(val)}">
             <button type="button" class="combo-toggle" tabindex="-1" aria-label="Show models for ${escapeHtml(s.name)}">
@@ -1737,10 +1889,15 @@
             </button>
             <ul class="combo-list" id="p-${s.id}-list" role="listbox" aria-label="${escapeHtml(s.name)} models" hidden></ul>
           </div>
-          <div class="slot-note" id="p-${s.id}-note" role="status" aria-live="polite"></div>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; min-height:1rem;">
+            <div class="slot-note" id="p-${s.id}-note" role="status" aria-live="polite"></div>
+            <div class="slot-bifrost-hint" id="p-bifrost-${s.id}" style="display:none; font-size:0.74rem; color:#60a5fa;">⚡ Bifrost Passthrough (native effort)</div>
+          </div>
         `;
         container.appendChild(slotRow);
         wireCombo(slotRow.querySelector('.combo'));
+        const effSelect = slotRow.querySelector('#p-effort-' + s.id);
+        if (effSelect) effSelect.value = effVal || 'auto';
       }
       updateWindowNotes();
     }
@@ -1754,6 +1911,7 @@
       const cfg = getActiveSlotConfig(renderedSlotFormat);
       if (!currentProfileBuffer) currentProfileBuffer = {};
       const defaultModels = { ...(currentProfileBuffer.defaultModels || {}) };
+      const modelEfforts = { ...(currentProfileBuffer.modelEfforts || {}) };
       for (const s of cfg.slots) {
         const inp = document.getElementById('p-' + s.id);
         if (inp) {
@@ -1761,13 +1919,19 @@
           if (val) defaultModels[s.id] = val;
           else delete defaultModels[s.id];
         }
+        const effSelect = document.getElementById('p-effort-' + s.id);
+        if (effSelect) {
+          const effVal = effSelect.value;
+          if (effVal && effVal !== 'auto') modelEfforts[s.id] = effVal;
+          else delete modelEfforts[s.id];
+        }
       }
       currentProfileBuffer.defaultModels = defaultModels;
+      currentProfileBuffer.modelEfforts = modelEfforts;
       // An old config can still carry the retired 1M flags. They are dropped on the next save
       // instead of being written back: the window is the model's own now.
       delete currentProfileBuffer.model1M;
-      return { defaultModels };
-
+      return { defaultModels, modelEfforts };
     }
 
     // 128000 reads as 128K and 262144 as 256K: a round decimal count keeps base 1000.
@@ -1799,54 +1963,59 @@
 
     function syncEffortOptions() {
       const mode = document.getElementById('p-thinking-mode')?.value;
-      const pMode = document.getElementById('p-mode')?.value;
-      const outFormat = document.getElementById('p-outformat')?.value;
       const url = (document.getElementById('p-url')?.value || '').toLowerCase();
       const tool = document.getElementById('p-tool')?.value || 'auto';
-      const effortEl = document.getElementById('p-thinking-effort');
-      const effortLabel = document.getElementById('f-thinking-effort');
-      const bifrostHint = document.getElementById('bifrost-hint');
-      if (!effortEl || !effortLabel || !bifrostHint) return;
+      const isIntact = url.includes('intact') || url.includes(':20130') || url.includes(':8080') ||
+                       url.includes(':20142') || url.includes(':20150') || url.includes(':20152');
+      const isThinkingOff = mode === 'off';
 
-      // Check if Bifrost or Direct passthrough is active
-      const isIntact = url.includes('intact') || url.includes(':20130') || url.includes(':8080');
-      const models = currentProfileBuffer?.defaultModels || {};
-      const modelValues = Object.values(models).filter(Boolean);
-      const slotInputs = Array.from(document.querySelectorAll('#slot-fields input')).map(i => i.value.trim()).filter(Boolean);
-      const allModelValues = Array.from(new Set([...modelValues, ...slotInputs]));
+      const cfg = getActiveSlotConfig(renderedSlotFormat);
+      let anyBifrost = false;
 
-      const isNativeBifrostModel = isIntact && (
-        (tool === 'claude' && allModelValues.some(m => m.startsWith('claude/') || m.startsWith('anthropic/'))) ||
-        (tool === 'codex' && allModelValues.some(m => m.startsWith('codex/'))) ||
-        (tool === 'agy' && allModelValues.some(m => m.startsWith('antigravity/')))
-      );
-      const isBifrost = pMode === 'direct' || isNativeBifrostModel;
+      for (const s of cfg.slots) {
+        const inp = document.getElementById('p-' + s.id);
+        const effSelect = document.getElementById('p-effort-' + s.id);
+        const bifrostHint = document.getElementById('p-bifrost-' + s.id);
+        if (!effSelect) continue;
 
-      if (isBifrost) {
-        effortLabel.style.display = 'none';
-        bifrostHint.style.display = 'block';
-        return;
-      }
-
-      // Not Bifrost: show effort selection and hide hint
-      effortLabel.style.display = '';
-      bifrostHint.style.display = 'none';
-
-      if (mode === 'off') {
-        effortEl.disabled = true;
-        effortEl.style.opacity = '0.5';
-      } else {
-        effortEl.disabled = false;
-        effortEl.style.opacity = '1';
-      }
-
-      // Filter options based on target capabilities:
-      // Strict native OpenAI only supports low, medium, high
-      Array.from(effortEl.options).forEach(opt => {
-        if (opt.value === 'xhigh' || opt.value === 'max') {
-          opt.hidden = (mode === 'native' && outFormat === 'openai-chat');
+        const modelVal = (inp?.value || '').trim().toLowerCase();
+        let slotIsBifrost = false;
+        if (isIntact && modelVal) {
+          if (tool === 'claude') slotIsBifrost = modelVal.startsWith('claude/') || modelVal.startsWith('anthropic/');
+          else if (tool === 'codex') slotIsBifrost = modelVal.startsWith('codex/');
+          else if (tool === 'agy') slotIsBifrost = modelVal.startsWith('antigravity/');
+          else if (tool === 'auto') slotIsBifrost = modelVal.startsWith('claude/') || modelVal.startsWith('anthropic/') || modelVal.startsWith('codex/') || modelVal.startsWith('antigravity/');
         }
-      });
+
+        if (slotIsBifrost) {
+          anyBifrost = true;
+          if (bifrostHint) bifrostHint.style.display = 'block';
+          effSelect.disabled = true;
+          effSelect.style.opacity = '0.6';
+          effSelect.title = 'Bifrost passthrough active: effort controlled natively by client tool';
+        } else {
+          if (bifrostHint) bifrostHint.style.display = 'none';
+          if (isThinkingOff) {
+            effSelect.disabled = true;
+            effSelect.style.opacity = '0.5';
+            effSelect.title = 'Thinking mode is OFF globally';
+          } else {
+            effSelect.disabled = false;
+            effSelect.style.opacity = '1';
+            effSelect.title = 'Target thinking effort for this model';
+          }
+        }
+      }
+
+      const effortEl = document.getElementById('p-thinking-effort');
+      const globalBifrostHint = document.getElementById('bifrost-hint');
+      if (effortEl) {
+        effortEl.disabled = isThinkingOff;
+        effortEl.style.opacity = isThinkingOff ? '0.5' : '1';
+      }
+      if (globalBifrostHint) {
+        globalBifrostHint.style.display = anyBifrost ? 'block' : 'none';
+      }
     }
 
     // Prefetch Counts for Nav Badges
@@ -1874,6 +2043,8 @@
           if (ctLogs && lastLogsCount > 0) ctLogs.textContent = lastLogsCount;
         }
       } catch {}
+
+      loadIdleCompact();
     }
 
     // Load Status
@@ -1881,18 +2052,64 @@
     // dashboard and the terminal cannot show two different settings.
     function showIdleCompact(c) {
       c = c || {};
-      document.getElementById('idle-compact-enabled').checked = !!c.enabled;
-      document.getElementById('idle-compact-minutes').value = c.idleMinutes ?? 15;
-      document.getElementById('idle-compact-kb').value = (c.minBytes ?? 65536) / 1024;
-      document.getElementById('idle-compact-model').value = c.model || '';
-      document.getElementById('idle-compact-codex').checked = !!c.codex;
-      document.getElementById('idle-compact-keep').value = c.keepRecent ?? 6;
-      document.getElementById('idle-compact-user-chars').value = c.userChars ?? 3000;
-      document.getElementById('idle-compact-summary-chars').value = c.summaryMaxChars ?? 24000;
-      document.getElementById('idle-compact-lookback').value = c.sessionLookbackHours ?? 72;
+      const enabled = !!c.enabled;
+      const elEnabled = document.getElementById('idle-compact-enabled');
+      if (elEnabled) elEnabled.checked = enabled;
+      const configSec = document.getElementById('idle-compact-config-section');
+      if (configSec) configSec.style.display = enabled ? 'flex' : 'none';
+      const elMinutes = document.getElementById('idle-compact-minutes');
+      if (elMinutes) elMinutes.value = c.idleMinutes ?? 15;
+      const elKb = document.getElementById('idle-compact-kb');
+      if (elKb) elKb.value = (c.minBytes ?? 65536) / 1024;
+      const elModel = document.getElementById('idle-compact-model');
+      if (elModel) elModel.value = c.model || '';
+      const elCodex = document.getElementById('idle-compact-codex');
+      if (elCodex) elCodex.checked = !!c.codex;
+      const elKeep = document.getElementById('idle-compact-keep');
+      if (elKeep) elKeep.value = c.keepRecent ?? 6;
+      const elUserChars = document.getElementById('idle-compact-user-chars');
+      if (elUserChars) elUserChars.value = c.userChars ?? 3000;
+      const elSummaryChars = document.getElementById('idle-compact-summary-chars');
+      if (elSummaryChars) elSummaryChars.value = c.summaryMaxChars ?? 24000;
+      const elLookback = document.getElementById('idle-compact-lookback');
+      if (elLookback) elLookback.value = c.sessionLookbackHours ?? 72;
+
+      // Badge on hero card
       const badge = document.getElementById('badge-idle-compact');
-      badge.textContent = c.enabled ? 'ON' : 'OFF';
-      badge.className = 'badge ' + (c.enabled ? 'ok' : 'outline');
+      if (badge) {
+        badge.textContent = enabled ? 'ACTIVE' : 'OFF';
+        badge.className = 'badge ' + (enabled ? 'ok' : 'outline');
+      }
+
+      // Nav link count
+      const ctCompact = document.getElementById('ct-compact');
+      if (ctCompact) {
+        ctCompact.textContent = enabled ? 'ON' : '';
+      }
+
+      // Stats cards
+      const statStatus = document.getElementById('stat-compact-status');
+      if (statStatus) {
+        statStatus.textContent = enabled ? 'Active' : 'Disabled';
+        statStatus.style.color = enabled ? 'var(--ok)' : 'var(--muted)';
+      }
+      const statInd = document.getElementById('stat-compact-indicator');
+      if (statInd) {
+        statInd.textContent = enabled ? 'Prefix caching active' : 'Prefix caching inactive';
+        statInd.className = 'status ' + (enabled ? 'on' : '');
+      }
+      const statPause = document.getElementById('stat-compact-pause');
+      if (statPause) {
+        statPause.textContent = (c.idleMinutes ?? 15) + ' min';
+      }
+      const statSize = document.getElementById('stat-compact-size');
+      if (statSize) {
+        statSize.textContent = ((c.minBytes ?? 65536) / 1024) + ' KB';
+      }
+      const statLookback = document.getElementById('stat-compact-lookback');
+      if (statLookback) {
+        statLookback.textContent = (c.sessionLookbackHours ?? 72) + ' hrs';
+      }
     }
 
     async function loadIdleCompact() {
@@ -1903,9 +2120,19 @@
     }
 
     async function saveIdleCompact() {
+      const isEnabled = document.getElementById('idle-compact-enabled').checked;
+      const configSec = document.getElementById('idle-compact-config-section');
+      if (configSec) configSec.style.display = isEnabled ? 'flex' : 'none';
       const status = document.getElementById('idle-compact-status');
       for (const input of document.querySelectorAll('[id^="idle-compact-"][type="number"]')) {
-        if (!input.value || !input.checkValidity()) { input.reportValidity(); status.textContent = 'Not saved: enter a value within the displayed bounds.'; return; }
+        if (!input.value || !input.checkValidity()) {
+          input.reportValidity();
+          if (status) {
+            status.textContent = 'Not saved: enter a value within the displayed bounds.';
+            status.style.color = 'var(--err)';
+          }
+          return;
+        }
       }
       const patch = {
         codex: document.getElementById('idle-compact-codex').checked,
@@ -1918,7 +2145,10 @@
         minBytes: Math.round(Number(document.getElementById('idle-compact-kb').value) * 1024),
         model: document.getElementById('idle-compact-model').value.trim()
       };
-      status.textContent = 'Saving...';
+      if (status) {
+        status.textContent = 'Saving...';
+        status.style.color = 'var(--muted)';
+      }
       try {
         const r = await api('/api/idle-compact', {
           method: 'POST',
@@ -1927,9 +2157,18 @@
         });
         if (!r.ok) throw new Error((await r.json()).error || r.status);
         showIdleCompact((await r.json()).idleCompact);
-        status.textContent = 'Saved. It applies to the next conversation that comes back after a pause.';
+        if (status) {
+          status.textContent = 'Saved. Applies to subsequent conversations that resume after a pause.';
+          status.style.color = 'var(--ok)';
+          setTimeout(() => { if (status) status.textContent = ''; }, 4500);
+        }
+        showToast('Idle compaction configuration saved');
       } catch (e) {
-        status.textContent = 'Not saved: ' + e.message;
+        if (status) {
+          status.textContent = 'Not saved: ' + e.message;
+          status.style.color = 'var(--err)';
+        }
+        showToast('Failed to save: ' + e.message, true);
       }
     }
 
@@ -2140,6 +2379,7 @@
       formLoadedKey = key;
       formDirty = false;
       currentProfileBuffer = JSON.parse(JSON.stringify(p));
+      if (!currentProfileBuffer.modelEfforts) currentProfileBuffer.modelEfforts = {};
 
       document.getElementById('form-title').textContent = 'Edit Profile: ' + p.name;
       document.getElementById('p-key').value = key;
@@ -2152,7 +2392,10 @@
       document.getElementById('p-outformat').value = p.outFormat || '';
       document.getElementById('p-mode').value = p.mode || 'convert';
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
-      document.getElementById('p-thinking-effort').value = p.thinkingEffort || 'auto';
+      if (document.getElementById('p-thinking-effort')) {
+        document.getElementById('p-thinking-effort').value = p.thinkingEffort || 'auto';
+      }
+      renderModelSlots(toolVal, p);
       syncEffortOptions();
       document.getElementById('btn-delete').style.display = 'inline-flex';
 
@@ -2162,8 +2405,6 @@
       if (activeTag) {
         activeTag.textContent = activeTargets.length ? '● Active: ' + activeTargets.join(', ') : '';
       }
-
-      renderModelSlots(toolVal, p);
     }
 
     function initNewProfile() {
@@ -2178,7 +2419,8 @@
         outFormat: 'openai-chat',
         mode: 'convert',
         thinkingMode: 'auto',
-        defaultModels: {}
+        defaultModels: {},
+        modelEfforts: {}
       };
 
       document.getElementById('form-title').textContent = 'Add New Provider Profile';
@@ -2191,12 +2433,14 @@
       document.getElementById('p-outformat').value = 'openai-chat';
       document.getElementById('p-mode').value = 'convert';
       document.getElementById('p-thinking-mode').value = 'auto';
-      document.getElementById('p-thinking-effort').value = 'auto';
+      if (document.getElementById('p-thinking-effort')) {
+        document.getElementById('p-thinking-effort').value = 'auto';
+      }
+      renderModelSlots('auto', currentProfileBuffer);
       syncEffortOptions();
       document.getElementById('btn-delete').style.display = 'none';
       document.getElementById('active-tag').textContent = '';
 
-      renderModelSlots('auto', currentProfileBuffer);
       switchTab('tab-general');
     }
 
@@ -2328,6 +2572,13 @@
       // already had the key.
       const thinkingMode = document.getElementById('p-thinking-mode').value;
       if (thinkingMode !== 'auto' || existing.thinkingMode) profilePayload.thinkingMode = thinkingMode;
+      const thinkingEffort = document.getElementById('p-thinking-effort')?.value;
+      if (thinkingEffort && (thinkingEffort !== 'auto' || existing.thinkingEffort)) {
+        profilePayload.thinkingEffort = thinkingEffort;
+      }
+      if (currentProfileBuffer?.modelEfforts && Object.keys(currentProfileBuffer.modelEfforts).length > 0) {
+        profilePayload.modelEfforts = { ...currentProfileBuffer.modelEfforts };
+      }
 
       if (keyVal === MASKED_KEY) {
         profilePayload.apiKey = existing.apiKey || '';
