@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.4 — 2026-10-08
+
+- **Dynamic Model Provider Source for Idle Compaction:** Query live model listings directly from the selected profile's `baseURL` via `/models` instead of hardcoding provider URLs or static model lists.
+- **Clean Model Combobox without Slot Aliases:** Eliminate hardcoded quick preset buttons, popular model arrays, and slot aliases from the summarization model combobox. Models are loaded dynamically from the upstream provider, sorted alphabetically with context limits, with support for instant search filtering and deterministic heuristic truncation (`""`).
+
 ## Release 1.6.3 — 2026-10-08
 
 - **Interactive Summarization Model Selection & Presets:** Replace raw text input for Idle Compaction's summarization model with a fully searchable combobox dropdown and quick 1-click preset chips. Users can pick directly from deterministic heuristic mode (`""`), slot aliases (`haiku`, `subagent`, `sonnet`, `main`), configured profile models (`zencore/*`, `codex/*`), and discovered catalog models, or type to filter in real-time. Selection automatically saves and updates active highlights across both light and dark themes.
