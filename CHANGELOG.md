@@ -1,16 +1,24 @@
 # Changelog — LLM Switcher
 
-## Unreleased — 2026-10-08
+## Release 1.6.1 — 2026-10-08
 
-- Replace external Claude/Codex transcript and database writers with a private, durable gateway
-  prefix cache. Exact source-prefix, caller/session/profile/context and generation guards preserve
-  every new suffix turn and reject stale summaries. Native client history stays unchanged.
-- Retain assistant decision text accompanying tool calls; preserve tool dependencies throughout
-  the recent tail and forward malformed or unsupported tool histories unchanged.
-- Validate all idle-compaction settings and budgets consistently. Empty/null summary model makes
-  no call; configured summary routes independently with bounded timeout and visible diagnostics.
-- Document Codex's opt-in wire prefix cache, cache lifetime, explicit session requirement and safe
-  failure behavior; update dashboard and CLI controls.
+- **Durable Gateway Prefix Cache:** Replace external Claude Code and Codex transcript/database
+  writers with a private, durable gateway prefix cache under `STATE_DIR/idle-compact/`. Exact source-prefix,
+  caller/session/profile/context and generation guards preserve every newly appended turn and reject
+  stale summaries. Native client files (`~/.claude/projects/` and `thread_history_1.sqlite`) remain untouched.
+- **Reasoning and Tool Pairing Preservation:** Retain assistant decision and reasoning text
+  accompanying tool calls; preserve tool dependencies throughout the recent tail and forward
+  malformed or unsupported tool histories unchanged.
+- **Effort Mapping Ladder & Dynamic UI:** Introduce an 8-level effort ladder (`none`, `minimal`,
+  `low`, `medium`, `high`, `xhigh`, `max`, `ultra`) with automatic nearest-level equivalence mapping
+  (`mapEquivalentEffort`) when targeting upstreams with fewer levels (strict OpenAI, Anthropic, Gemini).
+  Add `profile.thinkingEffort` override setting with Web UI dropdown sync and automatic Bifrost passthrough hint.
+- **Pure CA Validation & Fail-safe TLS:** Introduce strict file validation for custom CA certificates
+  (`usableCACertificate`); automatically unsets loopback proxy when CA is missing, corrupt, or unreadable
+  so Codex connects directly via system root certificates instead of failing TLS during daemon startup.
+- **Consistent Idle-compaction Settings:** Validate all idle-compaction settings and budgets consistently.
+  An empty/null summary model makes no provider call; a configured summary model routes independently
+  with bounded timeout and visible diagnostics. Update dashboard and CLI controls accordingly.
 
 ## Release 1.6.0 — 2026-10-07
 
