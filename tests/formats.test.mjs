@@ -12,7 +12,7 @@ import {
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
-  budgetToEffort, effortToBudget, normalizeEffort, capEffort, EFFORT_LEVELS
+  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -1009,4 +1009,47 @@ test('a level becomes the budget each API speaks, and Gemini gets one it accepts
   assert.equal(irToVertexBody(anthropicToIR({ model: 'm', max_tokens: 200000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 100000 } }), 'm').generationConfig.thinkingConfig.thinkingBudget, 32768);
   // Anthropic keeps the budget it was given, only under max_tokens as its own rule requires.
   assert.equal(irToAnthropicBody(anthropicToIR({ model: 'm', max_tokens: 200000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 100000 } }), 'm').thinking.budget_tokens, 100000);
+});
+
+test('mapEquivalentEffort maps to nearest supported level when target lacks exact match', () => {
+  const strict = ['low', 'medium', 'high'];
+  assert.equal(mapEquivalentEffort('ultra', strict), 'high');
+  assert.equal(mapEquivalentEffort('max', strict), 'high');
+  assert.equal(mapEquivalentEffort('xhigh', strict), 'high');
+  assert.equal(mapEquivalentEffort('high', strict), 'high');
+  assert.equal(mapEquivalentEffort('medium', strict), 'medium');
+  assert.equal(mapEquivalentEffort('low', strict), 'low');
+  assert.equal(mapEquivalentEffort('minimal', strict), 'low');
+
+  // Gap in target levels: ['low', 'max']
+  assert.equal(mapEquivalentEffort('xhigh', ['low', 'max']), 'max');
+  assert.equal(mapEquivalentEffort('medium', ['low', 'max']), 'low');
+
+  // Intact synonyms: extra-low -> minimal
+  assert.equal(mapEquivalentEffort('extra-low', ['minimal', 'medium', 'high']), 'minimal');
+});
+
+test('thinkingEffort profile option overrides client effort across all upstreams', () => {
+  const clientIR = responsesToIR({ model: 'gpt-5', max_output_tokens: 16000, reasoning: { effort: 'low' }, input: [{ role: 'user', content: 'solve' }] });
+
+  // 1. Force 'high' on OpenAI Chat
+  const chatBody = emitUpstreamBody('openai-chat', clientIR, 'gpt-5', { thinkingEffort: 'high' });
+  assert.equal(chatBody.reasoning_effort, 'high');
+
+  // 2. Force 'high' on Anthropic
+  const anthropicBody = emitUpstreamBody('anthropic', clientIR, 'claude-3-7-sonnet', { thinkingEffort: 'high' });
+  assert.equal(anthropicBody.output_config?.effort, 'high');
+  assert.equal(anthropicBody.thinking?.budget_tokens, 8000);
+
+  // 3. Force 'high' on Vertex (Gemini)
+  const vertexBody = emitUpstreamBody('vertex', clientIR, 'gemini-2.5-pro', { thinkingEffort: 'high' });
+  assert.equal(vertexBody.generationConfig?.thinkingConfig?.thinkingBudget, 8000);
+
+  // 4. Force 'xhigh' on strict native OpenAI caps to 'high'
+  const nativeChat = emitUpstreamBody('openai-chat', clientIR, 'gpt-5', { thinkingMode: 'native', thinkingEffort: 'xhigh' });
+  assert.equal(nativeChat.reasoning_effort, 'high');
+
+  // 5. 'auto' inherits client's original effort ('low')
+  const autoChat = emitUpstreamBody('openai-chat', clientIR, 'gpt-5', { thinkingEffort: 'auto' });
+  assert.equal(autoChat.reasoning_effort, 'low');
 });

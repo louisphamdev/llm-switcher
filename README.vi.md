@@ -550,43 +550,47 @@ Trên Linux, unit là service systemd *của user*: nó khởi động khi bạn
 
 ### Nén hội thoại khi để lâu
 
-Một hội thoại để lâu đủ thì sẽ mất cache của provider. Request kế tiếp phải trả full price cho một
-prefix mà provider không còn giữ, và lượt sau đó lại trả tiếp. Mỗi provider giữ cache bao lâu là
-việc của riêng họ: Anthropic 5 phút mặc định, 1 giờ nếu request yêu cầu; OpenAI 30 phút; Gemini và
-DeepSeek không công bố thời hạn nào.
+Khoảng nghỉ đủ dài có thể là dấu hiệu cache của provider đã nguội. Đây là ngưỡng do bạn chọn,
+không phải bảo đảm cache đã hết hạn. Tính năng mặc định tắt.
 
-Khi một hội thoại Claude Code quay lại sau một khoảng nghỉ, và đủ lớn để đáng xử lý, gateway rút gọn
-lịch sử và ghi kết quả nén vào session file. Lượt lẽ ra phải tốn cả lịch sử giờ chỉ tốn phần tóm
-tắt.
+Với phiên Claude Code có định danh rõ ràng, gateway rút gọn một prefix cũ sau khoảng nghỉ và lưu
+ánh xạ giữa hash của prefix gốc với bản thay thế trong cache riêng `STATE_DIR/idle-compact`.
+Các request sau chỉ dùng lại khi prefix gốc khớp hoàn toàn, giữ nguyên mọi turn gần đây và turn
+mới thêm. Cache còn hiệu lực sau khi gateway khởi động lại. Nếu client tự compact hoặc sửa lịch
+sử cũ, ánh xạ hết hiệu lực. Tính năng không đọc hay sửa JSONL của client hoặc SQLite của Codex.
 
-| | |
+| Lệnh | Hành vi |
 | --- | --- |
 | `switch compact status` | Xem cấu hình |
-| `switch compact on` / `off` | Bật hoặc tắt (mặc định tắt) |
-| `switch compact model <id>` | Model nào viết phần tóm tắt. Rỗng hoặc `default`: dùng model của chính hội thoại đó |
-| `switch compact idle <phút>` | Nghỉ bao lâu thì coi là mất cache (15) |
-| `switch compact min <KB>` | Hội thoại phải lớn bao nhiêu mới đáng nén (64) |
+| `switch compact on` / `off` | Bật hoặc tắt nén request Claude |
+| `switch compact codex on` / `off` | Bật riêng cache prefix cho request Responses của Codex; mặc định tắt |
+| `switch compact model <id>` | Chọn rõ model viết summary |
+| `switch compact model none` / `default` | Không gọi model summary; không dùng model của hội thoại làm dự phòng |
+| `switch compact idle <phút>` | Ngưỡng nghỉ, mặc định 15; phạm vi 1–1440 |
+| `switch compact min <KB>` | Kích thước request tối thiểu, mặc định 64; phạm vi 8–4096 |
 
-Hai điều là cố ý.
+Không đặt model summary (chuỗi rỗng hoặc `null`) thì không gọi model nào. Bản rút gọn xác định
+sẵn giữ chữ của user và assistant trong ngân sách đã chọn, bỏ payload tool cũ và giữ tail gần
+nhất cùng đủ cặp call/result. Nếu có model summary, một lượt gọi nền chỉ tóm tắt prefix được
+thay thế rồi cập nhật generation cache. Summary đến muộn không ghi đè generation mới hơn và
+không mất các turn xuất hiện trong lúc chờ. Model summary được map và chọn format upstream riêng.
 
-**Chỉ một lần, không nén mọi lượt.** Nén mỗi lượt sẽ làm prefix đổi mỗi lượt, nên không lượt nào
-trúng cache, và hội thoại bị tóm tắt đi đi lại. Nén đúng lúc một khoảng nghỉ báo đã mất cache thì
-phần tóm tắt giữ nguyên cho các lượt sau.
+Phải có định danh phiên rõ ràng: header/metadata phiên Claude, hoặc session, thread hay prompt
+cache key của Codex. Request không có định danh giữ nguyên; cùng câu mở đầu không được coi là
+cùng phiên. Phạm vi cache gồm client, digest credential của caller, profile, model, system/tool
+và policy nén. Lịch sử tool không được hỗ trợ hoặc sai cặp giữ nguyên; cache lỗi cũng gửi nguyên
+request gốc.
 
-**Ghi vào session file, không qua API.** Claude Code dựng mọi request từ chuỗi entry trong
-`~/.claude/projects/<project>/<session>.jsonl`, nên một lần nén ghi vào đó rút gọn **mọi** request sau
-đó, chứ không chỉ lượt đã kích hoạt. Hai entry đúng bằng hai entry Claude Code tự ghi: một
-`compact_boundary` và một entry `user` mang cờ `isCompactSummary`. Các entry cũ vẫn nằm trong file —
-Claude Code cũng vậy — nên một bản transcript người ta vẫn đọc được đáng giá hơn một file nhỏ. Việc
-rút gọn có hiệu lực từ lần resume kế tiếp của phiên đó.
+Dashboard và `/api/idle-compact` dùng cùng cấu hình với CLI. Các field được nhận: `enabled`,
+`codex`, `model`, `idleMinutes`, `minBytes`, `keepRecent`, `userChars`, `summaryMaxChars` và
+`sessionLookbackHours`. API trả HTTP 400 cho field lạ hoặc ngân sách không hợp lệ.
+Các phạm vi/mặc định còn lại: `keepRecent` 1–100 (6), `userChars` 128–24000 (3000),
+`summaryMaxChars` 256–128000 (24000), `sessionLookbackHours` 1–168 (72).
+Cache riêng giữ tối đa 256 record, hết hạn theo thời gian đã cấu hình. Một khoảng nghỉ mới có
+thể nén prefix lớn hơn; các turn liên tiếp dùng lại prefix ổn định. Codex tự quản lý native compaction.
 
-Model rẻ viết phần tóm tắt rẻ và tệ hơn: tóm tắt thay cả lịch sử, nên thứ nó bỏ sót là mất hẳn.
-Đó là quyết định của người đọc, nên nó là một setting.
-
-Codex không xử lý ở đây. Nén của Codex là một item protocol chứ không phải file, provider gateway trả
-lời, và Codex tự lưu vào history của nó. Rút gọn request Codex ở phía client sẽ thay bằng một phần
-tóm tắt mà không client nào ghi lại. Antigravity CLI không có session file riêng, nên không có gì để
-làm cho việc rút gọn kéo dài.
+Khi dùng intact, profile cần API key intact được cấp quyền. User-Agent chỉ chọn đường protocol
+gốc, không thay cho xác thực ở upstream.
 
 ### Cập nhật
 

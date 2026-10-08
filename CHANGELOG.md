@@ -1,5 +1,17 @@
 # Changelog — LLM Switcher
 
+## Unreleased — 2026-10-08
+
+- Replace external Claude/Codex transcript and database writers with a private, durable gateway
+  prefix cache. Exact source-prefix, caller/session/profile/context and generation guards preserve
+  every new suffix turn and reject stale summaries. Native client history stays unchanged.
+- Retain assistant decision text accompanying tool calls; preserve tool dependencies throughout
+  the recent tail and forward malformed or unsupported tool histories unchanged.
+- Validate all idle-compaction settings and budgets consistently. Empty/null summary model makes
+  no call; configured summary routes independently with bounded timeout and visible diagnostics.
+- Document Codex's opt-in wire prefix cache, cache lifetime, explicit session requirement and safe
+  failure behavior; update dashboard and CLI controls.
+
 ## Release 1.6.0 — 2026-10-07
 
 - **A Codex thread now keeps the shortening, behind the same opt-in switch.** A Codex compaction is

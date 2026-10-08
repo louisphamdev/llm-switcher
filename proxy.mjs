@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
-  createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES,
+  createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES, VALID_EFFORTS,
   toGeminiSchema, isAntigravityModel,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
@@ -33,11 +33,10 @@ import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 import {
-  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR, compactResponsesInput, IDLE_COMPACT_KEY,
+  idleCompactPolicy, validateIdleCompactPatch, compactRawHistory, summaryReplacement, IDLE_COMPACT_KEY,
 } from './idlecompact.mjs';
 import { askSummary } from './idlecall.mjs';
-import { claudeSessionId, findSessionFile, writeCompaction } from './claudesession.mjs';
-import { writeCodexCompaction } from './codexsession.mjs';
+import { IdlePrefixCache, compactCacheKey, policyFingerprint } from './idlecache.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
@@ -751,124 +750,71 @@ function cleanSchemaDeep(obj) {
 // 3. For ag/* targets (Gemini behind 9Router): rewrite to the strict Schema subset
 // ---- idle compaction ----
 
-// Claude Code only. Codex is left alone on purpose: its compaction is a protocol item, which the
-// provider gateway answers, and the answer is stored by Codex in its own history. Shortening a
-// Codex request here would replace that with a summary no client ever records, which costs the
-// tokens of the summary and saves only one turn. The Antigravity CLI has no session file of its
-// own to write, so there would be nothing to make the shortening last.
+// Persist the gateway's exact-prefix mapping, never the client's native history.
+const idlePrefixCache = new IdlePrefixCache(STATE_DIR, {
+  onDiagnostic: code => console.warn(`[llm-switcher] idle compact: ${code}; forwarding is preserved`),
+});
+
 async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profileKey, bodyBuffer) {
   const policy = idleCompactPolicy(loadConfig());
-  const key = conversationKey(clientFormat, req, ir);
-  if (!key) return null;
-  const wants = clientFormat === 'anthropic'
-    ? policy.enabled
-    : clientFormat === 'responses' && policy.enabled && policy.codex;
-  if (wants && idleFor(key) > policy.idleMs && payloadBytes(payload) >= policy.minBytes) {
-    const r = compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer, clientFormat });
-    // Recorded on the way through rather than on the way out, so a request the provider then
-    // fails still counts as the conversation having been here. What is being measured is the
-    // client's pause, not the provider's answer.
-    noteConversation(key);
-    return r;
-  }
-  noteConversation(key);
-  return null;
-}
-
-// Measured from the parsed body rather than from Content-Length, which is absent on a chunked
-// request and smaller than the body once it has been decoded.
-function payloadBytes(payload) {
-  try { return JSON.stringify(payload).length; } catch { return 0; }
-}
-
-function compactNow({ req, payload, ir, profile, profileKey, policy, key, bodyBuffer, clientFormat }) {
-  const compacted = compactIR(ir, policy);
-  if (!compacted) return null;
-
-  const before = JSON.stringify(ir.messages || []).length;
-  const mapped = mapModel(ir.model || payload.model || '', profile, 'anthropic');
-  const outFormat = resolveOutFormat(profile, mapped);
-  const build = (prof, model, ir2) => buildUpstreamRequest(prof, outFormat, ir2, model, req);
-
-  // A summary is only made when the reader named a model for it, and never with the conversation's
-  // own: that would spend the expensive model of an official account to save the tokens of the
-  // turn, which is a bad trade and, on a plan with limits, worse. With no model named there is
-  // still a saving, because the request leaves shortened, and without a summary there is nothing to
-  // write to the session file -- so a model call here would cost tokens and buy nothing.
-  const summary = policy.model
-    ? askSummary({ ir, policy, profile, model: policy.model, build })
-    : Promise.resolve('');
-
-  // The request goes out shortened now, before the summary exists. The summary belongs in the
-  // next resume, not in this answer, so this turn carries the text that stands in for the middle
-  // and nothing else; a turn that also carried the summary would pay for it twice.
-  // Written back into the client's own body. Claude Code goes through the renderer this gateway
-  // already uses, because it is translated on the way out. Codex is not: a Responses client
-  // reaches a Responses provider as the bytes it sent, so its history is shortened where it
-  // lives, in the request itself.
+  const wants = policy.enabled && (clientFormat === 'anthropic' ||
+    (clientFormat === 'responses' && policy.codex));
+  if (!wants) return null;
   const field = clientFormat === 'responses' ? 'input' : 'messages';
-  const rendered = clientFormat === 'responses'
-    ? compactResponsesInput(payload.input, policy)
-    : irToAnthropicBody({ ...ir, messages: compacted.messages }, ir.model || payload.model).messages;
-  const next = { ...payload, [field]: rendered };
-  const nextBuf = Buffer.from(JSON.stringify(next), 'utf8');
-
-  console.log(
-    `[llm-switcher] idle compact ${key.slice(0, 12)} [${profileKey}]: ${before} -> ${JSON.stringify(rendered).length} bytes, ` +
-    `${compacted.middle} messages kept as text, ${compacted.dropped} dropped; summary call in flight`);
-
-  // The summary is not waited for. It serves the next resume, not this answer, and holding the
-  // client's turn open for a call nobody reads would make the saving feel like a cost. The file is
-  // written when it lands, which is also later than the response and therefore never races the
-  // entries Claude Code is appending right now.
-  Promise.resolve(summary).then(async (s) => {
-    if (!s) {
-      console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: the summary call produced nothing; the request went out shortened anyway`);
-      return;
-    }
-    // Found by session id rather than by working directory: nothing in the request says what the
-    // client's directory is, and a compaction written to the wrong project is one nothing reads.
-    // Codex and Claude Code keep their history in different places, so each is written its own
-    // way: Codex in its rollout file and its store, Claude Code in its session file.
-    let written;
-    if (clientFormat === 'responses') {
-      written = await writeCodexCompaction({ summary: s });
-    } else {
-      const sessionId = claudeSessionId(req, payload);
-      const file = sessionId ? findSessionFile(sessionId) : '';
-      written = file
-        ? writeCompaction({
-          file, summary: s, sessionId,
-          preTokens: Math.round(before / 4), postTokens: Math.round(JSON.stringify(rendered).length / 4),
-        })
-        : null;
-    }
-    console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary ${written ? 'stored' : 'made, not stored'}`);
-  }).catch(() => {});
-
-  return { payload: next, bodyBuffer: nextBuf };
-}
-
-// The summary goes in as a user message right after the opening request, which is where Claude
-// Code puts its own. A conversation handed a hole in it reads the hole as something it forgot
-// unless something says otherwise.
-function withSummary(msgs, insertAt, summary) {
-  const at = Math.min(Math.max(1, insertAt), msgs.length);
-  return [
-    ...msgs.slice(0, at),
-    { role: 'user', content: [{ type: 'text', text: summaryNotice(summary) }] },
-    ...msgs.slice(at),
-  ];
-}
-
-function summaryNotice(summary) {
-  return 'Earlier in this conversation the history was shortened because it had been idle long ' +
-    'enough that the provider no longer held its prompt cache. What follows is a summary of the ' +
-    'part that was replaced, then the more recent messages unchanged.\n\nSummary:\n' + summary;
+  const history = payload[field];
+  if (!Array.isArray(history)) return null;
+  const key = compactCacheKey(clientFormat, req, payload, ir, profile, profileKey, policy);
+  // Shared opening prompts do not prove a session identity. Anonymous requests stay unchanged.
+  if (!key) return null;
+  const visited = idlePrefixCache.visit(key, history, policy);
+  const rewrite = messages => {
+    const next = { ...payload, [field]: messages };
+    return { payload: next, bodyBuffer: Buffer.from(JSON.stringify(next), 'utf8'), cacheKey: key };
+  };
+  if (visited.idleMs <= policy.idleMs || Buffer.byteLength(JSON.stringify(payload)) < policy.minBytes) {
+    return visited.history ? rewrite(visited.history) : null;
+  }
+  const compacted = compactRawHistory(history, clientFormat, policy);
+  // Reuse one stable prefix throughout a window. A later idle window can compact a larger
+  // original prefix; an unchanged prefix never asks for the same summary twice.
+  if (!compacted || (visited.record?.prefixCount && compacted.prefixCount <= visited.record.prefixCount)) {
+    return visited.history ? rewrite(visited.history) : null;
+  }
+  const record = idlePrefixCache.create(key, history, compacted.prefixCount, compacted.replacement, policy);
+  if (!record) return null; // persistence failed: send the complete original request
+  console.log(`[llm-switcher] idle compact ${key.slice(0, 12)} [${profileKey}]: ` +
+    `${Buffer.byteLength(JSON.stringify(history))} -> ${Buffer.byteLength(JSON.stringify(compacted.history))} bytes; ` +
+    (policy.model ? 'configured summary requested' : 'deterministic prefix cached; no model called'));
+  if (policy.model) {
+    const snapshotPolicy = policyFingerprint(policy);
+    const prefixIR = parseToIR(clientFormat, { ...payload, [field]: history.slice(0, compacted.prefixCount) });
+    const summaryModel = mapModel(policy.model, profile, clientFormat);
+    const summaryFormat = resolveOutFormat(profile, summaryModel);
+    askSummary({ ir: prefixIR, policy, profile, model: summaryModel,
+      build: (prof, model, summaryIR) => buildUpstreamRequest(prof, summaryFormat, summaryIR, model, req),
+      onDiagnostic: ({ code, status }) => console.warn(`[llm-switcher] idle compact ${key.slice(0, 12)}: ${code}${status ? ` (${status})` : ''}`),
+    }).then(summary => {
+      if (!summary) return;
+      const cfg = loadConfig();
+      const livePolicy = idleCompactPolicy(cfg);
+      const liveProfile = cfg?.profiles?.[profileKey];
+      if (policyFingerprint(livePolicy) !== snapshotPolicy || !liveProfile ||
+          compactCacheKey(clientFormat, req, payload, ir, liveProfile, profileKey, livePolicy) !== key) {
+        console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary discarded after configuration change`);
+        return;
+      }
+      const stored = idlePrefixCache.upgrade(key, record.generation, summaryReplacement(compacted, summary), policy);
+      console.log(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary ${stored ? 'cached' : 'discarded after a newer generation or history change'}`);
+    }).catch(() => console.warn(`[llm-switcher] idle compact ${key.slice(0, 12)}: summary-call-failed`));
+  }
+  return rewrite(compacted.history);
 }
 
 function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req) {
-  const upBody = emitUpstreamBody(outFormat, ir, mappedModel, { thinkingMode: profile.thinkingMode });
+  const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
+    thinkingMode: profile.thinkingMode,
+    thinkingEffort: profile.thinkingEffort,
+  });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);
     if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
@@ -968,15 +914,14 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   // made only to the parsed form would shorten nothing that leaves the building.
   const shrunk = await maybeCompactIdle(req, clientFormat, payload, ir, profile, profileKey, bodyBuffer);
   if (shrunk) {
-    payload = shrunk.payload;
-    bodyBuffer = shrunk.bodyBuffer;
     try {
-      ir = parseToIR(clientFormat, payload);
+      const compactedIR = parseToIR(clientFormat, shrunk.payload);
+      payload = shrunk.payload;
+      bodyBuffer = shrunk.bodyBuffer;
+      ir = compactedIR;
     } catch {
-      // The compacted body was built from this one, so it parses. If it ever did not, the
-      // original is still what the caller meant to send.
-      payload = JSON.parse(bodyBuffer.toString('utf8'));
-      return sendClientError(res, clientFormat, 400, 'Cannot reparse the compacted request');
+      idlePrefixCache.remove(shrunk.cacheKey);
+      console.warn('[llm-switcher] idle compact: cache-reparse-failed; forwarding original request');
     }
   }
 
@@ -1281,6 +1226,7 @@ function validateProfileInput(p) {
   if (p.outFormat && !OUT_FORMATS.includes(p.outFormat)) return `Invalid outFormat "${p.outFormat}"`;
   if (p.mode && !VALID_MODES.includes(p.mode)) return `Invalid mode "${p.mode}"`;
   if (p.thinkingMode && !THINKING_MODES.includes(p.thinkingMode)) return `Invalid thinkingMode "${p.thinkingMode}"`;
+  if (p.thinkingEffort && !VALID_EFFORTS.includes(p.thinkingEffort)) return `Invalid thinkingEffort "${p.thinkingEffort}"`;
   if (p.baseURL !== undefined) {
     try {
       const u = new URL(p.baseURL);
@@ -1728,20 +1674,8 @@ async function routeApi(req, res, method, pathname) {
     } catch (err) {
       return sendJson(res, err.status || 400, { error: err.message });
     }
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-      return sendJson(res, 400, { error: 'body must be an object' });
-    }
-    // Per key, not per type-group. A loose check lets "yes" through for a boolean, and the
-    // policy then reads it as false: a typo would switch the feature off without saying so.
-    const kinds = { enabled: 'boolean', model: 'string', idleMinutes: 'number', minBytes: 'number', keepRecent: 'number' };
-    for (const [k, want] of Object.entries(kinds)) {
-      if (!(k in patch)) continue;
-      const v = patch[k];
-      const ok = want === 'number'
-        ? (typeof v === 'number' && Number.isFinite(v))
-        : typeof v === want;
-      if (!ok) return sendJson(res, 400, { error: `${k} must be ${want === 'number' ? 'a number' : `a ${want}`}` });
-    }
+    const invalid = validateIdleCompactPatch(patch);
+    if (invalid) return sendJson(res, 400, { error: invalid });
     const cfg = loadConfig() || {};
     cfg[IDLE_COMPACT_KEY] = { ...(cfg[IDLE_COMPACT_KEY] || {}), ...patch };
     try {

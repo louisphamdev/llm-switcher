@@ -1,328 +1,282 @@
-// Idle compaction.
-//
-// The part worth testing hard is the session file, because nothing in any API guarantees it: the
-// shape was read off a real session Claude Code wrote itself, and the only proof it works is that
-// Claude Code reads it back. The test that matters is TestResumeReadsTheBoundary, which runs the
-// real binary.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { parseToIR } from '../formats.mjs';
+import { idleCompactPolicy, validateIdleCompactPatch, conversationKey, compactIR,
+  compactRawHistory, compactResponsesInput, summaryMessages, summaryReplacement, clampSummary } from '../idlecompact.mjs';
+import { IdlePrefixCache, compactCacheKey } from '../idlecache.mjs';
+import { askSummary } from '../idlecall.mjs';
 
-// Async, never execFileSync: the probe server that answers Claude Code runs in this same process,
-// and a blocking call would stop the event loop from ever answering it.
-const run = promisify(execFile);
-import http from 'node:http';
-import crypto from 'node:crypto';
+const policy = (over = {}) => idleCompactPolicy({ idleCompact: { enabled: true, ...over } });
+const fixture = () => {
+  const messages = [{ role: 'user', content: 'Fix the failing test' }];
+  for (let i = 0; i < 12; i++) messages.push(
+    { role: 'assistant', content: [{ type: 'text', text: `DECISION_${i}: preserve the contract` },
+      { type: 'tool_use', id: `call_${i}`, name: 'Read', input: { file_path: `file_${i}` } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: `call_${i}`, content: `RESULT_${i}:` + 'X'.repeat(4000) }] });
+  return { model: 'claude-probe', system: 'Be concise', messages, stream: false };
+};
+const req = (session = 'one', token = 'owner') => ({ headers: { 'x-claude-code-session-id': session, authorization: `Bearer ${token}` } });
+const profile = { baseURL: 'http://127.0.0.1:1234', apiKey: 'PRIVATE_PROVIDER_KEY', outFormat: 'anthropic' };
 
-import {
-  idleCompactPolicy, conversationKey, idleFor, noteConversation, compactIR,
-  summaryMessages, clampSummary, SUMMARY_INSTRUCTION,
-} from '../idlecompact.mjs';
-import { sessionFileFor, claudeSessionId, writeCompaction, readLeaf, claudeConfigDir } from '../claudesession.mjs';
-
-const long = 'X'.repeat(4000);
-
-function agentIR(turns = 10, fill = 4000) {
-  const messages = [{ role: 'user', content: [{ type: 'text', text: 'fix the failing test' }] }];
-  for (let i = 0; i < turns; i++) {
-    messages.push({ role: 'assistant', content: [
-      { type: 'text', text: `step ${i}` },
-      { type: 'tool_use', id: `t${i}`, name: 'Bash', input: { command: 'ls' } },
-    ] });
-    messages.push({ role: 'user', content: [
-      { type: 'tool_result', tool_use_id: `t${i}`, content: `turn${i}:` + 'Y'.repeat(fill) },
-    ] });
-  }
-  return { system: 'be brief', messages, tools: [], model: 'claude-x' };
+function cacheFixture(t, options = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-prefix-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let now = 100000000;
+  const cache = new IdlePrefixCache(dir, { now: () => now, ...options });
+  return { dir, cache, advance(ms) { now += ms; } };
 }
 
-function policy(over = {}) {
-  return idleCompactPolicy({ idleCompact: { enabled: true, idleMinutes: 15, minBytes: 1024, ...over } });
+function keyFor(body = fixture(), request = req(), prof = profile, p = policy(), name = 'profile') {
+  return compactCacheKey('anthropic', request, body, parseToIR('anthropic', body), prof, name, p);
 }
 
-// ---- the policy ----
-
-test('the feature is off until it is asked for', () => {
+test('config accepts all supported fields and rejects unknown, wrong type, zero, and fractional counts', () => {
   assert.equal(idleCompactPolicy({}).enabled, false);
-  assert.equal(idleCompactPolicy({ idleCompact: { enabled: true } }).enabled, true);
-});
-
-test('a nonsense setting falls back to the default instead of breaking', () => {
-  const p = idleCompactPolicy({ idleCompact: { idleMinutes: -3, minBytes: 'x', keepRecent: 0 } });
+  assert.equal(idleCompactPolicy({}).codex, false);
+  assert.equal(validateIdleCompactPatch({ enabled: true, codex: true, userChars: 128,
+    summaryMaxChars: 256, sessionLookbackHours: 168 }), '');
+  assert.equal(validateIdleCompactPatch({ model: null }), '');
+  assert.equal(idleCompactPolicy({ idleCompact: { model: null } }).model, null);
+  for (const patch of [{ unknown: 1 }, { codex: 'yes' }, { userChars: 0 },
+    { keepRecent: 2.5 }, { minBytes: 8191 }, { idleMinutes: Infinity }, { model: {} }]) {
+    assert.notEqual(validateIdleCompactPatch(patch), '', JSON.stringify(patch));
+  }
+  const p = idleCompactPolicy({ idleCompact: { idleMinutes: '4', minBytes: -5,
+    keepRecent: 10000, userChars: 1, unknown: 9 } });
   assert.equal(p.idleMinutes, 15);
-  assert.ok(p.minBytes > 0);
-  assert.equal(p.keepRecent, 6);
+  assert.equal(p.minBytes, 65536);
+  assert.equal(p.keepRecent, 100);
+  assert.equal(p.userChars, 128);
+  assert.equal('unknown' in p, false);
 });
 
-test('a conversation that was never here is not idle', () => {
-  assert.equal(idleFor('nope'), 0);
+test('only explicit session identifiers establish cache identity', () => {
+  const ir = parseToIR('anthropic', fixture());
+  assert.equal(conversationKey('anthropic', { headers: {} }, ir), '');
+  assert.equal(conversationKey('anthropic', req(), ir), 'h:one');
+  assert.equal(conversationKey('responses', { headers: { 'thread-id': 'thread-A' } }, {}), 'h:thread-A');
+  assert.equal(conversationKey('responses', { headers: { 'x-codex-turn-metadata': '{"session_id":"thread-B"}' } }, {}), 'h:thread-B');
+  assert.equal(conversationKey('responses', { headers: {} }, { promptCacheKey: 'thread-C' }), 'p:thread-C');
 });
 
-test('the time since the last request is what the pause means', () => {
-  const now = 1_000_000;
-  noteConversation('k', now - 20 * 60000);
-  assert.ok(Math.abs(idleFor('k', now) - 20 * 60000) < 50);
+test('scope separates sessions, callers, profiles, models, system prompts, tools, and policies', () => {
+  const body = fixture();
+  const base = keyFor(body);
+  const others = [keyFor(body, req('two')), keyFor(body, req('one', 'other-owner')),
+    keyFor(body, req(), { ...profile, baseURL: 'http://other' }), keyFor(body, req(), profile, policy(), 'other-profile'),
+    keyFor({ ...body, model: 'other-model' }), keyFor({ ...body, system: 'other-system' }),
+    keyFor({ ...body, tools: [{ name: 'Write' }] }), keyFor(body, req(), profile, policy({ model: 'summary' }))];
+  assert.ok(others.every(key => key !== base));
+  assert.match(base, /^[a-f0-9]{64}$/);
+  assert.equal(keyFor(body, { headers: {} }), '');
 });
 
-// ---- which conversation ----
-
-test('the session the client names wins over its content', () => {
-  const k = conversationKey('claude', { headers: { 'x-claude-code-session-id': 'abc' } }, agentIR());
-  assert.equal(k, 'h:abc');
+test('actual parsed assistant tool call keeps its accompanying decision text', () => {
+  const body = fixture();
+  const ir = parseToIR('anthropic', body);
+  assert.ok(ir.messages[1].toolCalls);
+  const compacted = compactIR(ir, policy());
+  assert.match(JSON.stringify(compacted.messages), /DECISION_1:/);
+  assert.doesNotMatch(JSON.stringify(compacted.messages), /RESULT_1:/);
+  assert.match(JSON.stringify(summaryMessages(ir, policy())), /DECISION_1:/);
+  assert.doesNotMatch(JSON.stringify(summaryMessages(ir, policy())), /X{4000}/);
 });
 
-test('a client that names nothing is keyed on its opening request', () => {
-  const k1 = conversationKey('claude', { headers: {} }, agentIR());
-  const k2 = conversationKey('claude', { headers: {} }, agentIR());
-  assert.equal(k1, k2, 'the same conversation keys the same both times');
-  const other = agentIR();
-  other.messages[0].content[0].text = 'a different task entirely';
-  assert.notEqual(k1, conversationKey('claude', { headers: {} }, other));
-});
-
-test('the key survives the compaction it causes', () => {
-  // The opening request is the one message a compaction keeps, which is the whole reason the
-  // fallback key is built from it and not from the whole body.
-  const ir = agentIR();
-  const before = conversationKey('claude', { headers: {} }, ir);
-  const c = compactIR(ir, policy());
-  ir.messages = c.messages;
-  assert.equal(conversationKey('claude', { headers: {} }, ir), before);
-});
-
-// ---- the shortened history ----
-
-test('the opening request and the recent turns survive as bytes', () => {
-  const ir = agentIR(10);
-  const c = compactIR(ir, policy({ keepRecent: 6 }));
-  assert.ok(c);
-  assert.equal(c.messages[0].content[0].text, 'fix the failing test');
-  const tail = JSON.stringify(c.messages.slice(-6));
-  assert.ok(tail.includes('tool_use'), 'the recent tool calls are kept: the next turn reasons over them');
-});
-
-test('the bulky middle goes and its words stay', () => {
-  // Each turn is tagged, so the test can tell an early turn from a recent one. The recent turns
-  // keep their tool output on purpose: the next turn reasons over those results verbatim.
-  const ir = agentIR(10);
-  const c = compactIR(ir, policy({ keepRecent: 6 }));
-  const text = JSON.stringify(c.messages);
-  assert.ok(!text.includes('turn1:'), 'an early middle tool result came through whole');
-  assert.ok(text.includes('turn9:'), 'a recent tool result was cut, so the next turn lost what it reasons over');
-  assert.ok(text.includes('step 3'), 'a middle assistant message lost its text');
-  assert.ok(c.dropped > 0);
-});
-
-test('no tool result survives without the call that made it', () => {
-  // A result whose call was cut away is a request the provider refuses, so this is the invariant
-  // that has to hold whatever the window lands on.
-  for (const keep of [3, 4, 5, 6, 8]) {
-    const c = compactIR(agentIR(12), policy({ keepRecent: keep }));
-    assert.ok(c, `keepRecent=${keep} produced nothing`);
+test('raw compact prefix keeps exact opening and suffix without dangling tool results', () => {
+  const body = fixture();
+  for (const keepRecent of [1, 2, 3, 6, 9]) {
+    const p = policy({ keepRecent });
+    const compacted = compactRawHistory(body.messages, 'anthropic', p);
+    assert.ok(compacted);
+    assert.deepEqual(compacted.history[0], body.messages[0]);
+    assert.deepEqual(compacted.history.slice(compacted.replacement.length), body.messages.slice(compacted.prefixCount));
     const calls = new Set();
-    for (const m of c.messages) {
-      for (const p of m.content || []) {
-        if (p?.type === 'tool_use') calls.add(p.id);
-        if (p?.type === 'tool_result') {
-          assert.ok(calls.has(p.tool_use_id), `keepRecent=${keep}: result ${p.tool_use_id} has no call`);
-        }
-      }
+    for (const message of compacted.history) for (const block of Array.isArray(message.content) ? message.content : []) {
+      if (block.type === 'tool_use') calls.add(block.id);
+      if (block.type === 'tool_result') assert.ok(calls.has(block.tool_use_id));
     }
   }
 });
 
-test('a conversation too short to be worth it is left alone', () => {
-  assert.equal(compactIR(agentIR(2, 10), policy()), null);
-  assert.equal(compactIR({ messages: [{ role: 'user', content: 'hi' }] }, policy()), null);
+test('a result deeper in the tail keeps its older call, and malformed orphan input is forwarded', () => {
+  const body = fixture();
+  body.messages[20] = { role: 'user', content: 'result still pending' };
+  body.messages.push({ role: 'user', content: 'An intervening question' },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_9', content: 'delayed result' }] });
+  const compacted = compactRawHistory(body.messages, 'anthropic', policy({ keepRecent: 2 }));
+  assert.ok(compacted.prefixCount <= 19);
+  const orphan = structuredClone(body.messages);
+  orphan.at(-1).content[0].tool_use_id = 'missing';
+  assert.equal(compactRawHistory(orphan, 'anthropic', policy({ keepRecent: 2 })), null);
 });
 
-// ---- the summary ----
-
-test('the summarizer is handed the history without its tool output', () => {
-  const msgs = summaryMessages(agentIR(10), policy());
-  assert.ok(msgs.length > 1);
-  assert.match(msgs[0].content[0].text, /summarize/i);
-  assert.ok(!JSON.stringify(msgs).includes('Y'.repeat(4000)));
+test('multiple calls pair correctly, mixed result text survives, and missing or duplicate IDs are rejected', () => {
+  const body = fixture();
+  body.messages[2].content.push({ type: 'text', text: 'USER_DECISION_KEEP' });
+  const good = compactRawHistory(body.messages, 'anthropic', policy());
+  assert.match(JSON.stringify(good.replacement), /USER_DECISION_KEEP/);
+  for (const change of [messages => delete messages[1].content[1].id,
+    messages => messages[3].content[1].id = 'call_0',
+    messages => messages[4].content[0].tool_use_id = 'call_0']) {
+    const messages = structuredClone(body.messages); change(messages);
+    assert.equal(compactRawHistory(messages, 'anthropic', policy()), null);
+  }
+  body.messages.at(-2).content.push({ type: 'tool_use', id: 'concurrent', name: 'Bash', input: {} });
+  body.messages.at(-1).content.push({ type: 'tool_result', tool_use_id: 'concurrent', content: 'parallel result' });
+  assert.ok(compactRawHistory(body.messages, 'anthropic', policy({ keepRecent: 1 })));
 });
 
-test('an over-long summary is cut at a boundary, not mid-word', () => {
-  const s = clampSummary('A'.repeat(10) + '\n\n' + 'B'.repeat(30000), policy({ summaryMaxChars: 1000 }));
-  assert.ok(s.length <= 1000);
-  assert.ok(!s.includes('A'.repeat(11)));
-});
-
-test('a summary of nothing is nothing', () => {
-  assert.equal(clampSummary('', policy()), '');
-  assert.equal(clampSummary(null, policy()), '');
-});
-
-// ---- the session file ----
-
-function tmpSession(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-sess-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 'sess.jsonl');
-  return { file, dir };
-}
-
-function seed(file, entries) {
-  fs.writeFileSync(file, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
-}
-
-test('the compaction is written as the two entries Claude Code writes', (t) => {
-  const { file } = tmpSession(t);
-  seed(file, [{ type: 'user', uuid: 'u1', sessionId: 's1', message: { role: 'user', content: 'a' } }]);
-  const r = writeCompaction({ file, summary: 'the summary', sessionId: 's1', preTokens: 900, postTokens: 80 });
-  assert.ok(r);
-  const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l));
-  const boundary = lines.at(-2);
-  const summary = lines.at(-1);
-  assert.equal(boundary.type, 'system');
-  assert.equal(boundary.subtype, 'compact_boundary');
-  assert.equal(boundary.logicalParentUuid, 'u1', 'the chain is cut at the entry before');
-  assert.equal(boundary.compactMetadata.preTokens, 900);
-  assert.equal(summary.type, 'user');
-  assert.equal(summary.isCompactSummary, true);
-  assert.match(summary.message.content, /the summary/);
-  assert.match(summary.message.content, /continued from a previous conversation/);
-});
-
-test('the old entries stay, because a transcript is worth more than a small file', (t) => {
-  // This is what Claude Code itself does: its own compaction drops ~949k tokens and leaves the
-  // entries. The boundary makes them unreachable, not gone.
-  const { file } = tmpSession(t);
-  seed(file, Array.from({ length: 20 }, (_, i) => ({ type: 'user', uuid: `u${i}`, sessionId: 's1', message: { role: 'user', content: `m${i}` } })));
-  writeCompaction({ file, summary: 'the summary', sessionId: 's1' });
-  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
-  assert.equal(lines.length, 22);
-  assert.ok(lines.some(l => l.includes('"m0"')), 'the earliest entry is still readable');
-});
-
-test('a session already compacted is not compacted twice', (t) => {
-  const { file } = tmpSession(t);
-  seed(file, [{ type: 'user', uuid: 'u1', sessionId: 's1', message: { role: 'user', content: 'a' } }]);
-  assert.ok(writeCompaction({ file, summary: 'first', sessionId: 's1' }));
-  assert.equal(writeCompaction({ file, summary: 'second', sessionId: 's1' }), null);
-});
-
-test('nothing is written where there is nothing to write', (t) => {
-  const { file } = tmpSession(t);
-  seed(file, [{ type: 'user', uuid: 'u1', message: { role: 'user', content: 'a' } }]);
-  assert.equal(writeCompaction({ file, summary: '', sessionId: 's1' }), null);
-  assert.equal(writeCompaction({ file: path.join(path.dirname(file), 'gone.jsonl'), summary: 'x' }), null);
-  assert.equal(readLeaf(file).uuid, 'u1');
-});
-
-test('every appended line is valid json', (t) => {
-  // A torn line makes Claude Code drop the rest of the file, which loses the transcript.
-  const { file } = tmpSession(t);
-  seed(file, [{ type: 'user', uuid: 'u1', sessionId: 's1', message: { role: 'user', content: 'a' } }]);
-  writeCompaction({ file, summary: 'multi\nline\nsummary', sessionId: 's1' });
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    if (line.trim()) JSON.parse(line);
+test('unknown Anthropic server tools and tool references prevent shortening', () => {
+  for (const type of ['server_tool_use', 'web_search_tool_result', 'bash_code_execution_tool_result', 'tool_reference']) {
+    const body = fixture(); body.messages.at(-1).content.push({ type, id: 'server-id', content: 'result' });
+    assert.equal(compactRawHistory(body.messages, 'anthropic', policy()), null, type);
   }
 });
 
-test('the session id comes from the header or the body Claude Code sends', () => {
-  assert.equal(claudeSessionId({ headers: { 'x-claude-code-session-id': 'S1' } }, {}), 'S1');
-  assert.equal(claudeSessionId({ headers: {} }, { metadata: { user_id: 'u_1_account_a_session_dead-beef' } }), 'dead-beef');
-  assert.equal(claudeSessionId({ headers: {} }, {}), '');
-});
-
-test('the session file sits where Claude Code puts it', () => {
-  const { file } = sessionFileFor('abc', '/opt/hermes/proj', { CLAUDE_CONFIG_DIR: '/cfg' });
-  assert.equal(file, '/cfg/projects/-opt-hermes-proj/abc.jsonl');
-  assert.equal(claudeConfigDir({ CLAUDE_CONFIG_DIR: '/x' }), '/x');
-});
-
-// ---- the real thing ----
-
-// This is the test that settles whether writing the file does anything at all. It runs the real
-// Claude Code binary against a local server and reads the request it sends.
-const probe = (() => {
-  let last = null;
-  const server = http.createServer((req, res) => {
-    let b = '';
-    req.on('data', c => (b += c));
-    req.on('end', () => {
-      try { last = JSON.parse(b); } catch { /* keep the last good one */ }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        id: 'msg_probe', type: 'message', role: 'assistant', model: last?.model || 'x',
-        content: [{ type: 'text', text: 'probe ok' }], stop_reason: 'end_turn',
-        usage: { input_tokens: 1, output_tokens: 1 },
-      }));
-    });
-  });
-  return { server, get last() { return last; } };
-})();
-
-test('Claude Code resumes from the boundary and leaves the old turns out', { timeout: 240000, skip: !hasClaude() }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cc-'));
-  await new Promise(r => probe.server.listen(0, '127.0.0.1', r));
-  const port = probe.server.address().port;
-  const cfg = path.join(dir, 'cfg');
-  const proj = path.join(dir, 'proj');
-  fs.mkdirSync(proj, { recursive: true });
-  fs.writeFileSync(path.join(proj, 'CLAUDE.md'), 'probe project\n');
-  const env = {
-    ...process.env,
-    ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
-    ANTHROPIC_API_KEY: 'probe-key',
-    CLAUDE_CONFIG_DIR: cfg,
-  };
-
-  // One real turn, so the session file is written by Claude Code and has its own shape in it.
-  await run('claude', ['-p', 'say ok', '--model', 'claude-probe-1'], { env, cwd: proj, timeout: 180000 });
-  const sessions = path.join(cfg, 'projects', proj.replace(/[\\/:]/g, '-'));
-  const file = fs.readdirSync(sessions).map(f => path.join(sessions, f))[0];
-  const sid = path.basename(file, '.jsonl');
-  const sidFromBody = JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]).sessionId;
-
-  // Twelve turns of history, then a compaction boundary before them.
-  const entries = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
-  const leaf = entries.filter(e => e.uuid).at(-1);
-  const base = (u, parent) => ({
-    parentUuid: parent, isSidechain: false, userType: 'external', cwd: proj,
-    version: '2.1.292', sessionId: sidFromBody || sid, uuid: u, timestamp: new Date().toISOString(),
-  });
-  let parent = leaf.uuid;
-  for (let i = 0; i < 12; i++) {
-    const u = crypto.randomUUID();
-    entries.push({ ...base(u, parent), type: 'user', message: { role: 'user', content: `turn ${i} question` } });
-    parent = u;
-    const a = crypto.randomUUID();
-    entries.push({ ...base(a, parent), type: 'assistant', message: { role: 'assistant', content: [
-      { type: 'text', text: `answer ${i}` },
-      { type: 'tool_use', id: `toolu_${i}`, name: 'Read', input: { file_path: '/x/y.py' } }] } });
-    parent = a;
-    const t = crypto.randomUUID();
-    entries.push({ ...base(t, parent), type: 'user', message: { role: 'user', content: [
-      { type: 'tool_result', tool_use_id: `toolu_${i}`, content: long }] } });
-    parent = t;
+test('Responses assistant text uses output_text and deeper custom tool results retain calls', () => {
+  const input = [{ role: 'developer', content: 'policy' }, { role: 'user', content: 'task' }];
+  for (let i = 0; i < 10; i++) input.push(
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `decision ${i}` }] },
+    { type: 'custom_tool_call', call_id: `c${i}`, name: 'shell', input: 'ls' },
+    { type: 'custom_tool_call_output', call_id: `c${i}`, output: 'X'.repeat(4000) });
+  input[25] = { type: 'message', role: 'user', content: 'output pending' };
+  input.push({ role: 'user', content: 'new turn' }, { type: 'custom_tool_call_output', call_id: 'c7', output: 'delayed' });
+  const compacted = compactRawHistory(input, 'responses', policy({ keepRecent: 2 }));
+  assert.ok(compacted);
+  const assistant = compacted.replacement.find(item => item.role === 'assistant');
+  assert.equal(assistant.content[0].type, 'output_text');
+  const calls = new Set();
+  for (const item of compactResponsesInput(input, policy({ keepRecent: 2 }))) {
+    if (item.type === 'custom_tool_call') calls.add(item.call_id);
+    if (item.type === 'custom_tool_call_output') assert.ok(calls.has(item.call_id));
   }
-  fs.writeFileSync(file, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
-  const beforeBytes = fs.statSync(file).size;
-
-  const wrote = writeCompaction({ file, summary: 'PROBE_SUMMARY_MARKER_12345', sessionId: sid, cwd: proj });
-  assert.ok(wrote, 'the boundary was written');
-
-  await run('claude', ['-p', 'after compact, reply ok', '--model', 'claude-probe-1', '--resume', sid],
-    { env, cwd: proj, timeout: 180000 });
-
-  const sent = JSON.stringify(probe.last?.messages || []);
-  assert.match(sent, /PROBE_SUMMARY_MARKER_12345/, 'the summary is what the request carries');
-  assert.equal((sent.match(new RegExp(long, 'g')) || []).length, 0, 'none of the twelve turns came through');
-  assert.ok(fs.statSync(file).size > beforeBytes, 'the entries are appended, not rewritten');
-
-  await new Promise(r => probe.server.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function hasClaude() {
-  try { execFileSync('claude', ['--version'], { stdio: 'ignore', timeout: 30000 }); return true; } catch { return false; }
-}
+test('stable cached prefix preserves every new suffix turn and survives a gateway restart', t => {
+  const { cache, dir, advance } = cacheFixture(t);
+  const body = fixture(); const p = policy(); const key = keyFor(body);
+  assert.equal(cache.visit(key, body.messages, p).history, null);
+  advance(16 * 60000);
+  assert.equal(cache.visit(key, body.messages, p).idleMs, 16 * 60000);
+  const compacted = compactRawHistory(body.messages, 'anthropic', p);
+  assert.ok(cache.create(key, body.messages, compacted.prefixCount, compacted.replacement, p));
+  const suffix = [{ role: 'assistant', content: 'NEW_ANSWER' }, { role: 'user', content: 'NEW_REQUEST' }];
+  const resumed = new IdlePrefixCache(dir, { now: cache.now });
+  const result = resumed.visit(key, [...body.messages, ...suffix], p);
+  assert.deepEqual(result.history, [...compacted.replacement, ...body.messages.slice(compacted.prefixCount), ...suffix]);
+  assert.deepEqual(resumed.visit(key, [...body.messages, ...suffix], p).history, result.history);
+  const contents = fs.readFileSync(path.join(dir, 'idle-compact', `${key}.json`), 'utf8');
+  assert.doesNotMatch(contents, /PRIVATE_PROVIDER_KEY|Bearer owner|RESULT_1:/);
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(path.join(dir, 'idle-compact')).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(dir, 'idle-compact', `${key}.json`)).mode & 0o777, 0o600);
+  }
+});
+
+test('native client compact or edited history invalidates cached prefix and rejects late summary', t => {
+  const { cache } = cacheFixture(t); const body = fixture(); const p = policy(); const key = keyFor(body);
+  const compacted = compactRawHistory(body.messages, 'anthropic', p);
+  const original = cache.create(key, body.messages, compacted.prefixCount, compacted.replacement, p);
+  assert.equal(cache.visit(key, [{ role: 'user', content: 'NATIVE SUMMARY' }], p).history, null);
+  assert.equal(cache.upgrade(key, original.generation, summaryReplacement(compacted, 'OLD'), p), false);
+  const second = cache.create(key, body.messages, compacted.prefixCount, compacted.replacement, p);
+  assert.equal(cache.upgrade(key, original.generation, summaryReplacement(compacted, 'OLD'), p), false);
+  assert.equal(cache.upgrade(key, second.generation, summaryReplacement(compacted, 'CURRENT'), p), true);
+  const suffix = [{ role: 'user', content: 'AFTER SUMMARY REQUEST' }];
+  assert.deepEqual(cache.visit(key, [...body.messages, ...suffix], p).history.at(-1), suffix[0]);
+});
+
+test('corrupt, oversized, expired, and unavailable cache state safely forwards original history', t => {
+  const { cache, dir, advance } = cacheFixture(t); const p = policy(); const key = keyFor(); const body = fixture();
+  cache.visit(key, body.messages, p);
+  const file = path.join(dir, 'idle-compact', `${key}.json`);
+  fs.writeFileSync(file, '{bad');
+  assert.equal(cache.visit(key, body.messages, p).history, null);
+  fs.writeFileSync(file, 'X'.repeat(2 * 1024 * 1024 + 1));
+  assert.equal(cache.visit(key, body.messages, p).history, null);
+  advance(73 * 3600000);
+  assert.equal(cache.visit(key, body.messages, p).idleMs, 0);
+  const impossible = path.join(dir, 'file'); fs.writeFileSync(impossible, 'x');
+  assert.equal(new IdlePrefixCache(impossible).visit(key, body.messages, p).history, null);
+});
+
+test('parseable corruption and a symlinked cache directory cannot replace history or delete external files', t => {
+  const { cache, dir } = cacheFixture(t); const p = policy(); const body = fixture(); const key = keyFor(body);
+  const compacted = compactRawHistory(body.messages, 'anthropic', p);
+  const record = cache.create(key, body.messages, compacted.prefixCount, compacted.replacement, p);
+  const file = path.join(dir, 'idle-compact', `${key}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...record, replacement: [{ role: 'user', content: 'CORRUPT' }] }));
+  assert.equal(cache.visit(key, body.messages, p).history, null);
+  if (process.platform === 'win32') return;
+  fs.rmSync(path.join(dir, 'idle-compact'), { recursive: true });
+  const outside = path.join(dir, 'outside'); fs.mkdirSync(outside);
+  const external = path.join(outside, `${key}.json`); fs.writeFileSync(external, JSON.stringify(record));
+  fs.symlinkSync(outside, path.join(dir, 'idle-compact'), 'dir');
+  const before = fs.readFileSync(external);
+  assert.equal(cache.visit(key, body.messages, p).history, null);
+  assert.deepEqual(fs.readFileSync(external), before);
+});
+
+test('cache expires by configured lookback and never touches Claude transcripts or either Codex rollout/SQLite file', async t => {
+  const { cache, dir, advance } = cacheFixture(t);
+  const clientDir = path.join(dir, 'clients'); fs.mkdirSync(clientDir);
+  const files = ['claude.jsonl', 'thread-A.jsonl', 'thread-B.jsonl', 'thread_history_1.sqlite'];
+  for (const file of files) fs.writeFileSync(path.join(clientDir, file), `original ${file}`);
+  const before = files.map(file => fs.readFileSync(path.join(clientDir, file)));
+  const p = policy(); const body = fixture(); const compacted = compactRawHistory(body.messages, 'anthropic', p);
+  for (let i = 0; i < 8; i++) { advance(1); cache.create(keyFor(body, req(`session-${i}`)), body.messages, compacted.prefixCount, compacted.replacement, p); }
+  assert.equal(fs.readdirSync(path.join(dir, 'idle-compact')).length, 8);
+  advance(p.sessionLookbackHours * 3600000 + 1);
+  cache.prune(p);
+  assert.equal(fs.readdirSync(path.join(dir, 'idle-compact')).length, 0);
+  files.forEach((file, i) => assert.deepEqual(fs.readFileSync(path.join(clientDir, file)), before[i]));
+});
+
+test('empty summary model calls neither builder nor provider', async () => {
+  let called = false;
+  assert.equal(await askSummary({ ir: parseToIR('anthropic', fixture()), policy: policy(), profile,
+    model: 'official-expensive-model', build() { called = true; }, fetchImpl() { called = true; } }), '');
+  assert.equal(called, false);
+});
+
+test('summary builder exceptions, HTTP failures, tool-only output, and ignored abort are contained with diagnostics', async () => {
+  const ir = parseToIR('anthropic', fixture()); const p = policy({ model: 'free-summary' });
+  const diagnostics = []; const base = { ir, policy: p, profile, model: 'mapped-summary', onDiagnostic: e => diagnostics.push(e.code) };
+  assert.equal(await askSummary({ ...base, build() { throw new Error('bad route'); } }), '');
+  const build = () => ({ url: 'http://unused', headers: {}, upBody: {} });
+  assert.equal(await askSummary({ ...base, build, fetchImpl: async () => new Response('', { status: 429 }) }), '');
+  assert.equal(await askSummary({ ...base, build, fetchImpl: async () => new Response(JSON.stringify({ content: [{ type: 'tool_use', id: 'c', name: 'Read' }] })) }), '');
+  assert.equal(await askSummary({ ...base, build, timeoutMs: 10, fetchImpl: () => new Promise(() => {}) }), '');
+  assert.deepEqual(diagnostics, ['summary-call-failed', 'summary-http-failed', 'summary-empty-output', 'summary-timeout']);
+});
+
+test('configured summary uses supplied mapped model, stripped tools, and bounded text', async () => {
+  const p = policy({ model: 'summary-alias', summaryMaxChars: 256 }); let sent;
+  const result = await askSummary({ ir: parseToIR('anthropic', fixture()), policy: p, profile, model: 'mapped-cheap',
+    build(_profile, model, ir) { assert.equal(model, 'mapped-cheap'); assert.equal(ir.model, model);
+      assert.deepEqual(ir.tools, []); return { url: 'http://mock', headers: {}, upBody: { model, messages: ir.messages } }; },
+    fetchImpl: async (_url, options) => { sent = JSON.parse(options.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'SUMMARY ' + 'X'.repeat(1000) } }] })); } });
+  assert.ok(result.length <= 256);
+  assert.equal(sent.model, 'mapped-cheap');
+  assert.match(JSON.stringify(sent.messages), /DECISION_1:/);
+  assert.equal(clampSummary(null, p), '');
+});
+
+test('invalid legacy numeric text budgets preserve complete text while wrong types default', () => {
+  for (const value of [0, -1, NaN, Infinity]) {
+    const p = policy({ userChars: value, summaryMaxChars: value });
+    const text = '完整原文'.repeat(10000);
+    assert.equal(clampSummary(text, p), text);
+    const msgs = summaryMessages({messages:[{role:'user', content:text}]}, p);
+    assert.equal(JSON.stringify(msgs).includes(text), true);
+  }
+  assert.equal(clampSummary('X'.repeat(50000), policy({summaryMaxChars:1})).length, 50000);
+  for (const value of [null, [], {}, '0', true]) {
+    const p = policy({userChars:value,summaryMaxChars:value});
+    assert.equal(p.userChars, 3000); assert.equal(p.summaryMaxChars, 24000);
+  }
+});

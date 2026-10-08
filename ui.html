@@ -959,9 +959,9 @@
               <span class="badge outline" id="badge-idle-compact">OFF</span>
             </div>
             <p style="margin:.2rem 0 .7rem; color:var(--muted); font-size:.86rem;">
-              A Claude Code conversation that comes back after a pause has lost the provider's prompt
-              cache, so its history is paid for at full price. Shorten it then, and write the
-              compaction into the session file so the next resume starts short.
+              Shorten matching conversation history after a configured pause. The gateway keeps a
+              stable shortened prefix for later requests and preserves every new turn. Client
+              transcripts stay unchanged; a pause does not prove the provider cache has expired.
             </p>
             <div class="row">
               <label class="cb" style="display:flex; align-items:center; gap:.5rem;">
@@ -972,10 +972,10 @@
             <div class="row">
               <div class="who">
                 <div class="l">Pause that counts as losing the cache</div>
-                <div class="meta">minutes · Anthropic 5m default, OpenAI 30m</div>
+                <div class="meta">minutes · choose a pause for your provider</div>
               </div>
               <div style="min-width:9rem;">
-                <input type="number" id="idle-compact-minutes" min="1" max="1440" class="inp"
+                <input type="number" id="idle-compact-minutes" min="1" max="1440" step="any" class="inp"
                        style="width:100%;" onchange="saveIdleCompact()">
               </div>
             </div>
@@ -985,7 +985,7 @@
                 <div class="meta">KB · below this nothing is touched</div>
               </div>
               <div style="min-width:9rem;">
-                <input type="number" id="idle-compact-kb" min="8" max="4096" class="inp"
+                <input type="number" id="idle-compact-kb" min="8" max="4096" step="any" class="inp"
                        style="width:100%;" onchange="saveIdleCompact()">
               </div>
             </div>
@@ -996,10 +996,31 @@
               </div>
               <div style="min-width:16rem; flex:1;">
                 <input type="text" id="idle-compact-model" class="inp" style="width:100%;"
-                       placeholder="empty = the model of the conversation itself"
+                       placeholder="empty = no model call" maxlength="512"
                        onchange="saveIdleCompact()">
               </div>
             </div>
+            <div class="row">
+              <label class="cb" style="display:flex; align-items:center; gap:.5rem;">
+                <input type="checkbox" id="idle-compact-codex" onchange="saveIdleCompact()">
+                <span>Also shorten Codex requests (off by default; keeps native history)</span>
+              </label>
+            </div>
+            <details style="margin:.7rem 0;">
+              <summary>Advanced budgets</summary>
+              <div class="row"><label for="idle-compact-keep">Recent messages to retain</label>
+                <input id="idle-compact-keep" type="number" min="1" max="100" value="6" class="inp"
+                  style="width:9rem;" onchange="saveIdleCompact()"></div>
+              <div class="row"><label for="idle-compact-user-chars">Characters per earlier text message</label>
+                <input id="idle-compact-user-chars" type="number" min="128" max="24000" value="3000" class="inp"
+                  style="width:9rem;" onchange="saveIdleCompact()"></div>
+              <div class="row"><label for="idle-compact-summary-chars">Maximum summary characters</label>
+                <input id="idle-compact-summary-chars" type="number" min="256" max="128000" value="24000" class="inp"
+                  style="width:9rem;" onchange="saveIdleCompact()"></div>
+              <div class="row"><label for="idle-compact-lookback">Cache lifetime in hours</label>
+                <input id="idle-compact-lookback" type="number" min="1" max="168" step="any" value="72" class="inp"
+                  style="width:9rem;" onchange="saveIdleCompact()"></div>
+            </details>
             <span id="idle-compact-status" class="meta" aria-live="polite"></span>
           </div>
 
@@ -1249,6 +1270,23 @@
                   <option value="off">OFF (never send thinking)</option>
                 </select>
               </label>
+              <label class="f" id="f-thinking-effort">Thinking Effort
+                <select id="p-thinking-effort">
+                  <option value="auto">Auto (inherit from client tool)</option>
+                  <option value="low">Low (fast, light reasoning)</option>
+                  <option value="medium">Medium (balanced reasoning)</option>
+                  <option value="high">High (deep reasoning)</option>
+                  <option value="xhigh">Extra High (complex problem solving)</option>
+                  <option value="max">Max (maximum reasoning depth)</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="bifrost-hint" style="display:none; padding:0.6rem 0.85rem; border-radius:6px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.25); font-size:0.82rem; color:#60a5fa; line-height:1.4;">
+              ⚡ <strong>Bifrost Passthrough:</strong> Routing byte-for-byte to intact without format conversion. Thinking effort is controlled natively by your client tool.
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.9rem;">
               <label class="f">Routing Mode
                 <select id="p-mode">
                   <option value="convert">CONVERT (Bi-directional translation)</option>
@@ -1756,6 +1794,59 @@
         const model = document.getElementById('p-' + s.id)?.value.trim() || '';
         note.textContent = model ? windowLine(model) : '';
       }
+      syncEffortOptions();
+    }
+
+    function syncEffortOptions() {
+      const mode = document.getElementById('p-thinking-mode')?.value;
+      const pMode = document.getElementById('p-mode')?.value;
+      const outFormat = document.getElementById('p-outformat')?.value;
+      const url = (document.getElementById('p-url')?.value || '').toLowerCase();
+      const tool = document.getElementById('p-tool')?.value || 'auto';
+      const effortEl = document.getElementById('p-thinking-effort');
+      const effortLabel = document.getElementById('f-thinking-effort');
+      const bifrostHint = document.getElementById('bifrost-hint');
+      if (!effortEl || !effortLabel || !bifrostHint) return;
+
+      // Check if Bifrost or Direct passthrough is active
+      const isIntact = url.includes('intact') || url.includes(':20130') || url.includes(':8080');
+      const models = currentProfileBuffer?.defaultModels || {};
+      const modelValues = Object.values(models).filter(Boolean);
+      const slotInputs = Array.from(document.querySelectorAll('#slot-fields input')).map(i => i.value.trim()).filter(Boolean);
+      const allModelValues = Array.from(new Set([...modelValues, ...slotInputs]));
+
+      const isNativeBifrostModel = isIntact && (
+        (tool === 'claude' && allModelValues.some(m => m.startsWith('claude/') || m.startsWith('anthropic/'))) ||
+        (tool === 'codex' && allModelValues.some(m => m.startsWith('codex/'))) ||
+        (tool === 'agy' && allModelValues.some(m => m.startsWith('antigravity/')))
+      );
+      const isBifrost = pMode === 'direct' || isNativeBifrostModel;
+
+      if (isBifrost) {
+        effortLabel.style.display = 'none';
+        bifrostHint.style.display = 'block';
+        return;
+      }
+
+      // Not Bifrost: show effort selection and hide hint
+      effortLabel.style.display = '';
+      bifrostHint.style.display = 'none';
+
+      if (mode === 'off') {
+        effortEl.disabled = true;
+        effortEl.style.opacity = '0.5';
+      } else {
+        effortEl.disabled = false;
+        effortEl.style.opacity = '1';
+      }
+
+      // Filter options based on target capabilities:
+      // Strict native OpenAI only supports low, medium, high
+      Array.from(effortEl.options).forEach(opt => {
+        if (opt.value === 'xhigh' || opt.value === 'max') {
+          opt.hidden = (mode === 'native' && outFormat === 'openai-chat');
+        }
+      });
     }
 
     // Prefetch Counts for Nav Badges
@@ -1792,8 +1883,13 @@
       c = c || {};
       document.getElementById('idle-compact-enabled').checked = !!c.enabled;
       document.getElementById('idle-compact-minutes').value = c.idleMinutes ?? 15;
-      document.getElementById('idle-compact-kb').value = Math.round((c.minBytes ?? 65536) / 1024);
+      document.getElementById('idle-compact-kb').value = (c.minBytes ?? 65536) / 1024;
       document.getElementById('idle-compact-model').value = c.model || '';
+      document.getElementById('idle-compact-codex').checked = !!c.codex;
+      document.getElementById('idle-compact-keep').value = c.keepRecent ?? 6;
+      document.getElementById('idle-compact-user-chars').value = c.userChars ?? 3000;
+      document.getElementById('idle-compact-summary-chars').value = c.summaryMaxChars ?? 24000;
+      document.getElementById('idle-compact-lookback').value = c.sessionLookbackHours ?? 72;
       const badge = document.getElementById('badge-idle-compact');
       badge.textContent = c.enabled ? 'ON' : 'OFF';
       badge.className = 'badge ' + (c.enabled ? 'ok' : 'outline');
@@ -1808,10 +1904,18 @@
 
     async function saveIdleCompact() {
       const status = document.getElementById('idle-compact-status');
+      for (const input of document.querySelectorAll('[id^="idle-compact-"][type="number"]')) {
+        if (!input.value || !input.checkValidity()) { input.reportValidity(); status.textContent = 'Not saved: enter a value within the displayed bounds.'; return; }
+      }
       const patch = {
+        codex: document.getElementById('idle-compact-codex').checked,
+        keepRecent: Number(document.getElementById('idle-compact-keep').value),
+        userChars: Number(document.getElementById('idle-compact-user-chars').value),
+        summaryMaxChars: Number(document.getElementById('idle-compact-summary-chars').value),
+        sessionLookbackHours: Number(document.getElementById('idle-compact-lookback').value),
         enabled: document.getElementById('idle-compact-enabled').checked,
-        idleMinutes: Number(document.getElementById('idle-compact-minutes').value) || 15,
-        minBytes: (Number(document.getElementById('idle-compact-kb').value) || 64) * 1024,
+        idleMinutes: Number(document.getElementById('idle-compact-minutes').value),
+        minBytes: Math.round(Number(document.getElementById('idle-compact-kb').value) * 1024),
         model: document.getElementById('idle-compact-model').value.trim()
       };
       status.textContent = 'Saving...';
@@ -2048,6 +2152,8 @@
       document.getElementById('p-outformat').value = p.outFormat || '';
       document.getElementById('p-mode').value = p.mode || 'convert';
       document.getElementById('p-thinking-mode').value = p.thinkingMode || 'auto';
+      document.getElementById('p-thinking-effort').value = p.thinkingEffort || 'auto';
+      syncEffortOptions();
       document.getElementById('btn-delete').style.display = 'inline-flex';
 
       const activeMap = state.activeProfiles || (state.config?.activeProfiles || {});
@@ -2085,6 +2191,8 @@
       document.getElementById('p-outformat').value = 'openai-chat';
       document.getElementById('p-mode').value = 'convert';
       document.getElementById('p-thinking-mode').value = 'auto';
+      document.getElementById('p-thinking-effort').value = 'auto';
+      syncEffortOptions();
       document.getElementById('btn-delete').style.display = 'none';
       document.getElementById('active-tag').textContent = '';
 
@@ -2163,6 +2271,8 @@
       document.getElementById('p-outformat').value = t.outFormat;
       document.getElementById('p-mode').value = t.mode;
       document.getElementById('p-thinking-mode').value = t.thinkingMode;
+      document.getElementById('p-thinking-effort').value = t.thinkingEffort || 'auto';
+      syncEffortOptions();
       currentProfileBuffer = { ...currentProfileBuffer, ...t };
       formDirty = true;
       renderModelSlots(t.tool || 'auto', t);
@@ -2872,6 +2982,13 @@
 
       // Setup log auto-refresh
       toggleLogAutoRefresh();
+
+      // Setup profile modal effort & bifrost change triggers
+      document.getElementById('p-thinking-mode')?.addEventListener('change', syncEffortOptions);
+      document.getElementById('p-mode')?.addEventListener('change', syncEffortOptions);
+      document.getElementById('p-outformat')?.addEventListener('change', syncEffortOptions);
+      document.getElementById('p-url')?.addEventListener('input', syncEffortOptions);
+      document.getElementById('p-tool')?.addEventListener('change', syncEffortOptions);
 
       // Trigger initial route
       handleRoute();

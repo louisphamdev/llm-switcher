@@ -311,6 +311,8 @@ const OPENAI_CHAT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high']);
 // Gemini's own ceiling for thinkingBudget. Above it the request is refused, not trimmed.
 const GEMINI_MAX_BUDGET = 32768;
 
+export const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'max'];
+
 function effortRank(e) {
   const i = EFFORT_LEVELS.indexOf(String(e || '').toLowerCase());
   return i;
@@ -322,22 +324,44 @@ function effortRank(e) {
  * ladder names, and a caller reads it as thinking off.
  */
 function normalizeEffort(e) {
-  const s = String(e || '').toLowerCase();
+  const s = String(e || '').toLowerCase().trim();
+  if (s === 'extra-low') return 'minimal';
   return effortRank(s) >= 0 ? s : 'medium';
 }
 
 /**
- * The level a target accepts: the one asked for, or the top of `allowed` when the target names
- * fewer levels than the ladder does. Never silently drops below what was asked for.
+ * Maps an effort level to the closest equivalent supported by the target.
+ * - Exact match if supported.
+ * - If target has fewer levels, chooses the closest matching depth (prefers floor for higher, ceil for lower).
  */
-function capEffort(e, allowed) {
+export function mapEquivalentEffort(e, allowed) {
   const wanted = normalizeEffort(e);
-  if (!Array.isArray(allowed) || !allowed.length || allowed.includes(wanted)) return wanted;
+  if (!Array.isArray(allowed) || !allowed.length) return wanted;
+  if (allowed.includes(wanted)) return wanted;
+
+  const wantedRank = effortRank(wanted);
   let best = allowed[0];
+  let bestDist = Math.abs(effortRank(best) - wantedRank);
+
   for (const a of allowed) {
-    if (effortRank(a) >= 0 && effortRank(a) <= effortRank(wanted) && effortRank(a) > effortRank(best)) best = a;
+    const r = effortRank(a);
+    if (r < 0) continue;
+    const dist = Math.abs(r - wantedRank);
+    // Choose the level closest in rank. On a tie, prefer the higher level to preserve reasoning capacity.
+    if (dist < bestDist || (dist === bestDist && r > effortRank(best))) {
+      best = a;
+      bestDist = dist;
+    }
   }
   return best;
+}
+
+/**
+ * The level a target accepts: the one asked for, or the closest equivalent in `allowed`
+ * when the target names fewer levels than the ladder does.
+ */
+function capEffort(e, allowed) {
+  return mapEquivalentEffort(e, allowed);
 }
 
 /**
@@ -976,10 +1000,15 @@ function healToolPairs(messages) {
   return out;
 }
 
-export const THINKING_MODES = ['auto', 'native', 'off'];
+const THINKING_MODES = ['auto', 'native', 'off'];
+const VALID_EFFORTS = ['auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 function normThinkingMode(mode) {
   return THINKING_MODES.includes(mode) ? mode : 'auto';
+}
+
+function normThinkingEffort(effort) {
+  return typeof effort === 'string' && VALID_EFFORTS.includes(effort.toLowerCase()) ? effort.toLowerCase() : 'auto';
 }
 
 // IR -> OpenAI Chat Completions body.
@@ -1071,14 +1100,25 @@ function irToChatBody(ir, model, opts = {}) {
     body.response_format = { type: 'json_object' };
   }
 
+  const effortOverride = normThinkingEffort(opts.thinkingEffort);
   if (wantsThinking && mode === 'native') {
     // A strict OpenAI upstream names four levels and refuses the rest, so `xhigh` becomes `high`
     // there and not `medium`: the request keeps as much of the depth as the target can take.
-    const asked = ir.thinking?.effort
-      || (ir.thinking?.type === 'adaptive' ? 'high' : (ir.thinking?.budget ? budgetToEffort(ir.thinking.budget) : 'medium'));
-    body.reasoning_effort = capEffort(asked, OPENAI_CHAT_LEVELS);
+    const asked = effortOverride !== 'auto'
+      ? effortOverride
+      : (ir.thinking?.effort || (ir.thinking?.type === 'adaptive' ? 'high' : (ir.thinking?.budget ? budgetToEffort(ir.thinking.budget) : 'medium')));
+    if (asked !== 'none') {
+      body.reasoning_effort = capEffort(asked, OPENAI_CHAT_LEVELS);
+    }
   } else if (wantsThinking) {
-    if (ir.thinking?.type === 'adaptive') {
+    if (effortOverride !== 'auto') {
+      if (effortOverride !== 'none') {
+        const rawBudget = effortToBudget(effortOverride);
+        const safeBudget = clampBudget(rawBudget);
+        body.thinking = { type: 'enabled', budget_tokens: safeBudget };
+        body.reasoning_effort = normalizeEffort(effortOverride);
+      }
+    } else if (ir.thinking?.type === 'adaptive') {
       body.thinking = { type: 'adaptive' };
       body.reasoning_effort = normalizeEffort(ir.thinking.effort || 'high');
     } else {
@@ -1122,7 +1162,7 @@ function contentToAnthropicBlocks(c) {
 }
 
 // IR -> Anthropic Messages body.
-function irToAnthropicBody(ir, model) {
+function irToAnthropicBody(ir, model, opts = {}) {
   const messages = [];
 
   for (const m of healToolPairs(ir.messages)) {
@@ -1202,15 +1242,26 @@ function irToAnthropicBody(ir, model) {
   // level Anthropic names, so the depth survives the hop instead of becoming a number. A client
   // that sent budget_tokens has already said the same thing in Anthropic's own words, and its
   // budget stands: budget and effort together would be the same request twice.
-  if (ir.thinking && ir.thinking.type !== 'disabled' && ir.thinking.effort && !ir.thinking.budget) {
-    body.output_config = { ...(body.output_config || {}), effort: capEffort(ir.thinking.effort, EFFORT_LEVELS) };
-  }
-  if (ir.thinking && ir.thinking.type === 'adaptive') {
-    body.thinking = { type: 'adaptive' };
-  } else if (ir.thinking && ir.thinking.type !== 'disabled' && body.max_tokens > 1024) {
-    // Anthropic requires 1024 <= budget_tokens < max_tokens; drop thinking when max_tokens is too small.
-    const budget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 4096));
-    body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
+  const effortOverride = normThinkingEffort(opts.thinkingEffort);
+  if (effortOverride !== 'auto') {
+    if (effortOverride !== 'none') {
+      body.output_config = { ...(body.output_config || {}), effort: capEffort(effortOverride, EFFORT_LEVELS) };
+      if (body.max_tokens > 1024) {
+        const budget = clampBudget(effortToBudget(effortOverride));
+        body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
+      }
+    }
+  } else {
+    if (ir.thinking && ir.thinking.type !== 'disabled' && ir.thinking.effort && !ir.thinking.budget) {
+      body.output_config = { ...(body.output_config || {}), effort: capEffort(ir.thinking.effort, EFFORT_LEVELS) };
+    }
+    if (ir.thinking && ir.thinking.type === 'adaptive') {
+      body.thinking = { type: 'adaptive' };
+    } else if (ir.thinking && ir.thinking.type !== 'disabled' && body.max_tokens > 1024) {
+      // Anthropic requires 1024 <= budget_tokens < max_tokens; drop thinking when max_tokens is too small.
+      const budget = clampBudget(ir.thinking.budget ?? (ir.thinking.effort ? effortToBudget(ir.thinking.effort) : 4096));
+      body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
+    }
   }
   if (body.thinking) {
     // When thinking is on, Anthropic rejects temperature != 1, top_k, or top_p < 0.95.
@@ -1232,7 +1283,7 @@ function dataUrlToInlineData(url) {
 }
 
 // IR -> Vertex generateContent body.
-function irToVertexBody(ir, model) {
+function irToVertexBody(ir, model, opts = {}) {
   const contents = [];
   const textPartsOf = (c) => {
     if (typeof c === 'string') return c ? [{ text: c }] : [];
@@ -1320,7 +1371,15 @@ function irToVertexBody(ir, model) {
   if (typeof ir.params.topK === 'number') gc.topK = ir.params.topK;
   if (typeof ir.params.maxTokens === 'number') gc.maxOutputTokens = ir.params.maxTokens;
   if (ir.params.stop.length) gc.stopSequences = ir.params.stop;
-  if (ir.thinking && ir.thinking.type !== 'disabled') {
+  const effortOverride = normThinkingEffort(opts.thinkingEffort);
+  if (effortOverride !== 'auto') {
+    if (effortOverride !== 'none') {
+      gc.thinkingConfig = {
+        includeThoughts: true,
+        thinkingBudget: Math.min(clampBudget(effortToBudget(effortOverride)), GEMINI_MAX_BUDGET)
+      };
+    }
+  } else if (ir.thinking && ir.thinking.type !== 'disabled') {
     // includeThoughts: without this flag Gemini won't return thought parts -> the client loses thinking.
     gc.thinkingConfig = { includeThoughts: true };
     if (ir.thinking.type === 'enabled') {
@@ -1465,8 +1524,8 @@ function emitUpstreamBody(outFormat, ir, model, opts = {}) {
   let src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
   if (isAntigravityModel(model) && src.system) src = { ...src, system: src.system.replace(BILLING_HEADER_RE, '') };
   switch (outFormat) {
-    case 'anthropic': return irToAnthropicBody(src, model);
-    case 'vertex': return irToVertexBody(src, model);
+    case 'anthropic': return irToAnthropicBody(src, model, opts);
+    case 'vertex': return irToVertexBody(src, model, opts);
     case 'openai-chat':
     default: return irToChatBody(src, model, opts);
   }
@@ -2529,6 +2588,7 @@ export {
   smartReasoning, smartText, smartToolCalls, smartUsage, smartFinish,
   firstChoice, smartDelta, sanitizeJsonSchema, toGeminiSchema, splitParts,
   budgetToEffort, effortToBudget, clampBudget, normalizeEffort, capEffort, parseArgs, stringifyArgs,
+  THINKING_MODES, VALID_EFFORTS,
   anthropicToIR, responsesToIR, codeAssistToIR, parseToIR,
   healToolPairs, healAnthropicPayload, rememberToolSignature, lookupToolSignature, estimateTokens, irToChatBody, irToAnthropicBody, irToVertexBody, emitUpstreamBody,
   normalizeUpstream, createUpstreamNormalizer, createCollector,

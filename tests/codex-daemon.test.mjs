@@ -6,14 +6,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { buildCerts } from '../blindfold/certs.mjs';
+
 // Temporary HOME and state dir before the import, so nothing here can reach the real Codex daemon.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-codex-daemon-'));
 process.env.HOME = path.join(root, 'home');
 process.env.LLM_SWITCHER_STATE_DIR = path.join(root, 'state');
 delete process.env.CODEX_HOME;
 fs.mkdirSync(process.env.LLM_SWITCHER_STATE_DIR, { recursive: true });
-const { restartCodexDaemon, applyLaunchState, clearLaunchState, emptyToolEnvFiles, computeLaunchState, STATE_DIR } = await import('../state.mjs');
+const { restartCodexDaemon, applyLaunchState, clearLaunchState, emptyToolEnvFiles, computeLaunchState, STATE_DIR, INTERCEPT_HOSTS, usableCACertificate } = await import('../state.mjs');
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+const certsDir = path.join(root, 'certs');
+buildCerts(certsDir, INTERCEPT_HOSTS);
+const validCA = path.join(certsDir, 'ca.pem');
 
 // A machine where the codex shim routes through `stateDir` and a daemon is running.
 function machine(stateDir) {
@@ -32,7 +38,7 @@ function machine(stateDir) {
 }
 
 const ROUTE = [['HTTPS_PROXY', 'http://127.0.0.1:3457'], ['https_proxy', 'http://127.0.0.1:3457'],
-  ['NO_PROXY', '127.0.0.1,localhost'], ['no_proxy', '127.0.0.1,localhost'], ['CODEX_CA_CERTIFICATE', '/ca.pem']];
+  ['NO_PROXY', '127.0.0.1,localhost'], ['no_proxy', '127.0.0.1,localhost'], ['CODEX_CA_CERTIFICATE', validCA]];
 
 test('a route change restarts the running daemon with the new Codex variables', () => {
   const m = machine('/switcher/state');
@@ -51,19 +57,38 @@ test('a route change restarts the running daemon with the new Codex variables', 
 // file" -- which is what a caller sees as a daemon error while using Codex.
 test('a CA that is not on disk is never handed to Codex', () => {
   const m = machine('/switcher/state');
-  restartCodexDaemon(ROUTE, { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' } });
+  const deadRoute = [...ROUTE.filter(([k]) => k !== 'CODEX_CA_CERTIFICATE'), ['CODEX_CA_CERTIFICATE', '/nonexistent/ca.pem']];
+  restartCodexDaemon(deadRoute, { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' } });
   assert.equal(m.calls[0].env.CODEX_CA_CERTIFICATE, undefined,
     'a CA the switcher never built must not reach the daemon');
 });
 
 test('a CA that is on disk is passed through, so the interceptor still works', () => {
   const m = machine('/switcher/state');
-  const ca = path.join(m.home, 'certs', 'ca.pem');
-  fs.mkdirSync(path.dirname(ca), { recursive: true });
-  fs.writeFileSync(ca, '-----BEGIN CERTIFICATE-----\n');
+  const certsDir = path.join(m.home, 'certs');
+  buildCerts(certsDir, INTERCEPT_HOSTS);
+  const ca = path.join(certsDir, 'ca.pem');
   restartCodexDaemon([...ROUTE.filter(([k]) => k !== 'CODEX_CA_CERTIFICATE'), ['CODEX_CA_CERTIFICATE', ca]],
     { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' }, ca });
   assert.equal(m.calls[0].env.CODEX_CA_CERTIFICATE, ca, 'a CA that exists is the whole point of the route');
+});
+
+test('directories, empty, garbage, and unreadable files are dropped with proxy pairs', () => {
+  const m = machine('/switcher/state');
+  const dir = path.join(m.home, 'certs-dir');
+  fs.mkdirSync(dir, { recursive: true });
+  const empty = path.join(m.home, 'empty.pem');
+  fs.writeFileSync(empty, '');
+  const garbage = path.join(m.home, 'garbage.pem');
+  fs.writeFileSync(garbage, '-----BEGIN CERTIFICATE-----\nnot a valid cert\n-----END CERTIFICATE-----\n');
+
+  for (const bad of [dir, empty, garbage]) {
+    restartCodexDaemon([...ROUTE.filter(([k]) => k !== 'CODEX_CA_CERTIFICATE'), ['CODEX_CA_CERTIFICATE', bad]],
+      { home: m.home, codexHome: m.codexHome, stateDir: '/switcher/state', spawnFn: m.spawnFn, baseEnv: { PATH: '/bin' } });
+    const env = m.calls[m.calls.length - 1].env;
+    assert.equal(env.CODEX_CA_CERTIFICATE, undefined);
+    assert.equal(env.HTTPS_PROXY, undefined);
+  }
 });
 
 // The route a restart hands over is the last word: the pairs win, so a CA in them reaches the daemon

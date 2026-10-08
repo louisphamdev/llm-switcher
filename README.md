@@ -552,43 +552,50 @@ On Linux the unit is a systemd *user* service: it starts when you log in. To sta
 
 ### Idle compaction
 
-A conversation that pauses long enough loses the provider's prompt cache. The next request pays full
-price for a prefix the provider no longer holds, and pays it again on the turn after that. How long
-a provider keeps its cache is its own business: Anthropic 5 minutes by default and 1 hour when the
-request asks for it, OpenAI 30 minutes, Gemini and DeepSeek publish no lifetime at all.
+A configurable pause can indicate that the provider's prompt cache is cold; it is a heuristic,
+not a guarantee about any provider's cache lifetime. This feature is off by default.
 
-When a Claude Code conversation comes back after a pause and is large enough to be worth it, the
-gateway shortens the history and writes the compaction into the session file. The turn that would
-have cost the whole history costs the summary instead.
+For an identified Claude Code session, the gateway shortens an old prefix once after a sufficiently
+long pause. It stores the exact original prefix hash and its replacement in a private cache under
+`STATE_DIR/idle-compact`. Later requests reuse that prefix only while the original raw history still
+matches, and preserve every recent and newly appended turn unchanged. The cache survives gateway
+restarts. A native client compaction or edited prefix invalidates it safely. Client JSONL files and
+Codex SQLite databases are never read or modified by this feature.
 
-| | |
+| Command | Behavior |
 | --- | --- |
-| `switch compact status` | Show the settings |
-| `switch compact on` / `off` | Turn it on or off (off by default) |
-| `switch compact model <id>` | Which model writes the summary. Empty or `default`: the model of the conversation itself |
-| `switch compact idle <minutes>` | How long a pause counts as losing the cache (15) |
-| `switch compact min <KB>` | How large a conversation must be to be worth it (64) |
+| `switch compact status` | Show settings |
+| `switch compact on` / `off` | Enable or disable Claude request compaction |
+| `switch compact codex on` / `off` | Opt Codex Responses requests into the same wire prefix cache; off by default |
+| `switch compact model <id>` | Explicitly choose a summary model |
+| `switch compact model none` / `default` | Disable summary calls; no fallback to the conversation model |
+| `switch compact idle <minutes>` | Pause threshold, default 15; allowed 1–1440 |
+| `switch compact min <KB>` | Minimum request size, default 64; allowed 8–4096 |
 
-Two things are deliberate.
+An unset summary model (empty string or `null`) makes no model call. The deterministic replacement
+keeps earlier user and assistant text within the configured budgets, removes older tool payloads,
+and retains the recent tail with complete call/result pairs. With an explicit summary model, one
+background call summarizes only the replaced prefix and upgrades its cache generation. A late
+summary cannot overwrite a newer generation or remove turns that arrived while it was running.
+The summary model is mapped and its upstream format resolved independently of the main model.
 
-**Only once, not on every turn.** Compacting every turn would change the prefix every turn, so no
-turn would ever hit the cache and the conversation would be summarized over and over. Compacting
-when a pause says the cache is gone keeps the summary stable for the turns that follow.
+Caching requires an explicit session identifier: Claude session headers/metadata, or Codex session,
+thread or prompt-cache identity. Anonymous requests stay unchanged; shared opening prompts are not
+used as session identity. Cache scope includes the client, caller credential digest, profile,
+model, system/tools and compaction policy. Unsupported or malformed tool histories are forwarded
+unchanged. Cache failure or corruption also forwards the original request.
 
-**The session file, not the API.** Claude Code builds every request from a chain of entries in
-`~/.claude/projects/<project>/<session>.jsonl`, so a compaction written there shortens every
-request after it, not just the turn that triggered it. The two entries are the ones Claude Code
-writes itself: a `compact_boundary` and a `user` entry marked `isCompactSummary`. The old entries
-stay in the file, which is what Claude Code does too, so a transcript a person can still read is
-worth more than a small file. The shortening takes effect the next time the session is resumed.
+The dashboard and `/api/idle-compact` use the same settings as the CLI. Supported fields are
+`enabled`, `codex`, `model`, `idleMinutes`, `minBytes`, `keepRecent`, `userChars`, `summaryMaxChars`,
+and `sessionLookbackHours`. The API rejects unknown fields and invalid budgets with HTTP 400.
+Additional bounds/defaults: `keepRecent` 1–100 (6), `userChars` 128–24000 (3000),
+`summaryMaxChars` 256–128000 (24000), and `sessionLookbackHours` 1–168 (72).
+The private cache keeps at most 256 records and expires idle clocks and prefix mappings after the
+configured lifetime. A later idle window may compact a larger prefix; ordinary appended turns
+reuse a stable prefix. Native Codex compaction remains Codex's own responsibility.
 
-A free model writes a free summary and a worse one: the summary replaces the history, so what it
-leaves out is gone. That is the reader's call, which is why the model is a setting.
-
-Codex is not handled here. Its compaction is a protocol item rather than a file, which the provider
-gateway answers, and the answer is stored by Codex in its own history. Shortening a Codex request at
-the client would replace that with a summary no client records. The Antigravity CLI has no session
-file of its own, so there would be nothing to make the shortening last.
+When using intact, configure the profile with an authorized intact API key. Client User-Agent
+matching chooses the native protocol route; it does not replace upstream authentication.
 
 ### Updates
 

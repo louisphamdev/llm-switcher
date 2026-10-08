@@ -60,7 +60,13 @@ test('openssl verifies the leaf, and the name constraints refuse a leaf for anot
   // A leaked ca.key signs for any name; a client that obeys the constraints must refuse it.
   const evil = path.join(dir, 'evil.pem');
   fs.writeFileSync(evil, signLeaf(dir, ['evil.example']).cert);
-  assert.throws(() => execFileSync('openssl', ['verify', '-CAfile', path.join(dir, 'ca.pem'), evil], { stdio: 'pipe' }), /permitted subtree violation/);
+  assert.throws(() => {
+    try {
+      execFileSync('openssl', ['verify', '-CAfile', path.join(dir, 'ca.pem'), evil], { stdio: 'pipe' });
+    } catch (err) {
+      throw new Error([err.stdout?.toString() || '', err.stderr?.toString() || '', err.message].join(' '));
+    }
+  }, /permitted subtree violation/);
 });
 
 test('ensureBlindfoldCerts builds a missing set, rebuilds a missing leaf on the same CA, and leaves a good set alone', (t) => {

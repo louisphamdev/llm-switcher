@@ -99,9 +99,20 @@ fi
 # Codex builds its TLS client from this at startup and cannot start at all without reading it, so a
 # CA that is not on disk takes Codex down instead of routing it. The shim cannot build the file, but
 # it can refuse to hand over a path that is already dead, which leaves Codex on the system roots.
-if [ -n "\${CODEX_CA_CERTIFICATE:-}" ] && [ ! -f "\${CODEX_CA_CERTIFICATE}" ]; then
-  printf '[llm-switcher] %s not found; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
-  unset CODEX_CA_CERTIFICATE
+if [ -n "\${CODEX_CA_CERTIFICATE:-}" ]; then
+  if [ ! -e "\${CODEX_CA_CERTIFICATE}" ]; then
+    printf '[llm-switcher] %s missing; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
+    unset CODEX_CA_CERTIFICATE
+  elif [ -d "\${CODEX_CA_CERTIFICATE}" ] || [ ! -f "\${CODEX_CA_CERTIFICATE}" ]; then
+    printf '[llm-switcher] %s nonregular; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
+    unset CODEX_CA_CERTIFICATE
+  elif [ ! -r "\${CODEX_CA_CERTIFICATE}" ]; then
+    printf '[llm-switcher] %s unreadable; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
+    unset CODEX_CA_CERTIFICATE
+  elif [ ! -s "\${CODEX_CA_CERTIFICATE}" ]; then
+    printf '[llm-switcher] %s empty; Codex uses the system roots.\\n' "\${CODEX_CA_CERTIFICATE}" >&2
+    unset CODEX_CA_CERTIFICATE
+  fi
 fi
 ${name !== 'agy' ? '' : `
 # The gateway proves itself before agy's token goes to it; any doubt keeps agy on its official endpoint.
@@ -250,6 +261,17 @@ if exist "%SWITCHER_DIR%\\active.flag" if exist "%SWITCHER_DIR%\\${envFile}" (
   for %%A in ("%SWITCHER_DIR%\\${envFile}") do if %%~zA GTR 0 set "TOOL_ACTIVE=1"
 )
 if "%TOOL_ACTIVE%"=="1" call "%SWITCHER_DIR%\\${envFile}"
+if defined CODEX_CA_CERTIFICATE (
+  if not exist "%CODEX_CA_CERTIFICATE%" (
+    echo [llm-switcher] %CODEX_CA_CERTIFICATE% missing; Codex uses the system roots. 1>&2
+    set "CODEX_CA_CERTIFICATE="
+  ) else (
+    for %%A in ("%CODEX_CA_CERTIFICATE%") do if %%~zA EQU 0 (
+      echo [llm-switcher] %CODEX_CA_CERTIFICATE% empty; Codex uses the system roots. 1>&2
+      set "CODEX_CA_CERTIFICATE="
+    )
+  )
+)
 ${name !== 'agy' ? '' : `
 REM The gateway proves itself before agy's token goes to it; any doubt keeps agy on its official endpoint.
 if "%TOOL_ACTIVE%"=="1" call :CHECK_GATEWAY

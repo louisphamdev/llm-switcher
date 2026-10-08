@@ -13,7 +13,7 @@ import {
   getMigrationError, getMigrationCollision, getLastLoadError,
   casClearToolPointers, emptyToolEnvFiles, syncInterceptorTools
 } from './state.mjs';
-import { idleCompactPolicy } from './idlecompact.mjs';
+import { idleCompactPolicy, validateIdleCompactPatch } from './idlecompact.mjs';
 import { runProbe, runCheck } from './contract.mjs';
 import { installPlugin, uninstallPlugin, pluginStatus, PLUGIN_NAME } from './plugin.mjs';
 import {
@@ -853,13 +853,16 @@ async function manageCompact(action = 'status', arg = '') {
   const policy = idleCompactPolicy(cfg);
   const key = 'idleCompact';
   const set = (patch) => {
+    const invalid = validateIdleCompactPatch(patch);
+    if (invalid) { console.error(`[Error] ${invalid}`); process.exit(1); }
     cfg[key] = { ...(cfg[key] || {}), ...patch };
     saveConfig(cfg);
   };
   const act = (action || 'status').toLowerCase();
   const show = () => {
     const p = idleCompactPolicy(loadConfig() || {});
-    console.log('Idle compaction (Claude Code)');
+    console.log('Idle compaction (gateway prefix cache)');
+    console.log(`  Codex opt-in:   ${p.codex ? 'yes' : 'no'}`);
     console.log(`  Enabled:        ${p.enabled ? 'yes' : 'no'}`);
     console.log(`  Idle over:      ${p.idleMinutes} minutes`);
     console.log(`  Context over:   ${Math.round(p.minBytes / 1024)} KB`);
@@ -879,14 +882,18 @@ async function manageCompact(action = 'status', arg = '') {
   } else if (act === 'model') {
     const m = String(arg || '').trim();
     if (!m) { console.log(`Summary model is currently: ${policy.model || '(none set)'}`); return; }
-    if (m === 'none' || m === 'default') { set({ model: '' }); console.log('[OK] The conversation\'s own model will write the summary.'); return; }
+    if (m === 'none' || m === 'default') { set({ model: '' }); console.log('[OK] No summary model: no model is called.'); return; }
     set({ model: m });
     console.log(`[OK] Summaries will be written by: ${m}`);
+  } else if (act === 'codex') {
+    if (!['on', 'off'].includes(arg)) { console.log(`Codex prefix cache: ${policy.codex ? 'on' : 'off'} (switch compact codex on|off)`); return; }
+    set({ codex: arg === 'on' });
+    console.log(`[OK] Codex wire prefix cache is ${arg}; client history stays unchanged.`);
   } else if (act === 'idle') {
     const n = Number(arg);
     if (!Number.isFinite(n) || n <= 0) { console.error('Usage: switch compact idle <minutes>'); process.exit(1); }
-    set({ idleMinutes: Math.floor(n) });
-    console.log(`[OK] Compact a conversation idle over ${Math.floor(n)} minutes.`);
+    set({ idleMinutes: n });
+    console.log(`[OK] Compact a conversation idle over ${n} minutes.`);
   } else if (act === 'min') {
     const n = Number(arg);
     if (!Number.isFinite(n) || n <= 0) { console.error('Usage: switch compact min <KB>'); process.exit(1); }

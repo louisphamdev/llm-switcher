@@ -1369,10 +1369,14 @@ export function computeLaunchState(cfg, port) {
   // Codex builds its TLS client from CODEX_CA_CERTIFICATE the moment it starts, and a path it cannot
   // read is fatal: it dies before its first request, and its long-lived daemon then fails its own
   // update with "Failed to read CA certificate file". So the CA is only offered when it is really
-  // there. A missing one leaves Codex on the system roots, which is a working Codex rather than none.
+  // usable. A missing or invalid one drops the switcher's proxy pairs as well, which leaves Codex
+  // on the system roots talking directly to its official endpoint instead of breaking TLS.
   if (codex) {
-    state.envCodex = proxyPairs();
-    if (fs.existsSync(paths.blindfoldCA)) state.envCodex.push(['CODEX_CA_CERTIFICATE', paths.blindfoldCA]);
+    if (usableCACertificate(paths.blindfoldCA)) {
+      state.envCodex = [...proxyPairs(), ['CODEX_CA_CERTIFICATE', paths.blindfoldCA]];
+    } else {
+      state.envCodex = [];
+    }
   }
   // agy reaches the gateway directly over plain http: no proxy and no CA (Go on Windows reads only
   // the system store). Remote control keeps its own host, so it never crosses the switcher.
@@ -1495,6 +1499,29 @@ export function applyLaunchState(cfg, port, opts = {}) {
   return st;
 }
 
+export function usableCACertificate(file) {
+  if (typeof file !== 'string' || !file.trim()) return false;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size === 0 || stat.size > 4 * 1024 * 1024) return false;
+    fs.accessSync(file, fs.constants.R_OK);
+    const text = fs.readFileSync(file, 'utf8');
+    const opens = text.match(/-----BEGIN CERTIFICATE-----/g) || [];
+    const blocks = text.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+    if (opens.length === 0 || opens.length !== blocks.length) return false;
+    return blocks.every(pem => {
+      try {
+        new crypto.X509Certificate(pem);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 const LOOPBACK_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/i;
 
 /**
@@ -1528,7 +1555,15 @@ export function restartCodexDaemon(pairs, {
   // "Failed to read CA certificate file". The check has to come after the route is applied, because a
   // dead CA can arrive in the route as well as in the environment it was already carrying.
   for (const [k, v] of pairs) env[k] = v;
-  if (!env.CODEX_CA_CERTIFICATE || !fs.existsSync(env.CODEX_CA_CERTIFICATE)) delete env.CODEX_CA_CERTIFICATE;
+  if (!usableCACertificate(env.CODEX_CA_CERTIFICATE)) {
+    delete env.CODEX_CA_CERTIFICATE;
+    for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
+      if (LOOPBACK_URL.test(env[k] || '')) delete env[k];
+    }
+    for (const k of ['NO_PROXY', 'no_proxy']) {
+      if (env[k] === '127.0.0.1,localhost') delete env[k];
+    }
+  }
 
   try {
     const child = spawnFn(bin, ['app-server', 'daemon', 'restart'], { env, stdio: 'ignore', detached: true });
