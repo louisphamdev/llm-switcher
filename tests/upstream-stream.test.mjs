@@ -9,7 +9,9 @@ async function collect(text, widths = [1, 3, 7]) {
     const end = Math.min(bytes.length, offset + widths[i++ % widths.length]);
     controller.enqueue(bytes.subarray(offset, end)); offset = end;
   } });
-  return Array.fromAsync(readUpstreamPayloads({ body }));
+  const values = [];
+  for await (const value of readUpstreamPayloads({ body })) values.push(value);
+  return values;
 }
 test('multiline SSE joins data fields across CRLF, byte chunks and UTF-8', async () => {
   const text = ': ping\r\nevent: message\r\nid: 1\r\nretry: 1000\r\ndata: {"choices":\r\ndata: [{"delta":{"content":"giữ ngữ cảnh"}}]}\r\n\r\ndata: [DONE]\r\n\r\n';
