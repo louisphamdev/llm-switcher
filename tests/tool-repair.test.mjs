@@ -2,7 +2,7 @@
 // declared. Sources for every name here are collected in docs/tool-vocabulary.md.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createToolVocab, NULL_TOOL_VOCAB, tokenize } from '../toolvocab.mjs';
+import { createToolVocab, NULL_TOOL_VOCAB, tokenize, sanitizeToolName } from '../toolvocab.mjs';
 import {
   anthropicToIR, responsesToIR, irToChatBody, buildAnthropicMessage, buildChatMessage, buildResponsesMessage,
   createAnthropicStream, createChatStream, createResponsesStream
@@ -277,4 +277,113 @@ test('the notice and the think guide coexist', () => {
   const sys = irToChatBody(ir, 'gpt-4o').messages.find(m => m.role === 'system').content;
   assert.ok(sys.includes('<think> and </think>'), `the think guide is missing: ${sys}`);
   assert.match(sys, /use exactly these names/i);
+});
+
+// Tool names longer than 64 characters (e.g. MCP plugin tools) must be sanitized for OpenAI/Gemini
+// APIs (<= 64 chars, ^[a-zA-Z0-9_-]{1,64}$) and mapped back in responses.
+test('sanitizeToolName: enforces 1-64 character length and valid identifier charset', () => {
+  assert.equal(sanitizeToolName('Bash'), 'Bash');
+  assert.equal(sanitizeToolName('Read'), 'Read');
+  assert.equal(sanitizeToolName('mcp__github__create_issue'), 'mcp__github__create_issue');
+
+  const name64 = 'a'.repeat(64);
+  assert.equal(sanitizeToolName(name64), name64);
+
+  // Exact problematic tool from chrome-devtools MCP (70 chars)
+  const chromeDevToolsTool = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages';
+  assert.equal(chromeDevToolsTool.length, 70);
+  const sanitized = sanitizeToolName(chromeDevToolsTool);
+  assert.ok(sanitized.length <= 64, `length must be <= 64, got ${sanitized.length}`);
+  assert.equal(sanitized.length, 64);
+  assert.match(sanitized, /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.ok(sanitized.startsWith('mcp__plugin_chrome-devtools-mcp_'));
+  assert.ok(sanitized.endsWith('_list_console_messages'));
+
+  // Another long tool with different suffix gets a distinct hash
+  const networkTool = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_network_requests';
+  const sanitizedNetwork = sanitizeToolName(networkTool);
+  assert.equal(sanitizedNetwork.length, 64);
+  assert.notEqual(sanitized, sanitizedNetwork);
+
+  // allowHyphens: false for Vertex/Gemini
+  const vertexSanitized = sanitizeToolName(chromeDevToolsTool, { allowHyphens: false });
+  assert.equal(vertexSanitized.length, 64);
+  assert.match(vertexSanitized, /^[a-zA-Z_][a-zA-Z0-9_]*$/);
+  assert.ok(!vertexSanitized.includes('-'));
+});
+
+test('createToolVocab: round-trips >64 char tool names back to client declared name', () => {
+  const longName = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages';
+  const ir = anthropicToIR({
+    model: 'claude-opus-4-6', messages: [{ role: 'user', content: 'check console' }],
+    tools: [
+      { name: longName, input_schema: { properties: { count: { type: 'number' } } } }
+    ]
+  });
+
+  const vocab = createToolVocab(ir.tools);
+  const upstreamSafe = sanitizeToolName(longName);
+  assert.notEqual(upstreamSafe, longName);
+  assert.equal(upstreamSafe.length, 64);
+
+  // Model answers with the sanitized name -> vocab recovers original declared name
+  assert.equal(vocab.name(upstreamSafe), longName);
+  assert.ok(vocab.isShortened(upstreamSafe));
+
+  // Streaming does not hold arguments for shortened names (they keep caller's schema)
+  const deltas = [];
+  const renderer = createAnthropicStream((event, data) => deltas.push({ event, data }), 'claude-opus-4-6', { vocab });
+  renderer.start();
+  renderer.tool({ index: 0, id: 'call_1', name: upstreamSafe, args: '{"count": 10}' });
+  renderer.finish('stop');
+
+  const startBlock = deltas.find(d => d.event === 'content_block_start');
+  assert.equal(startBlock.data.content_block.name, longName);
+
+  const jsonDelta = deltas.find(d => d.event === 'content_block_delta' && d.data.delta.type === 'input_json_delta');
+  assert.ok(jsonDelta, 'input_json_delta should be emitted');
+  assert.equal(jsonDelta.data.delta.partial_json, '{"count": 10}');
+
+  // Non-streaming builder also restores the original name
+  const msg = buildAnthropicMessage({
+    model: 'claude-opus-4-6',
+    tools: [{ index: 0, id: 'call_1', name: upstreamSafe, args: '{"count": 10}' }],
+    finish: 'tool_calls',
+    vocab
+  });
+  const toolUse = msg.content.find(c => c.type === 'tool_use');
+  assert.equal(toolUse.name, longName);
+});
+
+test('irToChatBody: serializes long tool names, assistant history, and toolChoice within 64 chars', () => {
+  const longName = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages';
+  const ir = anthropicToIR({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'user', content: 'first turn' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: longName, input: { count: 5 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'ok' }] }
+    ],
+    tools: [
+      { name: longName, input_schema: { properties: { count: { type: 'number' } } } }
+    ]
+  });
+  ir.toolChoice = { name: longName };
+
+  const body = irToChatBody(ir, 'gpt-4o');
+
+  // Declared tools must have <=64 char function names matching regex
+  assert.ok(body.tools && body.tools.length === 1);
+  const toolFn = body.tools[0].function;
+  assert.ok(toolFn.name.length <= 64);
+  assert.match(toolFn.name, /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.equal(toolFn.name, sanitizeToolName(longName));
+
+  // Assistant turn in history must have its tool call name shortened too
+  const asstMsg = body.messages.find(m => m.role === 'assistant');
+  assert.ok(asstMsg && asstMsg.tool_calls && asstMsg.tool_calls.length === 1);
+  assert.equal(asstMsg.tool_calls[0].function.name, sanitizeToolName(longName));
+
+  // toolChoice must be shortened
+  assert.equal(body.tool_choice.function.name, sanitizeToolName(longName));
 });

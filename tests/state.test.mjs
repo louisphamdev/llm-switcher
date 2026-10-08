@@ -139,7 +139,7 @@ test('computeLaunchState derives launch state per target profile, not from one g
   const names = (pairs) => pairs.map(([k]) => k).sort();
   // R2: exactly these names, each tool in its own file. Nothing here names an endpoint, a
   // model or a context window, so no tool can be reconfigured and none can capture the other.
-  assert.deepEqual(names(st.envClaude), ['HTTPS_PROXY', 'NO_PROXY', 'https_proxy', 'no_proxy']);
+  assert.deepEqual(names(st.envClaude), ['CLAUDE_CODE_TETHER_LIVE', 'HTTPS_PROXY', 'NO_PROXY', 'https_proxy', 'no_proxy']);
   assert.deepEqual(names(st.envCodex),
     ['CODEX_CA_CERTIFICATE', 'HTTPS_PROXY', 'NO_PROXY', 'https_proxy', 'no_proxy']);
   // The proxy is the interceptor, not the gateway itself (R3).
@@ -261,6 +261,10 @@ test('every active tool is routed through the interceptor with only the variable
   for (const [label, pairs] of [['claude', st.envClaude], ['codex', st.envCodex]]) {
     for (const [k, v] of pairs) {
       assert.ok(!/_URL$|BASE_URL/.test(k), `${label}: ${k} would print an override banner`);
+      if (k === 'CLAUDE_CODE_TETHER_LIVE') {
+        assert.equal(v, '0', `${label}: tether must be disabled`);
+        continue;
+      }
       assert.ok(!/MODEL|CONTEXT|WINDOW|CLAUDE_CODE_|OPENAI_/.test(k), `${label}: ${k} names a model`);
       assert.ok(typeof v === 'string' && v.length > 0, `${label}: ${k} must have a value`);
     }
@@ -382,6 +386,7 @@ test('the launch state writes no 1M tag or model variable, whatever model1M says
     const st = computeLaunchState(cfg, 4000);
     assert.equal(st.active, true, 'the profile is active whatever it marks 1M');
     for (const [k] of [...st.envClaude, ...st.envCodex]) {
+      if (k === 'CLAUDE_CODE_TETHER_LIVE') continue;
       assert.ok(!/ANTHROPIC|CLAUDE_CODE|OPENAI_|MODEL|1M|CONTEXT|WINDOW/.test(k),
         `${k} must not be written for ${JSON.stringify(model1M)}`);
     }

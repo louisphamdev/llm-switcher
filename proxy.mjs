@@ -27,7 +27,7 @@ import {
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
 import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows } from './windows.mjs';
-import { createToolVocab } from './toolvocab.mjs';
+import { createToolVocab, NULL_TOOL_VOCAB } from './toolvocab.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
 import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
@@ -498,14 +498,10 @@ function parsePayloadLine(line) {
 // training is written back in the caller's words instead of ending the turn with "No such tool
 // available". Built once per request from the tools the caller actually sent, so a request that
 // declared none pays nothing and a turn where the model agreed with the list changes nothing.
-let toolVocabCache = null;
-let toolVocabForIr = null;
 function toolVocabFor(ir) {
-  if (toolVocabForIr !== ir) {
-    toolVocabForIr = ir;
-    toolVocabCache = createToolVocab(ir?.tools);
-  }
-  return toolVocabCache;
+  if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
+  if (!ir._vocab) ir._vocab = createToolVocab(ir.tools);
+  return ir._vocab;
 }
 
 function clientRenderer(clientFormat, res, model, opts = {}) {
@@ -915,6 +911,21 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     payload = JSON.parse(bodyBuffer.toString('utf8'));
   } catch {
     sendClientError(res, clientFormat, 400, 'Invalid JSON body');
+    return;
+  }
+
+  // Handle Claude Code tether (message threads): reject with thread_unsupported_request
+  // so Claude Code immediately falls back to stateless mode and retries.
+  if (clientFormat === 'anthropic' && (payload?.thread || ((req.headers['anthropic-beta'] || '').includes('message-threads') && payload?.thread))) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        message: 'Message threads (tether) are not supported by this upstream gateway.',
+        error_code: 'thread_unsupported_request'
+      }
+    }));
     return;
   }
 

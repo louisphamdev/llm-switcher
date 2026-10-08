@@ -24,6 +24,8 @@
 // }
 // ============================================================
 
+import { sanitizeToolName } from './toolvocab.mjs';
+
 export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
 
 // ---------------- stop reasons ----------------
@@ -910,7 +912,7 @@ function repairToolCall(tc, vocab) {
 function toolNamesNotice(ir, systemText) {
   const names = (ir.tools || [])
     .filter(t => t && typeof t.name === 'string' && t.name && t.side !== 'provider')
-    .map(t => t.name);
+    .map(t => sanitizeToolName(t.name));
   if (names.length < 2) return '';
   const missing = names.filter(n => !String(systemText || '').includes(n));
   if (!missing.length) return '';
@@ -1055,7 +1057,7 @@ function irToChatBody(ir, model, opts = {}) {
     if (m.content !== undefined) out.content = m.content;
     if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length) {
       out.tool_calls = m.toolCalls.map(tc => {
-        const call = { id: tc.id, type: 'function', function: { name: tc.name, arguments: stringifyArgs(tc.args) } };
+        const call = { id: tc.id, type: 'function', function: { name: sanitizeToolName(tc.name), arguments: stringifyArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) call.extra_content = { google: { thought_signature: sig } };
         return call;
@@ -1072,14 +1074,14 @@ function irToChatBody(ir, model, opts = {}) {
   if (tools.length) {
     body.tools = tools.map(t => ({
       type: 'function',
-      function: { name: t.name, description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}) }
+      function: { name: sanitizeToolName(t.name), description: t.description || '', parameters: sanitizeJsonSchema(t.parameters || {}) }
     }));
   }
   if (ir.toolChoice) {
     if (typeof ir.toolChoice === 'string') {
       body.tool_choice = ir.toolChoice === 'required' ? 'required' : ir.toolChoice;
     } else if (ir.toolChoice.name) {
-      body.tool_choice = { type: 'function', function: { name: ir.toolChoice.name } };
+      body.tool_choice = { type: 'function', function: { name: sanitizeToolName(ir.toolChoice.name) } };
     }
   }
   if (typeof ir.params.maxTokens === 'number') {
@@ -1176,7 +1178,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (m.role === 'assistant') {
       const blocks = contentToAnthropicBlocks(m.content).filter(b => b.type === 'text');
       for (const tc of (m.toolCalls || [])) {
-        blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: parseArgs(tc.args) });
+        blocks.push({ type: 'tool_use', id: tc.id, name: sanitizeToolName(tc.name), input: parseArgs(tc.args) });
       }
       if (blocks.length) messages.push({ role: 'assistant', content: blocks });
       continue;
@@ -1220,7 +1222,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
   const anthropicTools = clientTools(ir);
   if (anthropicTools.length) {
     body.tools = anthropicTools.map(t => ({
-      name: t.name, description: t.description || '',
+      name: sanitizeToolName(t.name), description: t.description || '',
       input_schema: sanitizeJsonSchema(t.parameters || {})
     }));
   }
@@ -1228,7 +1230,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (typeof ir.toolChoice === 'string') {
       body.tool_choice = ir.toolChoice === 'required' ? { type: 'any' } : { type: ir.toolChoice };
     } else if (ir.toolChoice.name) {
-      body.tool_choice = { type: 'tool', name: ir.toolChoice.name };
+      body.tool_choice = { type: 'tool', name: sanitizeToolName(ir.toolChoice.name) };
     }
   }
   if (ir.params.parallelToolCalls === false && body.tool_choice) body.tool_choice.disable_parallel_tool_use = true;
@@ -1327,13 +1329,13 @@ function irToVertexBody(ir, model, opts = {}) {
         resp = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed ?? '' };
       } catch { resp = { result: m.content ?? '' }; }
       // Gemini API & Vertex only accept roles 'user' | 'model' (functionResponse lives in the 'user' role).
-      push('user', [{ functionResponse: { name: m.name || 'tool', response: resp } }]);
+      push('user', [{ functionResponse: { name: sanitizeToolName(m.name || 'tool', { allowHyphens: false }), response: resp } }]);
       continue;
     }
     if (m.role === 'assistant') {
       const parts = textPartsOf(m.content).filter(p => p.text);
       (m.toolCalls || []).forEach((tc, j) => {
-        const part = { functionCall: { name: tc.name, args: parseArgs(tc.args) } };
+        const part = { functionCall: { name: sanitizeToolName(tc.name, { allowHyphens: false }), args: parseArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) part.thoughtSignature = sig;
         // Only the first functionCall of each step in the current turn is checked.
@@ -1354,7 +1356,7 @@ function irToVertexBody(ir, model, opts = {}) {
   if (vertexTools.length) {
     body.tools = [{
       functionDeclarations: vertexTools.map(t => ({
-        name: t.name, description: t.description || '',
+        name: sanitizeToolName(t.name, { allowHyphens: false }), description: t.description || '',
         parameters: toGeminiSchema(t.parameters || { type: 'object', properties: {} })
       }))
     }];
@@ -1362,7 +1364,7 @@ function irToVertexBody(ir, model, opts = {}) {
   if (ir.toolChoice) {
     const mode = ir.toolChoice === 'none' ? 'NONE' : ir.toolChoice === 'auto' ? 'AUTO' : 'ANY';
     const fcc = { mode };
-    if (typeof ir.toolChoice === 'object' && ir.toolChoice.name) fcc.allowedFunctionNames = [ir.toolChoice.name];
+    if (typeof ir.toolChoice === 'object' && ir.toolChoice.name) fcc.allowedFunctionNames = [sanitizeToolName(ir.toolChoice.name, { allowHyphens: false })];
     if (body.tools) body.toolConfig = { functionCallingConfig: fcc };
   }
   const gc = {};
@@ -2071,10 +2073,11 @@ function createAnthropicStream(emit, model, opts = {}) {
       if (!st) {
         closeOpen();
         const fixed = vocab ? vocab.name(tc.name) : tc.name;
+        const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
         st = {
           index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: fixed || 'tool', closed: false,
-          // Only a renamed name needs the arguments held back.
-          buffered: '', held: Boolean(vocab && fixed && fixed !== tc.name)
+          // Only a renamed name needs the arguments held back. Shortened names use caller's schema.
+          buffered: '', held: Boolean(vocab && fixed && fixed !== tc.name && !isShort)
         };
         tools.set(key, st);
         emit('content_block_start', {
@@ -2186,7 +2189,8 @@ function createChatStream(emit, model, opts = {}) {
       const idx = tc.index ?? 0;
       if (!seenTools.has(idx)) {
         const name = vocab ? vocab.name(tc.name) : tc.name;
-        seenTools.set(idx, { idx, name, buffered: '', held: Boolean(vocab && name && name !== tc.name) });
+        const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
+        seenTools.set(idx, { idx, name, buffered: '', held: Boolean(vocab && name && name !== tc.name && !isShort) });
         chunk([{ index: 0, delta: { tool_calls: [{ index: idx, id: tc.id || `call_${rand(24)}`, type: 'function', function: { name: name || 'tool', arguments: '' } }] }, finish_reason: null }]);
       }
       const st = seenTools.get(idx);
@@ -2394,10 +2398,11 @@ function createResponsesStream(emit, model, opts = {}) {
         // Codex runs a tool on output_item.done, and the name is in that item. A renamed call
         // therefore cannot be streamed argument by argument: the keys are only known once the whole
         // object exists, so its arguments are held and go out with the item.
+        const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
         st = {
           id: `${prefix}_${rand(24)}`, callId: tc.id || `call_${rand(24)}`, index: nextOutput++,
           name: name || '', args: '', done: false, kind, upstream: tc.name,
-          held: Boolean(vocab && name && name !== tc.name)
+          held: Boolean(vocab && name && name !== tc.name && !isShort)
         };
         tools.set(key, st);
         if (kind !== 'local_shell') {
@@ -2598,5 +2603,5 @@ export {
   createResponsesStream, buildResponsesMessage,
   vertexFinish, createVertexStream, buildVertexMessage,
   createCodeAssistStream, buildCodeAssistMessage,
-  isAntigravityModel
+  isAntigravityModel, sanitizeToolName
 };

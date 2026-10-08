@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.5 — 2026-10-08
+
+- **Automatic Tether Gate Disable for Claude Code (`CLAUDE_CODE_TETHER_LIVE=0`):** Automatically inject `CLAUDE_CODE_TETHER_LIVE=0` into `env-claude.sh` and `env-claude.cmd` whenever the Claude route is active, ensuring Claude Code runs in stateless mode and prevents `message-threads` validation failures on non-Anthropic upstreams. The shim cleans the variable on route deactivation, and the gateway safely rejects unexpected thread requests with `thread_unsupported_request` (HTTP 400).
+- **Two-way Safe Tool Name Sanitization (64-char limit):** Automatically sanitize and shorten tool names exceeding 64 characters (e.g. MCP plugin tools such as `mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages`) into collision-free 64-character identifiers (`^[a-zA-Z0-9_-]{1,64}$`) with embedded SHA-256 hashes for OpenAI Chat and Vertex/Gemini upstreams. The gateway vocabulary bidirectional mapping seamlessly restores the original MCP tool name in responses to Claude Code without buffering delays.
+
 ## Release 1.6.4 — 2026-10-08
 
 - **Dynamic Model Provider Source for Idle Compaction:** Query live model listings directly from the selected profile's `baseURL` via `/models` instead of hardcoding provider URLs or static model lists.

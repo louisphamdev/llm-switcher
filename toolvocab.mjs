@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 // Writing a tool call back in the vocabulary the client declared.
 //
 // A tool name is not an identifier an API checks. The client sends its tools, the model answers
@@ -192,6 +194,27 @@ function repairArgs(args, tool) {
 }
 
 /**
+ * Sanitize a tool name to conform to upstream API length and character constraints.
+ * OpenAI Chat: 1-64 letters, digits, underscores or hyphens (^[a-zA-Z0-9_-]{1,64}$).
+ * Vertex AI / Gemini: 1-64 alphanumeric or underscore (^[a-zA-Z_][a-zA-Z0-9_]*$).
+ * If length > 64, preserves a 32-char head, 22-char tail, and embeds an 8-char sha256 hash.
+ */
+export function sanitizeToolName(name, { allowHyphens = true } = {}) {
+  if (typeof name !== 'string' || !name) return 'tool';
+  const pattern = allowHyphens ? /[^a-zA-Z0-9_-]/g : /[^a-zA-Z0-9_]/g;
+  let cleaned = name.replace(pattern, '_');
+  if (!allowHyphens && /^[0-9]/.test(cleaned)) {
+    cleaned = `_${cleaned}`;
+  }
+  if (cleaned.length <= 64 && cleaned === name) return name;
+  if (cleaned.length <= 64) return cleaned;
+  const hash = crypto.createHash('sha256').update(name).digest('hex').slice(0, 8);
+  const head = cleaned.slice(0, 32);
+  const tail = cleaned.slice(-22);
+  return `${head}_${hash}_${tail}`;
+}
+
+/**
  * The vocabulary one request declared. `declared` is the client's own tool list, as `ir.tools` holds
  * it: `{ name, parameters }`, the same names and schemas the client will check the call against.
  *
@@ -205,8 +228,18 @@ export function createToolVocab(declared) {
     .filter(t => t && typeof t.name === 'string' && t.name && t.side !== 'provider');
   const byName = new Map();
   const candidates = [];
+  const shortenedToOriginal = new Map();
+
   for (const t of tools) {
     const caps = capabilitiesOf(t.name);
+    const safeChat = sanitizeToolName(t.name, { allowHyphens: true });
+    const safeVertex = sanitizeToolName(t.name, { allowHyphens: false });
+    if (safeChat !== t.name) {
+      shortenedToOriginal.set(safeChat, t.name);
+    }
+    if (safeVertex !== t.name) {
+      shortenedToOriginal.set(safeVertex, t.name);
+    }
     const entry = { tool: t, name: t.name, namespace: namespaceOf(t.name), caps };
     // Keyed by the exact spelling: a client checks tool names exactly, so `read` is not the same
     // tool as `Read` to it, and that difference is the whole reason this layer exists.
@@ -217,11 +250,17 @@ export function createToolVocab(declared) {
   // there is no second answer to pick between, so the call stands and the client reports it.
   const useful = candidates.length >= 2 && candidates.some(c => c.caps.size > 0);
 
+  function isShortened(upstream) {
+    const raw = String(upstream || '');
+    return shortenedToOriginal.has(raw);
+  }
+
   function name(upstream) {
-    if (!useful) return upstream;
     const raw = String(upstream || '');
     if (!raw || raw === 'tool') return upstream;
+    if (shortenedToOriginal.has(raw)) return shortenedToOriginal.get(raw);
     if (byName.has(raw)) return upstream;                 // already the client's own name
+    if (!useful) return upstream;
     const ns = namespaceOf(raw);
     if (ns) return upstream;                              // a server's tool never becomes a local one
     const want = capabilitiesOf(raw);
@@ -243,8 +282,9 @@ export function createToolVocab(declared) {
   }
 
   function args(upstream, argsJson) {
-    if (!useful) return argsJson;
-    const target = byName.get(name(upstream));
+    const fixedName = name(upstream);
+    if (!useful && !shortenedToOriginal.has(String(upstream || ''))) return argsJson;
+    const target = byName.get(fixedName);
     if (!target) return argsJson;
     let parsed;
     try {
@@ -260,13 +300,19 @@ export function createToolVocab(declared) {
   return {
     name,
     args,
+    isShortened,
     /** Both halves at once, for a call that is already whole. */
     repair(upstream, argsJson) {
       const fixedName = name(upstream);
-      return { name: fixedName, args: args(fixedName, argsJson), renamed: fixedName !== upstream };
+      return { name: fixedName, args: args(upstream, argsJson), renamed: fixedName !== upstream };
     }
   };
 }
 
 /** A vocabulary that never rewrites anything, for a request that declared no tools. */
-export const NULL_TOOL_VOCAB = Object.freeze({ name: n => n, args: (n, a) => a, repair: (n, a) => ({ name: n, args: a, renamed: false }) });
+export const NULL_TOOL_VOCAB = Object.freeze({
+  name: n => n,
+  args: (n, a) => a,
+  isShortened: () => false,
+  repair: (n, a) => ({ name: n, args: a, renamed: false })
+});
