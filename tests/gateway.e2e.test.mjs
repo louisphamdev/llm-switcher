@@ -95,6 +95,19 @@ function startUpstream() {
         return res.end(JSON.stringify({ id: 'c1', object: 'chat.completion', model: json.model, choices: [{ index: 0, message: { role: 'assistant', content: 'converted ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
       }
       if (req.url.startsWith('/chat/v1/chat/completions')) {
+        if (lastUser.includes('TOOL_ALIAS_REPLAY')) {
+          const reference = json.messages.find(m => m.role === 'tool');
+          const name = JSON.parse(reference.content).tool_name;
+          if (!json.tools.some(t => t.function.name === name)) {
+            return sse(res, [{ error: { message: `upstream called undeclared tool '${name}'`, type: 'server_error' } }]);
+          }
+          return sse(res, [
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'console1', type: 'function', function: { name, arguments: '{"pageSize":0}' } }] } }] },
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 1, id: 'search2', type: 'function', function: { name: 'ToolSearch', arguments: '{"query":"select:' } }] } }] },
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 1, function: { arguments: `${name}","max_results":5}` } }] } }] },
+            { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 15 } }
+          ], { raw: ['data: [DONE]\n\n'] });
+        }
         if (lastUser.includes('RATE_LIMIT')) {
           res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '7' });
           return res.end(JSON.stringify({ error: { message: 'slow down' } }));
@@ -648,6 +661,40 @@ test('Bifrost stays off for a model that is not a Claude Code account', async ()
     { 'x-llm-profile': 'intactcc', 'user-agent': 'claude-cli/2.1.300 (external, cli)' });
   assert.equal(res.status, 200);
   assert.equal(received.at(-1).url, '/intact/v1/chat/completions');
+});
+
+test('ToolSearch replay calls declared upstream aliases and restores original tool names and queries to Claude', async () => {
+  const name = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages';
+  const res = await post('/v1/messages', {
+    model: 'claude-opus-4-6', max_tokens: 256, stream: true, system: `Use ${name} to inspect errors.`,
+    tools: [
+      { name: 'ToolSearch', input_schema: { type: 'object', properties: { query: { type: 'string' }, max_results: { type: 'integer' } } } },
+      { name, input_schema: { type: 'object', properties: { pageSize: { type: 'integer' } } } }
+    ],
+    messages: [
+      { role: 'user', content: 'Inspect errors.' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'search1', name: 'ToolSearch', input: { query: `select:${name}` } }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'search1', content: [{ type: 'tool_reference', tool_name: name }] },
+        { type: 'text', text: 'TOOL_ALIAS_REPLAY' }
+      ] }
+    ]
+  });
+  assert.equal(res.status, 200);
+  const events = parseSSE(await res.text());
+  assertValidAnthropicEvents(events);
+  assert.ok(events.some(e => e.event === 'message_stop'));
+  assert.ok(!events.some(e => e.event === 'error'));
+  const starts = events.filter(e => e.data?.content_block?.type === 'tool_use');
+  assert.deepEqual(starts.map(e => e.data.content_block.name), [name, 'ToolSearch']);
+  const args = start => JSON.parse(events.filter(e => e.data?.index === start.data.index && e.data?.delta?.type === 'input_json_delta').map(e => e.data.delta.partial_json).join(''));
+  assert.deepEqual(args(starts[0]), { pageSize: 0 });
+  assert.deepEqual(args(starts[1]), { query: `select:${name}`, max_results: 5 });
+  const up = received.at(-1).body;
+  const alias = up.tools.find(t => t.function.name !== 'ToolSearch').function.name;
+  assert.equal(alias.length, 64);
+  assert.ok(!JSON.stringify(up.messages).includes(name));
+  assert.equal(JSON.parse(up.messages.find(m => m.tool_calls).tool_calls[0].function.arguments).query, `select:${alias}`);
 });
 
 test('Bifrost stays off for a client that is not Claude Code', async () => {

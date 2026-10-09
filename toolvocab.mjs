@@ -248,6 +248,26 @@ export function toolNameMapForIR(ir, options = {}) {
   return createToolNameMap(names, options);
 }
 
+// Rewrite exact name mentions once, using the same collision-resolved map as declarations.
+// A longer identifier containing a name is not a mention of that tool.
+export function rewriteToolNameMentions(text, names) {
+  if (typeof text !== 'string') return text;
+  const changed = [...names].filter(([from, to]) => from && from !== to);
+  if (!changed.length) return text;
+  const lookup = new Map(changed);
+  const alternatives = changed.map(([from]) => from).sort((a, b) => b.length - a.length)
+    .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`(?<![A-Za-z0-9_-])(?:${alternatives.join('|')})(?![A-Za-z0-9_-])`, 'g');
+  return text.replace(pattern, name => lookup.get(name));
+}
+
+// Only ToolSearch's query names other tools. Arbitrary tool arguments are caller data.
+export function rewriteToolSearchArgs(name, args, names) {
+  if (name !== 'ToolSearch' || !args || typeof args !== 'object' || Array.isArray(args) || typeof args.query !== 'string') return args;
+  const query = rewriteToolNameMentions(args.query, names);
+  return query === args.query ? args : { ...args, query };
+}
+
 export function createToolVocab(declared, { allowHyphens = true, names = [] } = {}) {
   // Only a tool the caller executes can be a rename target. A tool the provider runs answers in
   // band and its result reaches the caller without the caller executing anything; handing such a
@@ -306,7 +326,7 @@ export function createToolVocab(declared, { allowHyphens = true, names = [] } = 
 
   function args(upstream, argsJson) {
     const fixedName = name(upstream);
-    if (!useful && !shortenedToOriginal.has(String(upstream || ''))) return argsJson;
+    if (!useful && !shortenedToOriginal.has(String(upstream || '')) && !needsArgsRewrite(upstream)) return argsJson;
     const target = byName.get(fixedName);
     if (!target) return argsJson;
     let parsed;
@@ -315,15 +335,20 @@ export function createToolVocab(declared, { allowHyphens = true, names = [] } = 
     } catch {
       return argsJson;   // a truncated payload is passed through: changing bytes helps nobody
     }
-    const repaired = repairArgs(parsed, target.tool);
+    const repaired = rewriteToolSearchArgs(fixedName, repairArgs(parsed, target.tool), shortenedToOriginal);
     if (repaired === parsed) return argsJson;
     return JSON.stringify(repaired);
+  }
+
+  function needsArgsRewrite(upstream) {
+    return name(upstream) === 'ToolSearch' && byName.has('ToolSearch') && shortenedToOriginal.size > 0;
   }
 
   return {
     name,
     args,
     isShortened,
+    needsArgsRewrite,
     /** Both halves at once, for a call that is already whole. */
     repair(upstream, argsJson) {
       const fixedName = name(upstream);

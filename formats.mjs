@@ -24,7 +24,7 @@
 // }
 // ============================================================
 
-import { sanitizeToolName, toolNameMapForIR } from './toolvocab.mjs';
+import { sanitizeToolName, toolNameMapForIR, rewriteToolNameMentions, rewriteToolSearchArgs } from './toolvocab.mjs';
 import { decodeCompaction, COMPACTION_INSTRUCTION } from './compaction.mjs';
 
 export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
@@ -467,10 +467,11 @@ function anthropicToIR(payload) {
             toolCalls.push({ id: part.id, name: part.name, args: part.input ?? {} });
           } else if (part.type === 'tool_result') {
             let resultText = '';
+            let resultParts;
             const images = [];
             if (typeof part.content === 'string') resultText = part.content;
             else if (Array.isArray(part.content)) {
-              resultText = part.content.map(c => {
+              resultParts = part.content.map(c => {
                 if (typeof c === 'string') return c;
                 if (c?.type === 'text') return c.text || '';
                 if (c?.type === 'image') {
@@ -480,13 +481,16 @@ function anthropicToIR(payload) {
                   images.push({ type: 'image_url', image_url: { url } });
                   return '';
                 }
+                if (c?.type === 'tool_reference' && typeof c.tool_name === 'string') return c;
                 return JSON.stringify(c);
-              }).filter(Boolean).join('\n');
+              }).filter(Boolean);
+              resultText = resultParts.map(c => typeof c === 'string' ? c : JSON.stringify(c)).join('\n');
             } else if (part.content) resultText = JSON.stringify(part.content);
             if (part.is_error && !resultText.toLowerCase().startsWith('error')) {
               resultText = `[Tool Error] ${resultText}`;
             }
-            ir.messages.push({ role: 'tool', toolCallId: part.tool_use_id, content: resultText || '(empty tool output)', ...(images.length ? { images } : {}) });
+            ir.messages.push({ role: 'tool', toolCallId: part.tool_use_id, content: resultText || '(empty tool output)', ...(images.length ? { images } : {}),
+              ...(resultParts?.some(c => typeof c === 'object') ? { toolResultParts: resultParts, toolResultIsError: Boolean(part.is_error) } : {}) });
           }
         }
         const out = { role: msg.role };
@@ -925,14 +929,43 @@ function repairToolCall(tc, vocab) {
 //
 // Nothing is said about a tool fewer than two, because one tool has no other name to be confused
 // with, and nothing about a tool the provider runs, because the caller never executes those.
-function toolNamesNotice(ir, systemText) {
+function toolNamesNotice(ir, systemText, toolName = sanitizeToolName) {
   const names = (ir.tools || [])
     .filter(t => t && typeof t.name === 'string' && t.name && t.side !== 'provider')
-    .map(t => sanitizeToolName(t.name));
+    .map(t => toolName(t.name));
   if (names.length < 2) return '';
   const missing = names.filter(n => !String(systemText || '').includes(n));
   if (!missing.length) return '';
   return `When you call a tool, use exactly these names and do not substitute another: ${missing.join(', ')}.`;
+}
+
+// ToolSearch references and tool instructions must use the vocabulary declared upstream.
+// Keep the IR and user/tool data intact; only structured references and ToolSearch queries move.
+function withUpstreamToolNames(ir, names) {
+  const declared = new Map(clientTools(ir).map(t => [t.name, names.name(t.name)]));
+  const mention = text => rewriteToolNameMentions(text, declared);
+  return {
+    ...ir,
+    system: mention(ir.system),
+    tools: (ir.tools || []).map(t => t.side === 'provider' ? t : { ...t, description: mention(t.description) }),
+    messages: (ir.messages || []).map(m => {
+      const out = { ...m };
+      if (m.toolResultParts) {
+        let content = m.toolResultParts.map(c => typeof c === 'string' ? c
+          : JSON.stringify({ ...c, tool_name: declared.get(c.tool_name) || c.tool_name })).join('\n');
+        if (m.toolResultIsError && !content.toLowerCase().startsWith('error')) content = `[Tool Error] ${content}`;
+        out.content = content;
+      }
+      if (m.toolCalls) out.toolCalls = m.toolCalls.map(tc => {
+        if (tc.name !== 'ToolSearch') return tc;
+        let args;
+        try { args = typeof tc.args === 'string' ? JSON.parse(tc.args) : tc.args; } catch { return tc; }
+        const translated = rewriteToolSearchArgs(tc.name, args, declared);
+        return translated === args ? tc : { ...tc, args: typeof tc.args === 'string' ? JSON.stringify(translated) : translated };
+      });
+      return out;
+    })
+  };
 }
 
 function hasNativeReasoning(model) {
@@ -1040,7 +1073,9 @@ function normThinkingEffort(effort) {
 //             the client requests thinking, don't touch the system prompt, use `max_completion_tokens`.
 //  - 'off'    : never send reasoning params, never inject prompts.
 function irToChatBody(ir, model, opts = {}) {
-  const toolName = toolNameMapForIR(ir).name;
+  const names = toolNameMapForIR(ir);
+  const toolName = names.name;
+  ir = withUpstreamToolNames(ir, names);
   const messages = [];
   const pendingImages = [];
   const flushImages = () => { if (pendingImages.length) messages.push({ role: 'user', content: pendingImages.splice(0) }); };
@@ -1064,7 +1099,7 @@ function irToChatBody(ir, model, opts = {}) {
   // its tools in its system prompt (Claude Code does, at length) gets nothing at all, so there is no
   // second list for the model to weigh against the first; a client with no such prompt gets the
   // whole list. Fewer tools than two cannot be confused with each other, so nothing is said.
-  const toolNotice = mode === 'auto' ? toolNamesNotice(ir, systemText) : '';
+  const toolNotice = mode === 'auto' ? toolNamesNotice(ir, systemText, toolName) : '';
   if (toolNotice) systemText = systemText ? `${systemText}\n\n${toolNotice}` : toolNotice;
   if (systemText.trim()) messages.push({ role: 'system', content: systemText });
 
@@ -1188,7 +1223,9 @@ function contentToAnthropicBlocks(c) {
 
 // IR -> Anthropic Messages body.
 function irToAnthropicBody(ir, model, opts = {}) {
-  const toolName = toolNameMapForIR(ir).name;
+  const names = toolNameMapForIR(ir);
+  const toolName = names.name;
+  ir = withUpstreamToolNames(ir, names);
   const messages = [];
 
   for (const m of healToolPairs(ir.messages)) {
@@ -1311,7 +1348,9 @@ function dataUrlToInlineData(url) {
 
 // IR -> Vertex generateContent body.
 function irToVertexBody(ir, model, opts = {}) {
-  const toolName = toolNameMapForIR(ir, { allowHyphens: false }).name;
+  const names = toolNameMapForIR(ir, { allowHyphens: false });
+  const toolName = names.name;
+  ir = withUpstreamToolNames(ir, names);
   const contents = [];
   const pendingImages = [];
   const flushImages = () => { if (pendingImages.length) push('user', pendingImages.splice(0)); };
@@ -2049,6 +2088,7 @@ function createAnthropicStream(emit, model, opts = {}) {
   // the block is never closed with arguments still pending and never has two deltas fighting over it.
   function flushBuffered(st) {
     if (!st.buffered) return;
+    if (st.held && vocab) st.buffered = vocab.args(st.name, st.buffered);
     emit('content_block_delta', {
       type: 'content_block_delta', index: st.index,
       delta: { type: 'input_json_delta', partial_json: st.buffered }
@@ -2108,8 +2148,8 @@ function createAnthropicStream(emit, model, opts = {}) {
         const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
         st = {
           index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: fixed || 'tool', closed: false,
-          // Only a renamed name needs the arguments held back. Shortened names use caller's schema.
-          buffered: '', held: Boolean(vocab && fixed && fixed !== tc.name && !isShort)
+          // Shortened names keep caller's schema; ToolSearch query aliases still need restoring.
+          buffered: '', held: Boolean(vocab && ((fixed && fixed !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name)))
         };
         tools.set(key, st);
         emit('content_block_start', {
@@ -2199,9 +2239,10 @@ function createChatStream(emit, model, opts = {}) {
   };
   // Chat has no rule about which block a delta belongs to, so held arguments go out at the end of the
   // turn. A key can only be renamed once the whole object exists.
-  const flushHeld = () => {
+  const flushHeld = (only) => {
     for (const st of seenTools.values()) {
-      if (!st.held) continue;
+      if (!st.held || (only && only !== st)) continue;
+      if (vocab) st.buffered = vocab.args(st.name, st.buffered);
       chunk([{ index: 0, delta: { tool_calls: [{ index: st.idx, function: { arguments: st.buffered } }] }, finish_reason: null }]);
       st.held = false;
       st.buffered = '';
@@ -2222,7 +2263,7 @@ function createChatStream(emit, model, opts = {}) {
       if (!seenTools.has(idx)) {
         const name = vocab ? vocab.name(tc.name) : tc.name;
         const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
-        seenTools.set(idx, { idx, name, buffered: '', held: Boolean(vocab && name && name !== tc.name && !isShort) });
+        seenTools.set(idx, { idx, name, buffered: '', held: Boolean(vocab && ((name && name !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name))) });
         chunk([{ index: 0, delta: { tool_calls: [{ index: idx, id: tc.id || `call_${rand(24)}`, type: 'function', function: { name: name || 'tool', arguments: '' } }] }, finish_reason: null }]);
       }
       const st = seenTools.get(idx);
@@ -2235,8 +2276,7 @@ function createChatStream(emit, model, opts = {}) {
       const repaired = vocab.args(st.name, st.buffered);
       if (repaired !== st.buffered) {
         st.buffered = repaired;
-        st.held = false;
-        flushHeld();
+        flushHeld(st);
       }
     },
     finish(canonical, stats = {}) {
@@ -2434,7 +2474,7 @@ function createResponsesStream(emit, model, opts = {}) {
         st = {
           id: `${prefix}_${rand(24)}`, callId: tc.id || `call_${rand(24)}`, index: nextOutput++,
           name: name || '', args: '', done: false, kind, upstream: tc.name,
-          held: Boolean(vocab && name && name !== tc.name && !isShort)
+          held: Boolean(vocab && ((name && name !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name)))
         };
         tools.set(key, st);
         if (kind !== 'local_shell') {

@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.6 — 2026-10-09
+
+- **Consistent MCP Tool Aliasing across ToolSearch and History:** Ensure tool names in instructions, structured `ToolSearch` references, query history, and upstream declarations use the identical collision-resolved alias mapping across Chat, Anthropic, and Vertex conversions. Original client tool names are restored before Claude Code executes tool calls or queries `ToolSearch`, preventing mid-response stream rejections (`upstream called undeclared tool`) when interacting with MCP tools exceeding 64 characters (such as Chrome DevTools MCP).
+- **Buffered Argument Restoration for Parallel Streaming Calls:** Hold streaming `ToolSearch` query arguments across Anthropic, Chat, and Responses renderers until JSON reassembly completes, ensuring query tool aliases are accurately restored to their original names while guaranteeing independent parallel calls flush without truncation.
+
 ## Release 1.6.5 — 2026-10-08
 
 - **Automatic Tether Gate Disable for Claude Code (`CLAUDE_CODE_TETHER_LIVE=0`):** Automatically inject `CLAUDE_CODE_TETHER_LIVE=0` into `env-claude.sh` and `env-claude.cmd` whenever the Claude route is active, ensuring Claude Code runs in stateless mode and prevents `message-threads` validation failures on non-Anthropic upstreams. The shim cleans the variable on route deactivation, and the gateway safely rejects unexpected thread requests with `thread_unsupported_request` (HTTP 400).

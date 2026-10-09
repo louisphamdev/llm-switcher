@@ -2,9 +2,9 @@
 // declared. Sources for every name here are collected in docs/tool-vocabulary.md.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createToolVocab, NULL_TOOL_VOCAB, tokenize, sanitizeToolName } from '../toolvocab.mjs';
+import { createToolVocab, NULL_TOOL_VOCAB, tokenize, sanitizeToolName, toolNameMapForIR } from '../toolvocab.mjs';
 import {
-  anthropicToIR, responsesToIR, irToChatBody, buildAnthropicMessage, buildChatMessage, buildResponsesMessage,
+  anthropicToIR, responsesToIR, irToChatBody, irToAnthropicBody, irToVertexBody, buildAnthropicMessage, buildChatMessage, buildResponsesMessage,
   createAnthropicStream, createChatStream, createResponsesStream
 } from '../formats.mjs';
 
@@ -15,6 +15,123 @@ const claudeTools = () => anthropicToIR({
     { name: 'Bash', input_schema: { properties: { command: { type: 'string' } } } },
     { name: 'Edit', input_schema: { properties: { file_path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } } } }
   ]
+});
+
+const consoleTool = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_console_messages';
+const networkTool = 'mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_network_requests';
+
+function toolSearchHistory(extraTools = []) {
+  return anthropicToIR({
+    model: 'claude-opus-5-5', system: `Inspect errors with ${consoleTool} and ${networkTool}.`,
+    messages: [
+      { role: 'user', content: 'Inspect console errors.' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'search1', name: 'ToolSearch', input: { query: `select:${consoleTool},${networkTool}`, max_results: 5 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'search1', content: [
+        { type: 'tool_reference', tool_name: consoleTool }, { type: 'tool_reference', tool_name: networkTool }
+      ] }] }
+    ],
+    tools: [
+      { name: 'ToolSearch', description: `Find tools such as ${consoleTool}.`, input_schema: { type: 'object', properties: { query: { type: 'string' }, max_results: { type: 'number' } } } },
+      ...[consoleTool, networkTool, ...extraTools].map(name => ({ name, input_schema: { type: 'object', properties: { pageSize: { type: 'integer' } } } }))
+    ]
+  });
+}
+
+test('ToolSearch references, query history and instructions agree with declared aliases across upstream formats', () => {
+  const ir = toolSearchHistory();
+  const original = JSON.stringify(ir);
+  for (const [emit, model, opts] of [
+    [irToChatBody, 'zencore/space-bunny-free', {}],
+    [irToChatBody, 'zencore/space-bunny-free', { thinkingMode: 'off' }],
+    [irToChatBody, 'zencore/space-bunny-free', { thinkingMode: 'native' }],
+    [irToAnthropicBody, 'claude-opus-5-5', {}],
+    [irToVertexBody, 'gemini-3.8-flash', {}]
+  ]) {
+    const body = emit(ir, model, opts);
+    const serialized = JSON.stringify(body);
+    const names = toolNameMapForIR(ir, { allowHyphens: emit !== irToVertexBody });
+    for (const name of [consoleTool, networkTool]) {
+      assert.ok(serialized.includes(names.name(name)), 'model sees the declared alias');
+      assert.ok(!serialized.includes(name), 'original no longer competes with the alias');
+    }
+    assert.equal(JSON.stringify(ir), original, 'conversion never mutates caller history');
+  }
+});
+
+test('ToolSearch instructions use collision-resolved aliases instead of the reserved original name', () => {
+  const reserved = sanitizeToolName(consoleTool);
+  const ir = toolSearchHistory([reserved]);
+  const names = toolNameMapForIR(ir);
+  assert.notEqual(names.name(consoleTool), reserved);
+  const body = irToChatBody(ir, 'zencore/space-bunny-free');
+  assert.equal(body.tools.find(t => t.function.name === reserved).function.name, reserved);
+  const references = body.messages.find(m => m.role === 'tool').content.split('\n').map(JSON.parse);
+  assert.equal(references[0].tool_name, names.name(consoleTool));
+  assert.ok(body.messages[0].content.includes(names.name(consoleTool)));
+  const notice = irToChatBody({ ...ir, system: '' }, 'x').messages[0].content;
+  assert.ok(notice.includes(names.name(consoleTool)), 'notice uses the collision-resolved declaration too');
+  const vocab = createToolVocab(ir.tools);
+  const response = buildAnthropicMessage({ model: 'x', tools: [{ name: 'ToolSearch', args: JSON.stringify({ query: `select:${names.name(consoleTool)},${reserved}` }) }], vocab });
+  assert.equal(response.content[0].input.query, `select:${consoleTool},${reserved}`);
+});
+
+test('only structured references and ToolSearch queries change; caller data, schemas and unknown tools survive', () => {
+  const ir = toolSearchHistory();
+  const unknown = 'mcp__not_declared__inspect';
+  ir.messages[0].content = `User data mentions ${consoleTool}.`;
+  ir.messages[1].toolCalls.push({ id: 'data1', name: consoleTool, args: { pageSize: 0, query: consoleTool } });
+  ir.messages.push({ role: 'tool', toolCallId: 'data1', content: `Log contains ${consoleTool}.` });
+  ir.messages[2].toolResultParts.push({ type: 'tool_reference', tool_name: unknown });
+  ir.tools[1].parameters.properties.query = { type: 'string', const: consoleTool };
+  const body = irToChatBody(ir, 'x');
+  assert.equal(body.messages.find(m => m.role === 'user').content, ir.messages[0].content);
+  assert.equal(body.messages.find(m => m.tool_call_id === 'data1').content, `Log contains ${consoleTool}.`);
+  const calls = body.messages.find(m => m.tool_calls).tool_calls;
+  assert.deepEqual(JSON.parse(calls[1].function.arguments), { pageSize: 0, query: consoleTool });
+  assert.equal(JSON.parse(calls[0].function.arguments).max_results, 5);
+  assert.ok(body.messages.find(m => m.tool_call_id === 'search1').content.includes(unknown));
+  assert.equal(body.tools[1].function.parameters.properties.query.const, consoleTool);
+  const vocab = createToolVocab(ir.tools);
+  assert.equal(vocab.name(unknown), unknown);
+  const malformed = '{"query":"select:';
+  assert.equal(vocab.args('ToolSearch', malformed), malformed);
+});
+
+test('fragmented streamed ToolSearch queries restore original names before the client executes them', () => {
+  const ir = toolSearchHistory();
+  const vocab = createToolVocab(ir.tools);
+  const args = JSON.stringify({ query: `select:${sanitizeToolName(consoleTool)},${sanitizeToolName(networkTool)}`, max_results: 5 });
+  for (const create of [createAnthropicStream, createChatStream, createResponsesStream]) {
+    const events = [];
+    const renderer = create((event, data) => events.push({ event, data }), 'x', { vocab });
+    renderer.start();
+    renderer.tool({ index: 0, id: 'search2', name: 'ToolSearch', args: '' });
+    for (let i = 0; i < args.length; i += 7) renderer.tool({ index: 0, args: args.slice(i, i + 7) });
+    renderer.finish('tool_calls', { hasTools: true });
+    let restored;
+    if (create === createAnthropicStream) restored = events.filter(e => e.data?.delta?.type === 'input_json_delta').map(e => e.data.delta.partial_json).join('');
+    else if (create === createChatStream) restored = events.flatMap(e => e.data?.choices?.[0]?.delta?.tool_calls || []).map(c => c.function?.arguments || '').join('');
+    else restored = events.find(e => e.event === 'response.output_item.done').data.item.arguments;
+    assert.deepEqual(JSON.parse(restored), { query: `select:${consoleTool},${networkTool}`, max_results: 5 });
+  }
+  const argsUnrelated = JSON.stringify({ query: sanitizeToolName(consoleTool) });
+  assert.equal(vocab.args(consoleTool, argsUnrelated), argsUnrelated, 'other tools keep their arguments');
+});
+
+test('repairing one parallel Chat ToolSearch call never flushes another unfinished query', () => {
+  const vocab = createToolVocab(toolSearchHistory().tools);
+  const events = [];
+  const renderer = createChatStream((event, data) => events.push(data), 'x', { vocab });
+  renderer.start();
+  renderer.tool({ index: 0, name: 'ToolSearch', args: '{"query":"select:' });
+  renderer.tool({ index: 1, name: 'ToolSearch', args: JSON.stringify({ query: `select:${sanitizeToolName(networkTool)}` }) });
+  renderer.tool({ index: 0, args: `${sanitizeToolName(consoleTool)}"}` });
+  renderer.finish('tool_calls');
+  for (const [index, original] of [[0, consoleTool], [1, networkTool]]) {
+    const args = events.flatMap(e => e.choices?.[0]?.delta?.tool_calls || [])
+      .filter(c => c.index === index).map(c => c.function?.arguments || '').join('');
+    assert.equal(JSON.parse(args).query, `select:${original}`);
+  }
 });
 
 // A model that answers `read` when the caller declared `Read` ends the turn with

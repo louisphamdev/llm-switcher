@@ -35,6 +35,7 @@ captures/
 
 # archify visual-check writes evidence sidecars next to the diagram it checked
 docs/diagrams/*.visual-check.*
+docs/audit/
 # admin API token (mode 0600) — never commit
 admin.token
 gateway.secret
