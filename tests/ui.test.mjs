@@ -154,5 +154,5 @@ test('documentation tab is properly integrated with sidebar navigation, sections
 
 test('sidebar menu is arranged logically by frequency of use', () => {
   const navMatches = [...html.matchAll(/data-nav="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(navMatches, ['routes', 'logs', 'models', 'docs', 'doctor', 'compact', 'goal-check']);
+  assert.deepEqual(navMatches, ['routes', 'logs', 'models', 'doctor', 'goal-check', 'compact', 'docs']);
 });
