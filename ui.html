@@ -1100,6 +1100,22 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>
         Routes & Profiles<span class="ct" id="ct-routes"></span>
       </a>
+      <a class="nav-link" href="#/logs" data-nav="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
+        Request Inspector<span class="ct" id="ct-logs"></span>
+      </a>
+      <a class="nav-link" href="#/models" data-nav="models">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
+        Model Catalog<span class="ct" id="ct-models"></span>
+      </a>
+      <a class="nav-link" href="#/docs" data-nav="docs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10M6 10h10M6 14h7"/></svg>
+        Docs & Guide
+      </a>
+      <a class="nav-link" href="#/doctor" data-nav="doctor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
+        System Doctor
+      </a>
       <a class="nav-link" href="#/compact" data-nav="compact">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14h6m0 0v6m0-6L3 21"/><path d="M20 10h-6m0 0V4m0 6l7-7"/><circle cx="12" cy="12" r="2"/></svg>
         Idle Compaction<span class="ct" id="ct-compact"></span>
@@ -1107,22 +1123,6 @@
       <a class="nav-link" href="#/goal-check" data-nav="goal-check">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
         Goal Check<span class="ct" id="ct-goal-check"></span>
-      </a>
-      <a class="nav-link" href="#/models" data-nav="models">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
-        Model Catalog<span class="ct" id="ct-models"></span>
-      </a>
-      <a class="nav-link" href="#/logs" data-nav="logs">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/></svg>
-        Request Inspector<span class="ct" id="ct-logs"></span>
-      </a>
-      <a class="nav-link" href="#/doctor" data-nav="doctor">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
-        System Doctor
-      </a>
-      <a class="nav-link" href="#/docs" data-nav="docs">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10M6 10h10M6 14h7"/></svg>
-        Docs & Guide
       </a>
     </nav>
 
@@ -1745,15 +1745,16 @@
               <span>Mục Lục Hướng Dẫn</span>
             </div>
             <a class="docs-toc-link active" href="#doc-overview">1. Tổng Quan & Kiến Trúc</a>
-            <a class="docs-toc-link" href="#doc-install">2. Hướng Dẫn Cài Đặt</a>
-            <a class="docs-toc-link" href="#doc-cli">3. Lệnh CLI & Vận Hành</a>
-            <a class="docs-toc-link" href="#doc-blindfold">4. Blindfold Mode & CA</a>
-            <a class="docs-toc-link" href="#doc-agy">5. Antigravity CLI (agy)</a>
-            <a class="docs-toc-link" href="#doc-optimizers">6. Tối Ưu Token & Healer</a>
-            <a class="docs-toc-link" href="#doc-agent-mcp">7. Agent Skill & MCP Server</a>
-            <a class="docs-toc-link" href="#doc-advanced">8. Compaction & Goal Check</a>
-            <a class="docs-toc-link" href="#doc-config">9. Cấu Hình config.json</a>
-            <a class="docs-toc-link" href="#doc-faq">10. Xử Lý Sự Cố (FAQ)</a>
+            <a class="docs-toc-link" href="#doc-install">2. Cài Đặt LLM Switcher</a>
+            <a class="docs-toc-link" href="#doc-intact">3. intact Gateway & Pooler</a>
+            <a class="docs-toc-link" href="#doc-cli">4. Lệnh CLI & Vận Hành</a>
+            <a class="docs-toc-link" href="#doc-blindfold">5. Blindfold Mode & CA</a>
+            <a class="docs-toc-link" href="#doc-agy">6. Antigravity CLI (agy)</a>
+            <a class="docs-toc-link" href="#doc-optimizers">7. Tối Ưu Token & Healer</a>
+            <a class="docs-toc-link" href="#doc-agent-mcp">8. Agent Skill & MCP Server</a>
+            <a class="docs-toc-link" href="#doc-advanced">9. Compaction & Goal Check</a>
+            <a class="docs-toc-link" href="#doc-config">10. Cấu Hình config.json</a>
+            <a class="docs-toc-link" href="#doc-faq">11. Xử Lý Sự Cố (FAQ)</a>
           </nav>
 
           <!-- Main Documentation Content -->
@@ -1765,11 +1766,11 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
                   1. Tổng Quan & Kiến Trúc Cốt Lõi
                 </h2>
-                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">v1.6.8 · Zero-Dependency</span>
+                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">v1.6.8 · Zero-Dependency · Multi-Protocol Edge Gateway</span>
               </div>
               <div class="doc-prose">
                 <p>
-                  <strong>LLM Switcher</strong> là cổng ngõ biên (Edge Gateway) và bộ chuyển đổi đa giao thức LLM siêu nhẹ, hoàn toàn <strong>Zero-Dependency</strong> (xây dựng 100% bằng thư viện chuẩn của Node.js, không cần chạy <code>npm install</code>, khởi động &lt;50ms). Hệ thống đóng vai trò cầu nối thông minh và trong suốt giữa các AI Coding CLI hàng đầu (<strong>Claude Code</strong>, <strong>OpenAI Codex</strong>, <strong>Antigravity CLI <code>agy</code></strong>) với mọi nhà cung cấp mô hình LLM (OpenAI-compatible, Anthropic Native, Vertex Native, Google Code Assist).
+                  <strong>LLM Switcher</strong> là cổng ngõ biên (Edge Gateway) và bộ điều phối chuyển đổi đa giao thức LLM siêu nhẹ, hoàn toàn <strong>Zero-Dependency</strong> (xây dựng 100% bằng thư viện chuẩn của Node.js: <code>http</code>, <code>fs</code>, <code>os</code>, <code>path</code>, <code>crypto</code>, <code>fetch</code>; không cần <code>npm install</code>, thời gian khởi động lạnh &lt;50ms). Hệ thống đóng vai trò cầu nối thông minh và trong suốt giữa các AI Coding CLI hàng đầu (<strong>Claude Code</strong>, <strong>OpenAI Codex</strong>, <strong>Antigravity CLI <code>agy</code></strong>) với mọi nhà cung cấp mô hình LLM (OpenAI-compatible, Anthropic Native, Vertex Native, Google Code Assist).
                 </p>
 
                 <div class="doc-callout info">
@@ -1782,8 +1783,8 @@
                   <pre>[Claude Code / Codex / agy CLI]
        │ (1. Khởi chạy qua Launcher Shim: nạp HTTPS_PROXY & CA in-memory)
        ▼
-[Blindfold Interceptor :3457] ──(TLS giải mã nội bộ cho anthropic/openai)
-       │ (2. Strip credential client, chuyển tiếp /v1/messages, /v1/responses)
+[Blindfold Interceptor :3457] ──(TLS giải mã nội bộ cho anthropic/openai/chatgpt)
+       │ (2. Bóc tách credential client, chuyển tiếp /v1/messages, /v1/responses)
        ▼
 [LLM Switcher Edge Gateway :3456]
        │ ├── Healer Engine (Tự sửa schema rỗng {}, cứu tool_result mồ côi, gộp lượt)
@@ -1795,11 +1796,49 @@
 
                 <h3>4 Trụ Cột Đột Phá Của Hệ Thống</h3>
                 <ul>
-                  <li><strong>100% Native Emulation:</strong> Chuyển đổi mọi phản hồi từ upstream thành luồng Anthropic SSE chuẩn (<code>thinking_delta</code> + <code>tool_use</code>) cho Claude Code, và Responses API events chuẩn cho Codex.</li>
-                  <li><strong>Zero Config Mutation:</strong> Tuyệt đối không đọc/ghi <code>~/.claude/settings.json</code> hay <code>~/.codex/config.toml</code>. Không bao giờ xuất hiện banner cảnh báo của nhà cung cấp.</li>
-                  <li><strong>Cửa Sổ Context Theo Model Thực Tế:</strong> Tự động phát hiện cửa sổ ngữ cảnh chính thức từ upstream (ví dụ 1M tokens), truyền đúng <code>max_context_window</code> và <code>context_window</code> trong <code>/v1/models</code> để Codex tự tin lập kế hoạch và nén lịch sử chính xác.</li>
+                  <li><strong>100% Native Emulation:</strong> Chuyển đổi mọi phản hồi từ upstream thành luồng Anthropic SSE chuẩn (<code>thinking_delta</code> + <code>tool_use</code>) cho Claude Code, và Responses API events chuẩn cho Codex. CLI nhận được response native và hoàn toàn tin cậy server.</li>
+                  <li><strong>Zero Config Mutation:</strong> Tuyệt đối không đọc/ghi <code>~/.claude/settings.json</code> hay <code>~/.codex/config.toml</code>, và không ghi biến môi trường nào mà công cụ đọc như cấu hình. Không bao giờ xuất hiện banner cảnh báo "Custom API endpoint configured".</li>
+                  <li><strong>Cửa Sổ Context Theo Model Thực Tế:</strong> Tự động phát hiện cửa sổ ngữ cảnh chính thức từ upstream (ví dụ 1M tokens), truyền đúng <code>max_context_window</code> và <code>context_window</code> trong <code>/v1/models</code> để Codex tự tin lập kế hoạch và nén lịch sử chính xác. Claude Code tự ước lượng phiên theo model nó gọi.</li>
                   <li><strong>Bifrost Passthrough:</strong> Khi bạn dùng tài khoản của chính nhà cung cấp đó trên pool của <a href="https://github.com/louisphamdev/intact" target="_blank" style="color:var(--accent);">intact</a>, request sẽ đi xuyên qua nguyên vẹn 100% byte-for-byte, bỏ qua bộ dịch giao thức và Healer, chỉ thay đổi API key an toàn.</li>
                 </ul>
+
+                <h3>Thư Viện Sơ Đồ Tương Tác Archify</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:30%;">Sơ đồ</th>
+                      <th>Mô tả luồng</th>
+                      <th style="width:25%;">Liên kết xem tương tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>System Topology</strong></td>
+                      <td>Kiến trúc tổng thể: Dev Clients ➔ Optimizers ➔ Gateway & Healer Core ➔ Upstream Providers.</td>
+                      <td><a href="docs/diagrams/system-architecture.html" target="_blank" style="color:var(--accent);">📊 Mở Interactive Viewer</a></td>
+                    </tr>
+                    <tr>
+                      <td><strong>IR Healer Pipeline</strong></td>
+                      <td>Chuẩn hóa request, sửa schema lỗi, tổng hợp stream SSE và cơ chế abort propagation.</td>
+                      <td><a href="docs/diagrams/ir-translation-pipeline.html" target="_blank" style="color:var(--accent);">🔄 Mở Interactive Viewer</a></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Codex Blindfold Routing</strong></td>
+                      <td>Luồng TLS CONNECT proxy, bóc tách credential và định tuyến an toàn theo host.</td>
+                      <td><a href="docs/diagrams/blindfold-request-routing.html" target="_blank" style="color:var(--accent);">🛡️ Mở Interactive Viewer</a></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Switch Lifecycle</strong></td>
+                      <td>Vòng đời chuyển đổi profile zero-downtime, ghi cấu hình CAS và sync interceptor.</td>
+                      <td><a href="docs/diagrams/blindfold-switch-lifecycle.html" target="_blank" style="color:var(--accent);">⚡ Mở Interactive Viewer</a></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Model Name Resolution</strong></td>
+                      <td>Cơ chế ánh xạ tên mô hình công khai và phân giải slot Codex.</td>
+                      <td><a href="docs/diagrams/codex-model-name-resolution.html" target="_blank" style="color:var(--accent);">🏷️ Mở Interactive Viewer</a></td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </section>
 
@@ -1808,16 +1847,16 @@
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-                  2. Hướng Dẫn Cài Đặt Đa Nền Tảng
+                  2. Hướng Dẫn Cài Đặt Chi Tiết & Toàn Diện (Đa Nền Tảng)
                 </h2>
                 <span class="badge" style="background:var(--ok-soft); color:var(--ok); font-weight:600;">Linux · macOS · Windows</span>
               </div>
               <div class="doc-prose">
                 <p>
-                  <strong>Yêu cầu hệ thống:</strong> Node.js phiên bản <strong>18.17 trở lên</strong>. Gateway không yêu cầu bất kỳ thư viện npm phụ thuộc nào bên ngoài.
+                  <strong>Yêu cầu hệ thống:</strong> Node.js phiên bản <strong>18.17 trở lên</strong> (LTS). Gateway không yêu cầu bất kỳ thư viện npm phụ thuộc nào bên ngoài (Zero Dependencies).
                 </p>
 
-                <h3>Cách 1: Cài Đặt Toàn Cục Qua npm (Khuyên dùng)</h3>
+                <h3>Cách 1: Cài Đặt Toàn Cục Qua npm (Khuyên dùng cho Người dùng cuối)</h3>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
                     <span>Terminal · npm global install</span>
@@ -1825,15 +1864,15 @@
                   </div>
                   <pre>npm install -g llm-switcher
 
-# Khởi tạo thư mục dữ liệu và sao chép cấu hình mẫu:
+# Khởi tạo thư mục dữ liệu với quyền bảo mật 700 và sao chép cấu hình mẫu:
 mkdir -p -m 700 ~/.llm-switcher
 cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json</pre>
                 </div>
                 <p>
-                  <em>Ghi chú:</em> Khi cài đặt qua npm, file cấu hình <code>config.json</code>, khóa token <code>admin.token</code> và các file khởi chạy được lưu trữ an toàn trong <code>~/.llm-switcher</code>. Khi bạn chạy lệnh nâng cấp (update), cấu hình của bạn được giữ nguyên vẹn.
+                  <em>Ghi chú:</em> Khi cài đặt qua npm, file cấu hình <code>config.json</code>, khóa bảo mật <code>admin.token</code> và các file launcher được lưu trữ an toàn trong <code>~/.llm-switcher</code>. Khi bạn chạy lệnh nâng cấp (<code>switch update</code>), npm chỉ ghi đè thư mục package code, cấu hình và token của bạn được giữ nguyên vẹn.
                 </p>
 
-                <h3>Cách 2: Cài Đặt Từ Git Clone (Dành cho Developer)</h3>
+                <h3>Cách 2: Cài Đặt Từ Git Clone (Dành cho Developer & Tự build)</h3>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
                     <span>Terminal · Git Checkout</span>
@@ -1842,26 +1881,34 @@ cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json
                   <pre>git clone https://github.com/louisphamdev/llm-switcher.git
 cd llm-switcher
 
-# Sao chép file cấu hình (config.json được gitignore bảo vệ an toàn):
+# Sao chép file cấu hình mẫu (config.json được gitignore bảo vệ an toàn):
 cp config.example.json config.json</pre>
                 </div>
+                <p>
+                  Với bản git checkout, thư mục dữ liệu nằm ngay tại thư mục checkout. Nếu muốn chỉ định một thư mục dữ liệu khác bất kỳ, hãy đặt biến môi trường <code>LLM_SWITCHER_HOME=/path/to/data</code>.
+                </p>
 
                 <h3>Cài Đặt Launcher Shims (Bắt buộc để định tuyến trong suốt)</h3>
                 <p>
-                  Lệnh <code>switch shim install</code> tạo các wrapper siêu nhẹ trong <code>~/.llm-switcher/bin</code> để tiêm biến môi trường vào tiến trình CLI mà không can thiệp vào shell hay file cài đặt của hệ thống.
+                  Lệnh <code>switch shim install</code> tạo các wrapper siêu nhẹ trong <code>~/.llm-switcher/bin</code> để tiêm biến môi trường (<code>HTTPS_PROXY</code>, chứng chỉ CA, <code>CLOUD_CODE_URL</code>) vào từng tiến trình CLI độc lập mà không can thiệp vào shell hay file cài đặt của hệ thống.
                 </p>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
-                    <span>Terminal · Cấu hình PATH</span>
-                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch shim install\n# Linux / macOS: thêm vào ~/.bashrc hoặc ~/.zshrc:\nexport PATH=&quot;$HOME/.llm-switcher/bin:$PATH&quot;')">Copy</button>
+                    <span>Terminal · Cấu hình PATH cho Shims</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch shim install\n# Linux & macOS: Thêm vào ~/.bashrc hoặc ~/.zshrc:\nexport PATH=&quot;$HOME/.llm-switcher/bin:$PATH&quot;')">Copy</button>
                   </div>
                   <pre>switch shim install
 
-# Linux & macOS: Thêm dòng sau vào ~/.bashrc hoặc ~/.zshrc rồi mở terminal mới:
+# Linux & macOS (Bash/Zsh): Thêm dòng sau vào ~/.bashrc hoặc ~/.zshrc rồi mở terminal mới:
 export PATH="$HOME/.llm-switcher/bin:$PATH"
 
-# Windows (Command Prompt): Đặt đường dẫn sau lên trước trong PATH User:
-%USERPROFILE%\.llm-switcher\bin</pre>
+# Windows (Command Prompt / PowerShell):
+# Thêm %USERPROFILE%\.llm-switcher\bin lên ĐẦU trong biến môi trường PATH của User:
+# (System Properties ➔ Environment Variables ➔ User Variables ➔ Path)</pre>
+                </div>
+
+                <div class="doc-callout warning">
+                  <strong>Tại sao Launcher Shims là bắt buộc?</strong> Khi bạn mở một terminal mới và chạy <code>claude --resume</code>, nếu không có shim, shell sẽ chạy binary gốc và gọi thẳng tới server của Anthropic mà không đi qua Gateway (bỏ qua Healer và pool quota). Shim nằm ở đầu <code>PATH</code> sẽ chặn trước, nạp đúng biến định tuyến in-memory cho tiến trình đó và dọn sạch các biến rác cũ.
                 </div>
 
                 <h3>Cài Đặt Dịch Vụ Nền Tự Khởi Động (OS Background Service)</h3>
@@ -1870,29 +1917,375 @@ export PATH="$HOME/.llm-switcher/bin:$PATH"
                 </p>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
-                    <span>Terminal · Service Install</span>
-                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch service install --autoupdate')">Copy</button>
+                    <span>Terminal · Service Install & Quản trị Daemon</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch service install --autoupdate\nswitch service status\nswitch service uninstall')">Copy</button>
                   </div>
-                  <pre># Cài đặt dịch vụ chạy ngầm kèm cờ tự động cập nhật bản mới khi đăng nhập:
+                  <pre># Cài đặt daemon chạy ngầm, tự động cập nhật bản mới nhất mỗi khi đăng nhập:
 switch service install --autoupdate
 
-# Kiểm tra trạng thái hoặc gỡ bỏ khi không dùng:
+# Kiểm tra trạng thái dịch vụ nền:
+switch service status
+
+# Gỡ bỏ dịch vụ nền khi không cần nữa:
 switch service uninstall</pre>
                 </div>
                 <div class="doc-callout info">
-                  <strong>Mẹo cho máy chủ Linux (SSH):</strong> Để dịch vụ systemd user service tiếp tục chạy cả khi bạn ngắt kết nối SSH, hãy chạy lệnh: <code>loginctl enable-linger $USER</code> một lần duy nhất.
+                  <strong>Ghi chú cho Linux / Server SSH:</strong> Dịch vụ trên Linux là <code>systemd --user</code> service. Để gateway tiếp tục chạy sau khi bạn thoát phiên SSH, hãy chạy lệnh: <code>loginctl enable-linger $USER</code> một lần duy nhất.
+                </div>
+
+                <h3>Nâng Cấp Phiên Bản Mới (Seamless Hot Update)</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · switch update</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch update')">Copy</button>
+                  </div>
+                  <pre>switch update</pre>
+                </div>
+                <div class="doc-callout info">
+                  <strong>💡 Thiết lập Upstream Pooler:</strong> Sau khi cài đặt LLM Switcher trên máy trạm, bạn nên cài đặt thêm <strong>intact Gateway</strong> (chạy trên server riêng hoặc ngay trên localhost) để quản lý đa tài khoản, xoay vòng key và kích hoạt tính năng <strong>Bifrost Passthrough</strong>. Xem cẩm nang chi tiết tại mục kế tiếp: <a href="#doc-intact" style="color:var(--accent); font-weight:600;">3. intact Gateway — Cài Đặt & Vận Hành</a>.
                 </div>
               </div>
             </section>
 
-            <!-- 3. CLI & OPERATION GUIDE -->
+            <!-- 3. INTACT GATEWAY GUIDE -->
+            <section class="doc-section" id="doc-intact">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                  3. intact Gateway — Cài Đặt & Vận Hành Upstream Pooler (Khuyên Dùng)
+                </h2>
+                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">Recommended Companion · Multi-Account Pooler · Zero-CGO</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  <strong>intact</strong> là cổng ủy quyền lưu trữ credential (Credential Proxy) và bộ điều phối pooling đa tài khoản LLM hiệu năng cao được xây dựng chuyên biệt để làm upstream cho <strong>LLM Switcher</strong>. Được viết bằng ngôn ngữ Go thuần (Single Static Binary, <strong>Zero-CGO</strong> với driver SQLite Pure-Go, nhúng toàn bộ Web UI quản trị), intact khởi động tức thì, tiêu tốn cực ít RAM (&lt;30MB) và phục vụ toàn bộ các tài khoản của bạn sau một Base URL thống nhất <code>/v1</code>.
+                </p>
+
+                <div class="doc-callout success">
+                  <strong>Mối quan hệ cộng sinh hoàn hảo giữa LLM Switcher và intact:</strong>
+                  <ul>
+                    <li><strong>LLM Switcher (Client Edge :3456 / :3457):</strong> Chạy trên từng máy dev, bóc tách TLS blindfold không cảnh báo, bảo vệ file cấu hình gốc (Zero-Mutation), tự động vá lỗi schema và cứu tool-result mồ côi bằng Healer Engine, duy trì thinking budget.</li>
+                    <li><strong>intact Gateway (Server Pooler :20142):</strong> Chạy trên máy chủ tập trung (hoặc localhost), lưu trữ tập trung và an toàn các API Key / OAuth Token nhạy cảm, cân bằng tải xoay vòng nhiều tài khoản (Round Robin / Fallback), xử lý 429 thông minh (429 Retry Shorter), gắn kết phiên (Conversation stickiness) tối ưu hóa Prompt Cache, tự động lọc lỗi bằng Blacklist và đối chiếu Contract Lab.</li>
+                  </ul>
+                </div>
+
+                <h3>2 Tính Năng Đột Phá Độc Quyền Khi Dùng Cặp Đôi Này</h3>
+                <ul>
+                  <li>
+                    <strong>Bifrost Passthrough Tối Thượng:</strong> Khi một AI Coding CLI (Claude Code, OpenAI Codex, Antigravity CLI <code>agy</code>) gọi đến đúng tài khoản của chính nhà cung cấp đó trên pool intact, request sẽ đi xuyên qua nguyên vẹn <strong>100% byte-for-byte</strong>. Chỉ có token xác thực là được thay thế an toàn. Bộ chuyển đổi giao thức, Healer Engine và Blacklist đều được bỏ qua. intact tự động cấp cờ <code>bifrost_ua</code> trong <code>GET /v1/models/{model}</code> để Switcher kích hoạt chế độ này hoàn toàn tự động.
+                  </li>
+                  <li>
+                    <strong>Chu Trình Tự Cải Thiện 2 Chiều (Two-Loop Self-Improvement):</strong>
+                    <ul>
+                      <li><em>Vòng 1 (intact sửa lỗi upstream từ chối):</em> Tự động phát hiện lỗi 429 giả mạo từ upstream, sử dụng thuật toán chia đôi (binary search halving) system prompt để cô lập chính xác câu văn bị nhà cung cấp chặn (ví dụ các câu <em>"You are Codex, an agent based on GPT-5"</em> hay <em>"You are a Claude agent..."</em> bị Google Antigravity chặn bằng fake 429), rồi lưu thành bộ lọc blacklist trong cơ sở dữ liệu SQLite. Toàn bộ máy dev nhận bản vá tức thì mà không cần cập nhật gateway.</li>
+                      <li><em>Vòng 2 (Switcher sửa lỗi converter làm mất):</em> Khi bật Contract Lab, Switcher gửi các mẫu trao đổi đã che dữ liệu người dùng (giữ nguyên độ dài chuỗi và enum) lên intact. intact so khớp và ghi nhận từng field bị mất. Lệnh <code>switch contract-check</code> tự động tạo test case đỏ và bản sửa nằm trong bộ converter.</li>
+                    </ul>
+                  </li>
+                </ul>
+
+                <h3>Hướng Dẫn Cài Đặt intact Chi Tiết</h3>
+                <p>
+                  intact được đóng gói sẵn thành file binary tĩnh duy nhất cho mọi kiến trúc hệ điều hành: Linux (x64, arm64), macOS (Apple Silicon M-series, Intel), Windows (x64, arm64).
+                </p>
+
+                <h4>Cách 1: Cài Đặt Toàn Cục Qua npm (Khuyên dùng)</h4>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · npm global install</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'npm install -g intact-gateway\n# Khởi động intact lần đầu:\nintact -db /opt/intact/intact.db -addr 127.0.0.1:20142')">Copy</button>
+                  </div>
+                  <pre>npm install -g intact-gateway
+
+# Khởi tạo và chạy intact với file database SQLite chỉ định:
+intact -db /opt/intact/intact.db -addr 127.0.0.1:20142</pre>
+                </div>
+
+                <h4>Cách 2: Build Từ Mã Nguồn Go (Zero-CGO, Không Cần Toolchain C)</h4>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Go Build</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'git clone https://github.com/louisphamdev/intact.git\ncd intact\nCGO_ENABLED=0 go build -o intact ./cmd/intact\n# Cross-compile cho Linux server từ macOS / Windows:\nGOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags=&quot;-s -w&quot; -o intact-linux ./cmd/intact')">Copy</button>
+                  </div>
+                  <pre>git clone https://github.com/louisphamdev/intact.git
+cd intact
+
+# Biên dịch binary tĩnh:
+CGO_ENABLED=0 go build -o intact ./cmd/intact
+
+# Hoặc cross-compile cho Linux Server từ máy macOS / Windows:
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o intact-linux ./cmd/intact</pre>
+                </div>
+
+                <h3>Bảng Tra Cứu Tham Số Dòng Lệnh (CLI Flags) Của intact</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:28%;">Cờ dòng lệnh</th>
+                      <th style="width:25%;">Giá trị mặc định</th>
+                      <th>Mô tả chức năng chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>-addr &lt;host:port&gt;</code></td>
+                      <td><code>127.0.0.1:20130</code></td>
+                      <td>Địa chỉ IP và cổng lắng nghe cho proxy và dashboard (ví dụ: <code>127.0.0.1:20142</code>).</td>
+                    </tr>
+                    <tr>
+                      <td><code>-db &lt;file.db&gt;</code></td>
+                      <td><code>intact.db</code></td>
+                      <td>Đường dẫn tới tệp SQLite database. Tự động tạo bảng lần đầu và tự migrate schema ở các lần khởi động sau.</td>
+                    </tr>
+                    <tr>
+                      <td><code>-show-totp</code></td>
+                      <td><em>(Không)</em></td>
+                      <td>In khóa bí mật TOTP của bản cài đặt này và các bước nhập vào app xác thực rồi thoát.</td>
+                    </tr>
+                    <tr>
+                      <td><code>-enroll</code></td>
+                      <td><em>(Không)</em></td>
+                      <td>Sinh một khóa bí mật TOTP hoàn toàn mới và in ra URI <code>otpauth://</code> để nạp vào <code>INTACT_TOTP_SECRET</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><code>-insecure-no-auth</code></td>
+                      <td><em>(Không)</em></td>
+                      <td>Khởi động không cần cổng đăng nhập (chỉ cho phép kết nối từ loopback Host để ngăn chặn DNS rebinding).</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <h3>Bảng Tra Cứu Biến Môi Trường (Environment Variables) Của intact</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:34%;">Biến môi trường</th>
+                      <th>Mô tả ý nghĩa & cách áp dụng</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>INTACT_TOTP_SECRET</code></td>
+                      <td>Chuỗi Base32 bí mật cho xác thực TOTP trên Dashboard. Khi để trống, intact dùng secret được lưu trong SQLite.</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_API_TOKEN</code></td>
+                      <td>Master token. Cho phép gọi toàn quyền vào <code>/v1</code>, <code>/api/*</code> và <code>/mcp</code> mà không cần session cookie.</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_SESSION_KEY</code></td>
+                      <td>Khóa ký HMAC cho cookie phiên dashboard. Khi để trống, intact sinh khóa ngẫu nhiên trong RAM mỗi lần khởi động.</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_SESSION_TTL</code></td>
+                      <td>Thời gian sống của phiên đăng nhập dashboard tính bằng giây (mặc định: <code>43200</code> = 12 giờ).</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_OWNER_LOOPBACK</code></td>
+                      <td>Đặt <code>1</code> để cho phép chủ sở hữu kết nối qua SSH Tunnel loopback không bị giới hạn số lần thử mã đăng nhập.</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_ANTIGRAVITY_CLIENT_SECRET</code></td>
+                      <td>Google OAuth client secret của app Antigravity. intact tự động tải lần đầu; chỉ đặt khi lookup tự động bị chặn.</td>
+                    </tr>
+                    <tr>
+                      <td><code>INTACT_ARENA_URL</code></td>
+                      <td>Mirror của Hugging Face datasets server để tải bảng xếp hạng LMArena định kỳ (mặc định: <code>https://datasets-server.huggingface.co</code>).</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <h3>Triển Khai Dịch Vụ Nền Production (Systemd Service trên Linux)</h3>
+                <p>
+                  Tạo file cấu hình dịch vụ tại <code>/etc/systemd/system/intact.service</code>:
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>/etc/systemd/system/intact.service</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, '[Unit]\nDescription=intact LLM Credential Proxy and Account Pooler\nAfter=network.target\n\n[Service]\nUMask=0077\nEnvironmentFile=/opt/intact/intact.env\nExecStart=/opt/intact/intact -db /opt/intact/intact.db -addr 127.0.0.1:20142\nRestart=on-failure\nWorkingDirectory=/opt/intact\n\n[Install]\nWantedBy=multi-user.target')">Copy</button>
+                  </div>
+                  <pre>[Unit]
+Description=intact LLM Credential Proxy and Account Pooler
+After=network.target
+
+[Service]
+UMask=0077
+EnvironmentFile=/opt/intact/intact.env
+ExecStart=/opt/intact/intact -db /opt/intact/intact.db -addr 127.0.0.1:20142
+Restart=on-failure
+WorkingDirectory=/opt/intact
+
+[Install]
+WantedBy=multi-user.target</pre>
+                </div>
+                <p>
+                  Tạo thư mục làm việc, file biến môi trường bảo mật <code>/opt/intact/intact.env</code> với quyền <code>0600</code> và kích hoạt dịch vụ:
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Kích hoạt service</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'sudo mkdir -p -m 700 /opt/intact\nsudo touch /opt/intact/intact.env\nsudo chmod 600 /opt/intact/intact.env\nsudo systemctl daemon-reload\nsudo systemctl enable --now intact')">Copy</button>
+                  </div>
+                  <pre>sudo mkdir -p -m 700 /opt/intact
+sudo touch /opt/intact/intact.env
+sudo chmod 600 /opt/intact/intact.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now intact</pre>
+                </div>
+
+                <h3>Đưa intact Ra Internet An Toàn Qua Cloudflare Tunnel (Zero-Trust Ingress)</h3>
+                <p>
+                  Không cần mở bất kỳ cổng firewall nào trên VPS! Sử dụng Cloudflare Tunnel trỏ tên miền của bạn về cổng loopback của intact:
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>/etc/cloudflared/config.yml (Ingress snippet)</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'ingress:\n  - hostname: intact.yourdomain.com\n    service: http://127.0.0.1:20142\n  - service: http_status:404')">Copy</button>
+                  </div>
+                  <pre>ingress:
+  - hostname: intact.yourdomain.com
+    service: http://127.0.0.1:20142
+  - service: http_status:404</pre>
+                </div>
+
+                <h3>Sao Lưu & Nâng Cấp An Toàn (Database Integrity Guarantee)</h3>
+                <p>
+                  Vì SQLite sử dụng chế độ WAL (Write-Ahead Logging), <strong>tuyệt đối không dùng lệnh <code>cp</code> sao chép file trực tiếp</strong> vì có thể làm mất dữ liệu chưa kịp flush vào đĩa. Hãy dùng API Online Backup chuẩn:
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · SQLite Online Backup</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'install -d -m 0700 /opt/intact/backup\n(umask 077 && sqlite3 /opt/intact/intact.db &quot;.backup /opt/intact/backup/intact-$(date +%F-%H%M).db&quot;)')">Copy</button>
+                  </div>
+                  <pre>install -d -m 0700 /opt/intact/backup
+(umask 077 && sqlite3 /opt/intact/intact.db ".backup /opt/intact/backup/intact-$(date +%F-%H%M).db")</pre>
+                </div>
+                <p>
+                  Để nâng cấp: giữ lại file binary cũ <code>intact.prev</code>, tải bản mới thay thế và chạy <code>sudo systemctl restart intact</code>. Schema database sẽ tự động được nâng cấp tương thích ngược.
+                </p>
+
+                <h3>Cẩm Nang Sử Dụng & Vận Hành intact Chi Tiết Nhất</h3>
+                <ol>
+                  <li>
+                    <strong>Xác Thực TOTP & Đăng Nhập Lần Đầu (Zero-Password):</strong>
+                    <p>
+                      Chạy lệnh <code>intact -db /opt/intact/intact.db -show-totp</code> (hoặc kiểm tra log <code>journalctl -u intact</code>). Mở Google Authenticator, 1Password hoặc Aegis trên điện thoại, chọn <em>"Enter a setup key"</em>, nhập tên <code>intact</code> và khóa bí mật in ra. Truy cập giao diện Web Dashboard và nhập mã 6 số để đăng nhập.
+                    </p>
+                  </li>
+                  <li>
+                    <strong>Thêm Nhà Cung Cấp & Kết Nối (Providers & Connections):</strong>
+                    <p>
+                      Vào mục <strong>Providers → Add</strong> trên thanh menu của intact:
+                    </p>
+                    <ul>
+                      <li><strong>API-Key Providers:</strong> Groq, OpenRouter, Vertex AI, NVIDIA NIM, DeepSeek, Cloudflare Workers AI... (chỉ cần dán API key).</li>
+                      <li><strong>Coding Tool OAuth Sign-ins (Class A):</strong> Claude Code, OpenAI Codex, Antigravity (Google), GitHub Copilot (đăng nhập bằng browser OAuth hoặc device-code).</li>
+                    </ul>
+                    <div class="doc-callout info">
+                      <strong>Lưu ý về Antigravity:</strong> Lần đăng nhập tài khoản Antigravity đầu tiên có thể mất khoảng 1 phút do intact tự động liên hệ Google để tải về OAuth client secret.
+                    </div>
+                  </li>
+                  <li>
+                    <strong>Chiến Lược Điều Phối Tải & Xoay Vòng (Rotation & Failover):</strong>
+                    <ul>
+                      <li><strong>Round Robin (1 req/turn):</strong> Chia đều tải qua từng request giữa các tài khoản đang hoạt động.</li>
+                      <li><strong>Round Robin (N reqs/turn):</strong> Phục vụ liên tục N request trên một tài khoản trước khi chuyển sang tài khoản kế tiếp. <em>Đây là chế độ lý tưởng để giữ ấm Prompt Cache (Anthropic/OpenAI prompt cache hits), giúp tiết kiệm 50-90% chi phí và giảm độ trễ tối đa.</em></li>
+                      <li><strong>Fallback:</strong> Luôn ưu tiên tài khoản chính (Primary). Chỉ chuyển sang tài khoản dự phòng khi tài khoản chính gặp lỗi 429/500/503 hoặc cạn quota.</li>
+                      <li><strong>Standby Account:</strong> Đánh dấu tài khoản dự phòng ngủ đông, chỉ được kích hoạt khi toàn bộ tài khoản chính gặp sự cố.</li>
+                      <li><strong>Conversation Stickiness (Gắn kết phiên):</strong> intact tự động nhận diện phiên hội thoại theo Session ID (<code>X-Claude-Code-Session-Id</code>, <code>session_id</code>) và ghim hội thoại vào tài khoản phục vụ trước đó trong vòng 1 giờ để tối đa hoá cache.</li>
+                      <li><strong>429 Retry Shorter Đột Phá:</strong> Khi một cuộc trò chuyện dài gặp lỗi rate limit 429 token-per-minute, intact tự động cắt ngắn lịch sử ngữ cảnh và gửi thử lại ngay lập tức trên tài khoản tiếp theo, bảo vệ phiên làm việc của bạn không bị crash giữa chừng.</li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Tạo API Key Cho Client:</strong>
+                    <p>
+                      Vào <strong>Endpoint → API keys → Create</strong>, đặt tên và sao chép mã khóa có định dạng <code>sk-intact-...</code>. Key này sẽ được dán vào cấu hình của LLM Switcher hoặc các ứng dụng bên thứ ba.
+                    </p>
+                  </li>
+                  <li>
+                    <strong>Quy Tắc Định Tuyến Mô Hình (Model Routing Syntax):</strong>
+                    <ul>
+                      <li><strong>Chỉ định rõ provider:</strong> <code>groq/llama-3.3-70b-versatile</code>, <code>antigravity/gemini-3.8-flash-high</code>, <code>codex/gpt-5.5</code>.</li>
+                      <li><strong>Tên model trần (bare id):</strong> <code>llama-3.3-70b-versatile</code> (intact sẽ tự động gộp tất cả các tài khoản của mọi provider hỗ trợ mô hình đó thành một pool chung).</li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Thử Nghiệm & Giám Sát Với Contract Lab:</strong>
+                    <p>
+                      Chạy lệnh <code>switch contract-probe</code> từ máy trạm để gửi bộ 6 biến thể dữ liệu mẫu tới intact, kiểm tra độ tương thích của model. Chạy <code>switch contract-check</code> để kéo về các finding sai lệch schema và tự động sinh test case.
+                    </p>
+                  </li>
+                </ol>
+
+                <h3>Mẫu Cấu Hình Tích Hợp Hoàn Hảo Trong LLM Switcher</h3>
+                <p>
+                  Cấu hình <code>config.json</code> trên máy trạm để chuyển tiếp lưu lượng Claude Code, Codex và agy qua intact:
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>config.json (Tích hợp intact)</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, document.getElementById('code-intact-config-sample').textContent)">Copy</button>
+                  </div>
+                  <pre id="code-intact-config-sample">{
+  "port": 3456,
+  "activeProfiles": {
+    "claude": "intact-claude",
+    "codex": "intact-codex",
+    "agy": "agy-intact"
+  },
+  "profiles": {
+    "intact-claude": {
+      "name": "Claude via intact",
+      "tool": "claude",
+      "mode": "convert",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.yourdomain.com/v1",
+      "apiKey": "sk-intact-...",
+      "thinkingMode": "auto"
+    },
+    "intact-codex": {
+      "name": "Codex via intact",
+      "tool": "codex",
+      "mode": "convert",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.yourdomain.com/v1",
+      "apiKey": "sk-intact-...",
+      "defaultModels": {
+        "main": "gemini-3.8-flash",
+        "review": "gemini-3.7-flash-medium",
+        "subagent": "gemini-3.6-flash-low"
+      }
+    },
+    "agy-intact": {
+      "name": "agy on intact",
+      "tool": "agy",
+      "mode": "convert",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.yourdomain.com/v1",
+      "apiKey": "sk-intact-...",
+      "defaultModels": { "main": "antigravity/*" } // Kích hoạt Bifrost passthrough
+    }
+  },
+  "contractLab": {
+    "url": "https://intact.yourdomain.com",
+    "apiKey": "sk-intact-...",
+    "enabled": true
+  }
+}</pre>
+                </div>
+                <div class="doc-callout info">
+                  <strong>Mẹo cấu hình nhanh trên Web UI:</strong> Tại tab <strong>Routes & Profiles</strong>, nhấn <strong>+ Add Profile</strong> và chọn nút <strong>Template Quick-Fill: intact</strong> hoặc <strong>agy on intact</strong> để tự động điền sẵn toàn bộ tham số tối ưu chỉ với 1 click!
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. CLI & OPERATION GUIDE -->
             <section class="doc-section" id="doc-cli">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                  3. Hướng Dẫn Sử Dụng & Bảng Tra Cứu Lệnh CLI
+                  4. Lệnh CLI & Cẩm Nang Vận Hành
                 </h2>
-                <span class="badge" style="background:var(--card2); color:var(--muted);">Cheatsheet</span>
+                <span class="badge" style="background:var(--card2); color:var(--muted);">Bảng Tra Cứu Toàn Diện (Cheatsheet)</span>
               </div>
               <div class="doc-prose">
                 <p>
@@ -1901,34 +2294,38 @@ switch service uninstall</pre>
                 <table class="doc-table">
                   <thead>
                     <tr>
-                      <th style="width:38%;">Lệnh CLI</th>
+                      <th style="width:36%;">Lệnh CLI & Cờ</th>
                       <th>Mô tả chức năng chi tiết</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <td><code>switch on [profile]</code></td>
-                      <td>Khởi động Gateway và kích hoạt profile (mặc định nếu không truyền tên).</td>
-                    </tr>
-                    <tr>
-                      <td><code>switch off</code></td>
-                      <td>Dừng hoàn toàn Gateway và khôi phục các công cụ về endpoint chính hãng.</td>
-                    </tr>
-                    <tr>
-                      <td><code>switch off claude | codex | agy</code></td>
-                      <td>Tắt chuyển đổi cho một công cụ cụ thể; các công cụ còn lại vẫn tiếp tục hoạt động.</td>
-                    </tr>
-                    <tr>
-                      <td><code>switch ui</code></td>
+                      <td><code>switch ui</code> / <code>web</code> / <code>gui</code></td>
                       <td>Mở giao diện Web Dashboard trên trình duyệt mặc định kèm access token an toàn.</td>
                     </tr>
                     <tr>
-                      <td><code>switch status</code></td>
-                      <td>Hiển thị trạng thái hoạt động và cấu hình routing của cả 3 công cụ CLI.</td>
+                      <td><code>switch status</code> / <code>st</code></td>
+                      <td>Hiển thị trạng thái hoạt động, cổng kết nối và cấu hình routing của cả 3 công cụ CLI.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch version</code> / <code>-v</code></td>
+                      <td>Hiển thị phiên bản hiện tại và kiểm tra xem trên npm có bản phát hành mới hơn không.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch doctor</code> / <code>audit</code></td>
+                      <td>Quét chẩn đoán: kiểm tra liveness, xung đột port, rò rỉ biến môi trường, shims và phiên CLI đang chạy.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch update</code> / <code>upgrade</code></td>
+                      <td>Tải và nâng cấp lên bản phát hành mới nhất từ npm/git, khởi động lại gateway không làm rớt phiên.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch on [profile]</code> / <code>start</code></td>
+                      <td>Khởi động Gateway và kích hoạt profile (mặc định nếu không truyền tên) cho tất cả target tương thích.</td>
                     </tr>
                     <tr>
                       <td><code>switch &lt;profile&gt;</code></td>
-                      <td>Kích hoạt cùng một profile cho cả Claude Code và Codex.</td>
+                      <td>Kích hoạt cùng một profile cho các công cụ tương thích.</td>
                     </tr>
                     <tr>
                       <td><code>switch claude &lt;profile&gt;</code></td>
@@ -1940,34 +2337,99 @@ switch service uninstall</pre>
                     </tr>
                     <tr>
                       <td><code>switch agy &lt;profile&gt;</code></td>
-                      <td>Kích hoạt profile chỉ định riêng cho <strong>Antigravity CLI</strong>.</td>
-                    </tr>
-                    <tr>
-                      <td><code>switch doctor</code></td>
-                      <td>Quét chẩn đoán: kiểm tra loopback binding, xung đột port, rò rỉ biến môi trường và phiên CLI đang chạy.</td>
-                    </tr>
-                    <tr>
-                      <td><code>switch update</code></td>
-                      <td>Tải và nâng cấp lên bản phát hành mới nhất từ npm/git, khởi động lại gateway không làm rớt phiên.</td>
+                      <td>Kích hoạt profile chỉ định riêng cho <strong>Antigravity CLI (agy)</strong>.</td>
                     </tr>
                     <tr>
                       <td><code>switch port &lt;số&gt;</code></td>
                       <td>Đổi cổng lắng nghe của Gateway (mặc định: 3456) và tự động khởi động lại service.</td>
                     </tr>
                     <tr>
+                      <td><code>switch service install [--autoupdate]</code></td>
+                      <td>Cài đặt dịch vụ nền tự khởi động cùng OS (systemd / launchd / Task Scheduler).</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch service uninstall</code></td>
+                      <td>Gỡ bỏ hoàn toàn dịch vụ nền tự khởi động của hệ điều hành.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch shim install</code></td>
+                      <td>Cài đặt các launcher shim vào <code>~/.llm-switcher/bin</code> để định tuyến trong suốt.</td>
+                    </tr>
+                    <tr>
                       <td><code>switch shim status</code></td>
                       <td>Kiểm tra tình trạng các launcher shim và phát hiện phiên CLI chạy lọt ra ngoài.</td>
                     </tr>
                     <tr>
-                      <td><code>switch plugin install</code></td>
-                      <td>Cài đặt thông báo trạng thái định tuyến bên trong Claude Code, Codex và agy.</td>
+                      <td><code>switch shim uninstall</code></td>
+                      <td>Gỡ bỏ các launcher shim khỏi thư mục bin.</td>
                     </tr>
                     <tr>
-                      <td><code>switch compact [on|off]</code></td>
-                      <td>Bật / tắt tính năng nén lịch sử hội thoại khi idle lâu ngày.</td>
+                      <td><code>switch plugin install</code></td>
+                      <td>Cài đặt thông báo trạng thái định tuyến (hook notice) bên trong Claude Code, Codex và agy.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch plugin status</code></td>
+                      <td>Kiểm tra tình trạng các plugin hook thông báo trạng thái.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch plugin uninstall</code></td>
+                      <td>Gỡ bỏ các plugin hook thông báo khỏi cấu hình các công cụ.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch off [claude|codex|agy]</code></td>
+                      <td>Khôi phục endpoint chính hãng (cho toàn bộ công cụ nếu không truyền tham số, hoặc cho một công cụ cụ thể).</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch models [--refresh]</code></td>
+                      <td>Xem danh mục mô hình phát hiện được cho Claude Code & Codex; <code>--refresh</code> để cập nhật từ upstream.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact on</code> / <code>off</code></td>
+                      <td>Bật / tắt tính năng nén prefix ngữ cảnh khi nhàn rỗi cho Claude Code.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact codex on</code> / <code>off</code></td>
+                      <td>Bật / tắt nén prefix ngữ cảnh trên đường truyền cho Codex Responses.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact model &lt;id|none&gt;</code></td>
+                      <td>Chỉ định model tóm tắt chạy ngầm (hoặc <code>none</code> để dùng thuật toán cắt tỉa tất định không tốn token).</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact idle &lt;phút&gt;</code></td>
+                      <td>Đặt ngưỡng thời gian nhàn rỗi (1 – 1440 phút, mặc định: 15) trước khi kích hoạt nén cache.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact min &lt;KB&gt;</code></td>
+                      <td>Đặt ngưỡng kích thước payload tối thiểu (8 – 4096 KB, mặc định: 64) để áp dụng nén.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact status</code></td>
+                      <td>Hiển thị chi tiết cấu hình và chính sách Idle Compaction hiện tại.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch contract-probe [--model m]</code></td>
+                      <td>Gửi tổ hợp 6 test request kiểm tra hợp đồng chuyển đổi qua Gateway lên intact.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch contract-check</code></td>
+                      <td>Lấy các trường dữ liệu bị mất từ intact và tự động sinh test case kiểm thử độ chính xác.</td>
+                    </tr>
+                    <tr>
+                      <td><code>--port &lt;n&gt;</code> / <code>-p &lt;n&gt;</code></td>
+                      <td>Cờ toàn cục để ghi đè tạm thời cổng Gateway cho lệnh đang chạy.</td>
                     </tr>
                   </tbody>
                 </table>
+
+                <h3>Cơ Chế Thông Báo Trạng Thái (Launch Notice)</h3>
+                <p>
+                  Để bạn luôn biết phiên làm việc có đang qua Gateway hay không mà không cần mở <code>settings.json</code>:
+                </p>
+                <ul>
+                  <li><strong>1. Thông báo từ Shim (Mặc định luôn bật khi có route):</strong> Khi bạn chạy lệnh công cụ, shim in một dòng tóm tắt trên stderr (Linux/macOS) hoặc hiện Windows Toast notification: <code>claude -&gt; intact-claude | intact.example.com | antigravity/gemini-3.8-flash | 1M</code>. Khi công cụ tắt, shim hoàn toàn im lặng.</li>
+                  <li><strong>2. Thông báo bên trong Tool (Tùy chọn, cài bằng <code>switch plugin install</code>):</strong> Tạo file hook trực tiếp trong thư mục skills/hooks của tool (Claude Code plugin tại <code>~/.claude/skills/llm-switcher-status/</code>, Codex tại <code>~/.codex/hooks.json</code>, agy tại <code>~/.gemini/antigravity-cli/hooks.json</code>). Báo rõ trạng thái kết nối hoặc cảnh báo nếu Gateway chưa bật.</li>
+                </ul>
 
                 <div class="doc-callout warning">
                   <strong>Quy tắc quan trọng về môi trường:</strong> Tuyệt đối <em>không</em> thêm <code>source env.sh</code> hay <code>call env.cmd</code> vào file rc của shell. Các biến định tuyến được tự động tiêm độc lập vào từng phiên CLI thông qua các wrapper shim trong <code>~/.llm-switcher/bin</code>.
@@ -1975,29 +2437,29 @@ switch service uninstall</pre>
               </div>
             </section>
 
-            <!-- 4. BLINDFOLD MODE & CA SECURITY -->
+            <!-- 5. BLINDFOLD MODE & CA SECURITY -->
             <section class="doc-section" id="doc-blindfold">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  4. Blindfold Mode & Bảo Mật Chứng Chỉ CA
+                  5. Blindfold Mode & Bảo Mật Chứng Chỉ CA
                 </h2>
-                <span class="badge" style="background:var(--mint); color:#042f2e; font-weight:600;">Port :3457 · Zero-Warning</span>
+                <span class="badge" style="background:var(--mint); color:#042f2e; font-weight:600;">Port :3457 · Zero-Warning Interceptor</span>
               </div>
               <div class="doc-prose">
                 <p>
-                  Trên Codex CLI, khi bạn ghi đè Base URL theo cách thông thường, giao diện <code>/model</code> sẽ hiển thị một dòng cảnh báo phiền toái: <em>"base URL is overridden to http://... Selecting models may not be supported..."</em>.
+                  Trên Codex CLI, khi bạn ghi đè Base URL theo cách thông thường (<code>--config openai_base_url=...</code>), giao diện <code>/model</code> sẽ hiển thị một dòng cảnh báo phiền toái: <em>"base URL is overridden to http://... Selecting models may not be supported or work properly."</em>.
                 </p>
                 <p>
-                  <strong>Blindfold Mode</strong> giải quyết triệt để vấn đề này. Codex và Claude Code tiếp tục gửi request đến endpoint chính hãng, trong khi LLM Switcher đánh chặn ở tầng mạng thông qua proxy trung gian <code>HTTPS_PROXY=http://127.0.0.1:3457</code>.
+                  <strong>Blindfold Mode</strong> giải quyết triệt để vấn đề này. Codex và Claude Code tiếp tục gửi request đến endpoint chính hãng, trong khi LLM Switcher đánh chặn ở tầng mạng thông qua proxy trung gian <code>HTTPS_PROXY=http://127.0.0.1:3457</code>. File cấu hình của tool hoàn toàn nguyên vẹn.
                 </p>
 
                 <h3>Bảng Định Tuyến Cố Định Của Interceptor (:3457)</h3>
                 <table class="doc-table">
                   <thead>
                     <tr>
-                      <th>Domain Đích (CONNECT Host)</th>
-                      <th>Đường Dẫn Bị Đánh Chặn (Về Gateway :3456)</th>
+                      <th style="width:28%;">Domain Đích (CONNECT Host)</th>
+                      <th style="width:38%;">Đường Dẫn Bị Đánh Chặn (Về Gateway :3456)</th>
                       <th>Đường Dẫn Còn Lại (Tunnel Ra Internet Thật)</th>
                     </tr>
                   </thead>
@@ -2022,28 +2484,34 @@ switch service uninstall</pre>
                       <td><em>Không chặn</em></td>
                       <td>Tunnel thẳng ra Internet dạng raw TCP, không đọc dữ liệu</td>
                     </tr>
+                    <tr>
+                      <td><em>Địa chỉ nội bộ (127.0.0.1, private IP)</em></td>
+                      <td><em>Bị từ chối (HTTP 403/421)</em></td>
+                      <td>Chống tấn công SSRF và lạm dụng mạng nội bộ</td>
+                    </tr>
                   </tbody>
                 </table>
 
                 <h3>🔒 Cam Kết An Toàn & Cô Lập Chứng Chỉ CA</h3>
                 <ul>
-                  <li><strong>Tự sinh 100% tại máy cục bộ:</strong> Cặp khóa <code>ca.pem</code> và <code>ca.key</code> được tự động tạo lần đầu bằng thư viện crypto chuẩn của Node.js. Private key được bảo vệ với quyền nghiêm ngặt <code>0600</code>.</li>
+                  <li><strong>Tự sinh 100% tại máy cục bộ:</strong> Cặp khóa <code>ca.pem</code> và <code>ca.key</code> được tự động tạo lần đầu bằng thư viện crypto chuẩn của Node.js. Private key được bảo vệ với quyền nghiêm ngặt <code>0600</code>. Tuyệt đối không tải key từ Internet.</li>
                   <li><strong>Không can thiệp vào Hệ Điều Hành:</strong> Tuyệt đối <em>không</em> cài chứng chỉ vào Windows Certificate Store, macOS Keychain hay Linux <code>/etc/ssl/certs</code>. Bạn <strong>không cần quyền root hay Administrator</strong>.</li>
                   <li><strong>Chỉ tin cậy trong phạm vi tiến trình (Process-Scoped):</strong> Chứng chỉ chỉ được tiêm vào bộ nhớ RAM của <code>claude</code> (qua <code>NODE_EXTRA_CA_CERTS</code>) và <code>codex</code> (qua <code>CODEX_CA_CERTIFICATE</code>). Trình duyệt web và ứng dụng khác hoàn toàn không tin cậy chứng chỉ này.</li>
                   <li><strong>Ràng buộc tên miền mật mã học (X.509 Name Constraints):</strong> CA được cấu hình bắt buộc chỉ cho phép ký duy nhất cho 3 domain: <code>api.anthropic.com</code>, <code>api.openai.com</code>, và <code>chatgpt.com</code>. Ngay cả khi lộ private key, mọi kết nối tới ngân hàng, Google, GitHub đều bị từ chối ngay lập tức.</li>
                   <li><strong>Bảo toàn chứng chỉ VPN / Doanh nghiệp:</strong> Nếu máy bạn có sẵn CA công ty trong <code>NODE_EXTRA_CA_CERTS</code>, script <code>ensure-ca-bundle.mjs</code> sẽ tự động gộp cả 2 chứng chỉ vào một bundle tạm thời, không bao giờ làm đứt mạng nội bộ.</li>
+                  <li><strong>Lưu ý tạo chứng chỉ trên Windows:</strong> Chạy lệnh <code>bash blindfold/make-certs.sh</code> trong <strong>Git Bash</strong>. Tuyệt đối không dùng <code>New-SelfSignedCertificate</code> trong PowerShell vì lệnh này thiếu extendedKeyUsage <code>serverAuth</code> gây lỗi handshake.</li>
                 </ul>
               </div>
             </section>
 
-            <!-- 5. ANTIGRAVITY CLI (AGY) -->
+            <!-- 6. ANTIGRAVITY CLI (AGY) -->
             <section class="doc-section" id="doc-agy">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-                  5. Cấu Hình Antigravity CLI (agy) & Tiếp Sức An Toàn
+                  6. Antigravity CLI (agy) & Relay Proof An Toàn
                 </h2>
-                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">CLOUD_CODE_URL · Relay Proof</span>
+                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">CLOUD_CODE_URL · Relay Identity Challenge</span>
               </div>
               <div class="doc-prose">
                 <p>
@@ -2071,9 +2539,9 @@ agy</pre>
                 <table class="doc-table">
                   <thead>
                     <tr>
-                      <th>Loại Cuộc Gọi</th>
-                      <th>Đích Đến Xử Lý</th>
-                      <th>Ghi Chú Xác Thực</th>
+                      <th style="width:30%;">Loại Cuộc Gọi</th>
+                      <th style="width:40%;">Đích Đến Xử Lý</th>
+                      <th>Ghi Chú Xác Thực & Bảo Mật</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2084,7 +2552,7 @@ agy</pre>
                     </tr>
                     <tr>
                       <td>Checkpoint summary, model list, quota, đăng nhập</td>
-                      <td>Google Code Assist chính thức</td>
+                      <td>Google Code Assist chính thức (<code>daily-cloudcode-pa.googleapis.com</code>)</td>
                       <td>Giữ nguyên vẹn token và headers Google của bạn</td>
                     </tr>
                     <tr>
@@ -2095,20 +2563,27 @@ agy</pre>
                   </tbody>
                 </table>
 
+                <h3>Cấu Hình Model Trong Slot <code>main</code> Của agy</h3>
+                <ul>
+                  <li><code>*</code>: Tự động chuyển tiếp đúng model mà agy lựa chọn trong giao diện dòng lệnh.</li>
+                  <li><code>antigravity/*</code>: Ví dụ <code>antigravity/gemini-3.8-flash-high</code>. intact nhận diện agy là client chính thức của pool Antigravity và cho phép đi xuyên qua <strong>Bifrost</strong> không cần chuyển đổi.</li>
+                  <li>Model chỉ định khác (ví dụ: <code>claude/claude-opus-5</code>): Gateway chuyển đổi request Code Assist sang định dạng tương ứng và chuyển câu trả lời về lại định dạng Code Assist.</li>
+                </ul>
+
                 <div class="doc-callout info">
-                  <strong>Bảo vệ Token bằng Relay (<code>agy-relay.mjs</code>):</strong> Do agy gửi token xác thực dạng cleartext tới <code>CLOUD_CODE_URL</code>, shim của Switcher khởi chạy agy đằng sau một relay loopback chuyên dụng. Relay này bắt buộc Gateway phải cung cấp bằng chứng mã hóa dựa trên <code>gateway.secret</code> trước khi chuyển token. Nếu gateway chưa chứng minh được danh tính, agy sẽ nhận mã lỗi 502 và token không bao giờ bị phát tán.
+                  <strong>Bảo vệ Token bằng Relay (<code>agy-relay.mjs</code>):</strong> Do agy gửi token xác thực dạng cleartext tới <code>CLOUD_CODE_URL</code>, shim của Switcher khởi chạy agy đằng sau một relay loopback chuyên dụng. Relay này bắt buộc Gateway phải cung cấp bằng chứng mã hóa dựa trên <code>gateway.secret</code> trước khi chuyển token. Nếu gateway chưa chứng minh được danh tính trong 3 giây, agy sẽ fallback về Google endpoint chính thức và token không bao giờ bị phát tán sang tiến trình lạ.
                 </div>
               </div>
             </section>
 
-            <!-- 6. TOKEN OPTIMIZERS & HEALER ENGINE -->
+            <!-- 7. TOKEN OPTIMIZERS & HEALER ENGINE -->
             <section class="doc-section" id="doc-optimizers">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
-                  6. Tối Ưu Token & Healer Engine
+                  7. Tối Ưu Token & Healer Engine
                 </h2>
-                <span class="badge" style="background:var(--ok-soft); color:var(--ok); font-weight:600;">Headroom · RTK · Ponytail</span>
+                <span class="badge" style="background:var(--ok-soft); color:var(--ok); font-weight:600;">Headroom · RTK · Ponytail Interoperability</span>
               </div>
               <div class="doc-prose">
                 <p>
@@ -2118,25 +2593,27 @@ agy</pre>
                   <li><strong>Orphaned <code>tool_result</code>:</strong> Optimizer xóa mất lượt <code>assistant</code> chứa <code>tool_use</code> nhưng lại giữ lại lượt <code>user</code> chứa <code>tool_result</code> $\implies$ Anthropic lập tức văng lỗi <code>HTTP 400 (tool_use_id does not correspond to any tool_use)</code>.</li>
                   <li><strong>Consecutive <code>user</code> turns:</strong> Xóa các lượt trung gian khiến 2 lượt <code>user</code> đứng liền nhau $\implies$ Vi phạm quy tắc luân phiên role của Anthropic gây crash <code>HTTP 400</code>.</li>
                   <li><strong>Reasoning Suppression:</strong> Tự ý gọt bỏ tham số <code>thinking</code> hoặc budget để tiết kiệm token $\implies$ Khiến các model tư duy sâu (Opus, Gemini Flash) trở nên nông cạn, trả lời ngắn cũn và lỗi code.</li>
+                  <li><strong>Broken Schemas:</strong> Cắt cụt JSON hoặc trả schema rỗng <code>{}</code> làm Gemini/Vertex từ chối xử lý.</li>
                 </ul>
 
                 <h3>Mô Hình Phân Tầng Bắt Buộc</h3>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar"><span>Kiến trúc tầng bảo vệ</span></div>
                   <pre>[CLI Agent] ──> [Optimizer Proxy: Headroom / RTK] ──> [LLM Switcher :3456] ──> [Internet / Upstream]
-                                                        │
-                                                        ├── 1. Tự chữa lành tool_result mồ côi thành text
-                                                        ├── 2. Tự gộp các lượt cùng role liên tiếp
-                                                        ├── 3. Tự phục hồi tham số suy luận thinking
-                                                        └── 4. Giữ nguyên 100% tracing headers (x-rtk-*)</pre>
+                                                      │
+                                                      ├── 1. Tự chữa lành tool_result mồ côi thành text
+                                                      ├── 2. Tự gộp các lượt cùng role liên tiếp
+                                                      ├── 3. Tự phục hồi tham số suy luận thinking
+                                                      ├── 4. Sửa schema rỗng {} cho Gemini/Vertex
+                                                      └── 5. Giữ nguyên 100% tracing headers (x-rtk-*)</pre>
                 </div>
 
                 <h3>Ma Trận Bảo Vệ Của Healer Engine</h3>
                 <table class="doc-table">
                   <thead>
                     <tr>
-                      <th>Tình Huống Lỗi Do Optimizer Gây Ra</th>
-                      <th>Gọi Trực Tiếp Upstream</th>
+                      <th style="width:32%;">Tình Huống Lỗi Do Optimizer Gây Ra</th>
+                      <th style="width:30%;">Gọi Trực Tiếp Upstream</th>
                       <th>Đi Qua LLM Switcher (Healer Engine)</th>
                     </tr>
                   </thead>
@@ -2161,12 +2638,22 @@ agy</pre>
                       <td>❌ <strong>HTTP 400 Schema Error</strong></td>
                       <td>✅ <strong>HTTP 200 OK:</strong> Tự bổ sung type string tương thích</td>
                     </tr>
+                    <tr>
+                      <td>Lượt <code>tool</code> mồ côi trong Chat API</td>
+                      <td>❌ <strong>HTTP 400 Crash</strong></td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Chuyển role tool thành ngữ cảnh user an toàn</td>
+                    </tr>
+                    <tr>
+                      <td>Headers tracing (<code>x-rtk-*</code>, <code>traceparent</code>)</td>
+                      <td>⚠️ Cảnh báo dropped header</td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Passthrough nguyên vẹn 100%</td>
+                    </tr>
                   </tbody>
                 </table>
 
                 <h3>Cấu Hình Chuỗi Cho Các Optimizer</h3>
                 <p>
-                  <strong>Headroom (headroom.yaml hoặc biến môi trường):</strong>
+                  <strong>Headroom (trong headroom.yaml hoặc biến môi trường):</strong>
                 </p>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar"><span>headroom config</span></div>
@@ -2183,14 +2670,14 @@ OPENAI_BASE_URL="http://127.0.0.1:3456/v1"</pre>
               </div>
             </section>
 
-            <!-- 7. AGENT SKILL & MCP SERVER -->
+            <!-- 8. AGENT SKILL & MCP SERVER -->
             <section class="doc-section" id="doc-agent-mcp">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/></svg>
-                  7. Tích Hợp Agent Skill & MCP Server
+                  8. Tích Hợp Agent Skill & MCP Server
                 </h2>
-                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">Control-Plane Assets</span>
+                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">Control-Plane Security & Automation</span>
               </div>
               <div class="doc-prose">
                 <p>
@@ -2204,7 +2691,7 @@ OPENAI_BASE_URL="http://127.0.0.1:3456/v1"</pre>
                 <ul>
                   <li>Mọi request LLM và proxy nén token phải trỏ về <code>http://127.0.0.1:3456</code>.</li>
                   <li>Tuyệt đối không sửa <code>~/.claude/settings.json</code> hay <code>~/.codex/config.toml</code>.</li>
-                  <li>Không bao giờ hướng dẫn sub-agent chạy <code>source env.sh</code>.</li>
+                  <li>Không bao giờ hướng dẫn sub-agent chạy <code>source env.sh</code> (đã có launcher shims tự tiêm).</li>
                 </ul>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
@@ -2239,24 +2726,47 @@ cp -r skills/llm-switcher ~/.claude/skills/</pre>
                 </div>
 
                 <h3>5 Công Cụ MCP Có Sẵn</h3>
-                <ul>
-                  <li><code>switcher_status</code>: Kiểm tra trạng thái cổng Gateway và profile đang kích hoạt cho từng tool.</li>
-                  <li><code>switcher_audit</code>: Quét toàn diện môi trường máy trạm để phát hiện các request gọi thẳng ra ngoài hoặc tool nén token cấu hình sai.</li>
-                  <li><code>switcher_switch_profile</code>: Đổi profile linh hoạt theo từng CLI (<code>claude</code>, <code>codex</code>, <code>agy</code>).</li>
-                  <li><code>switcher_recent_logs</code>: Xem ring buffer các request gần nhất, độ trễ, số token và kết quả bóc tách reasoning block.</li>
-                  <li><code>switcher_models</code>: Lấy danh mục mô hình mới nhất từ Claude Code và Codex, hỗ trợ đồng bộ động từ upstream.</li>
-                </ul>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:30%;">Tên MCP Tool</th>
+                      <th>Mô tả chức năng chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>switcher_status</code></td>
+                      <td>Kiểm tra trạng thái cổng Gateway, port Blindfold và profile đang kích hoạt cho từng tool.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switcher_audit</code></td>
+                      <td>Quét toàn diện môi trường máy trạm để phát hiện các request gọi thẳng ra ngoài hoặc tool nén token cấu hình sai.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switcher_switch_profile</code></td>
+                      <td>Đổi profile linh hoạt theo từng CLI (<code>claude</code>, <code>codex</code>, <code>agy</code>) ngay trong phiên làm việc.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switcher_recent_logs</code></td>
+                      <td>Xem danh sách request gần nhất, độ trễ, số token và reasoning block (lưu ý: trả về tối đa 150 ký tự đầu của prompt).</td>
+                    </tr>
+                    <tr>
+                      <td><code>switcher_models</code></td>
+                      <td>Lấy danh mục mô hình mới nhất từ Claude Code và Codex, hỗ trợ đồng bộ động từ upstream.</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </section>
 
-            <!-- 8. ADVANCED FEATURES: COMPACTION & GOAL CHECK -->
+            <!-- 9. ADVANCED FEATURES: COMPACTION & GOAL CHECK -->
             <section class="doc-section" id="doc-advanced">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                  8. Tính Năng Nâng Cao: Compaction & Goal Check
+                  9. Tính Năng Nâng Cao: Compaction, Goal Check & Contract Lab
                 </h2>
-                <span class="badge" style="background:var(--card2); color:var(--muted);">Pro Features</span>
+                <span class="badge" style="background:var(--card2); color:var(--muted);">Pro Features · Cache & Quality Gate</span>
               </div>
               <div class="doc-prose">
                 <h3>A. Idle Compaction (Nén Prefix Khi Nhàn Rỗi)</h3>
@@ -2269,10 +2779,16 @@ cp -r skills/llm-switcher ~/.claude/skills/</pre>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar"><span>Terminal · Quản trị Compaction</span></div>
                   <pre>switch compact on                  # Kích hoạt nén cho Claude Code
-switch compact codex on            # Kích hoạt nén cho Codex
+switch compact codex on            # Kích hoạt nén cho Codex Responses
 switch compact idle 20             # Đặt ngưỡng nhàn rỗi là 20 phút (1-1440)
+switch compact min 128             # Ngưỡng kích thước tối thiểu 128 KB
+switch compact model &lt;model-id&gt;    # Chỉ định model tóm tắt chạy ngầm
+switch compact model none          # Tắt tóm tắt model, dùng cắt tỉa tất định
 switch compact status              # Kiểm tra cấu hình hiện tại</pre>
                 </div>
+                <p>
+                  <em>Cắt tỉa tất định (Deterministic Mode):</em> Khi không đặt summary model, hệ thống giữ lại text đầu và gần nhất trong ngân sách (<code>userChars: 3000</code>), loại bỏ payload tool cũ nhưng bảo toàn nguyên vẹn các cặp tool call/result mới nhất (<code>keepRecent: 6</code>) mà không tốn bất kỳ token nào để gọi AI tóm tắt.
+                </p>
 
                 <h3>B. Goal Check: Cơ Chế Veto Độc Lập Bằng Jev System One</h3>
                 <p>
@@ -2289,21 +2805,35 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
                 <div class="doc-callout success">
                   <strong>Nguyên tắc Fail-Closed:</strong> Gateway chỉ trả về <code>ok: true</code> khi cả evaluator gốc lẫn Jev đồng thuận. Bất kỳ lỗi mạng, timeout hoặc thiếu evidence đều bị Veto (<code>ok: false</code>) để bảo vệ chất lượng công việc. Cấu hình tại tab <strong>Goal Check</strong> trên thanh điều hướng.
                 </div>
+
+                <h3>C. Contract Lab: Tự Hoàn Thiện & Chống Rơi Rớt Dữ Liệu Với Intact</h3>
+                <p>
+                  Bộ đôi <strong>LLM Switcher</strong> và <strong>intact</strong> vận hành 2 vòng lặp tự sửa lỗi khép kín:
+                </p>
+                <ul>
+                  <li><strong>intact sửa lỗi nhà cung cấp từ chối:</strong> Thu thập lỗi 429 giả mạo, replay và bóc tách câu lệnh cấm (như fingerprint Codex/Claude) thành bộ lọc tự động phân phối cho mọi máy trạm.</li>
+                  <li><strong>Switcher sửa lỗi rơi rớt field qua chuyển đổi:</strong> Khi bật Contract Lab, Gateway gửi mẫu exchange được che giấu dữ liệu (masking: mọi text nhạy cảm đều biến thành chuỗi ký tự <code>x</code> cùng độ dài, chỉ giữ lại cấu trúc và enum) lên intact. intact so sánh và phát hiện field bị rơi rụng.</li>
+                </ul>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>Terminal · Lệnh Contract Lab</span></div>
+                  <pre>switch contract-probe              # Gửi 6 test probe qua gateway lên intact
+switch contract-check              # Lấy các trường bị mất và tạo file unit test tự động</pre>
+                </div>
               </div>
             </section>
 
-            <!-- 9. CONFIG.JSON REFERENCE -->
+            <!-- 10. CONFIG.JSON REFERENCE -->
             <section class="doc-section" id="doc-config">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                  9. Bảng Cấu Trúc Cấu Hình (config.json)
+                  10. Cấu Trúc Cấu Hình (config.json) & Biến Môi Trường
                 </h2>
-                <span class="badge" style="background:var(--code); color:#042f2e; font-weight:600;">JSON Schema</span>
+                <span class="badge" style="background:var(--code); color:#042f2e; font-weight:600;">JSON Schema & Environment Reference</span>
               </div>
               <div class="doc-prose">
                 <p>
-                  File <code>config.json</code> nằm trong thư mục dữ liệu (<code>~/.llm-switcher/config.json</code> cho npm, hoặc thư mục gốc repo cho git clone):
+                  File <code>config.json</code> nằm trong thư mục dữ liệu (<code>~/.llm-switcher/config.json</code> cho npm, hoặc thư mục gốc repo cho git clone). Dưới đây là schema mẫu đầy đủ tất cả các trường:
                 </p>
                 <div class="doc-codebox">
                   <div class="doc-codebox-bar">
@@ -2327,11 +2857,12 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
       "baseURL": "https://intact.example.com/v1",
       "apiKey": "sk-...",
       "thinkingMode": "auto",            // auto | native | off
-      "thinkingEffort": "auto",          // auto | none | low | medium | high | max
+      "thinkingEffort": "auto",          // auto | none | low | medium | high | max | ultra
       "defaultModels": {
         "opus": "ag/claude-opus-4-6-thinking",
         "sonnet": "ag/gemini-3.7-flash",
-        "haiku": "ag/gemini-3.6-flash-medium"
+        "haiku": "ag/gemini-3.6-flash-medium",
+        "fable": "ag/gemini-3.8-flash"
       }
     },
     "intact-codex": {
@@ -2341,7 +2872,8 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
       "outFormat": "openai-chat",
       "baseURL": "https://intact.example.com/v1",
       "apiKey": "sk-...",
-      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra"],
+      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "codexRoles": { "review": "gpt-5.6-sol" },
       "defaultModels": {
         "main": "gemini-3.8-flash",
         "review": "gemini-3.7-flash-medium",
@@ -2358,25 +2890,108 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
       "defaultModels": { "main": "antigravity/*" } // * giữ nguyên model của agy (Bifrost)
     }
   },
-  "debug": false
+  "debug": false,
+  "idleCompact": {
+    "enabled": false,
+    "codex": false,
+    "idleMinutes": 15,
+    "minBytes": 65536,
+    "model": ""
+  },
+  "goalCheck": {
+    "enabled": false,
+    "backend": "jev",
+    "baseURL": "https://intact.example.com/v1",
+    "apiKey": "sk-...",
+    "model": "typesafe/jev-latest"
+  },
+  "contractLab": {
+    "url": "https://intact.example.com",
+    "apiKey": "sk-...",
+    "enabled": false
+  }
 }</pre>
                 </div>
+
+                <h3>Giải Thích Các Tham Số Cấu Hình Quan Trọng</h3>
+                <ul>
+                  <li><code>thinkingMode</code>:
+                    <ul>
+                      <li><code>auto</code> (mặc định cho intact, 9Router): Phục hồi thinking bị cắt, tự thêm chỉ dẫn &lt;think&gt; cho model thường, gửi cả <code>thinking</code> + <code>reasoning_effort</code>.</li>
+                      <li><code>native</code> (OpenAI chuẩn): Chỉ gửi <code>reasoning_effort</code> khi client yêu cầu, không sửa prompt, dùng <code>max_completion_tokens</code>.</li>
+                      <li><code>off</code>: Tắt hoàn toàn suy luận, không gửi tham số reasoning nào.</li>
+                    </ul>
+                  </li>
+                  <li><code>thinkingEffort</code>: <code>auto</code> (client tự chọn) hoặc ghi đè cứng: <code>none</code>, <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>, <code>ultra</code>. Tự động quy đổi sang ngưỡng cao nhất mà provider đích hỗ trợ.</li>
+                </ul>
+
+                <h3>Bảng Tra Cứu Biến Môi Trường (Environment Variables)</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:34%;">Biến Môi Trường</th>
+                      <th>Mô tả tác dụng chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>LLM_SWITCHER_HOME</code></td>
+                      <td>Đường dẫn thư mục lưu trữ dữ liệu (config, token, shims, logs).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_CONFIG</code></td>
+                      <td>Chỉ định vị trí file <code>config.json</code> bên ngoài thư mục dữ liệu mặc định.</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_PORT</code></td>
+                      <td>Ghi đè cổng lắng nghe của Edge Gateway (ưu tiên: cờ <code>--port</code> &gt; env &gt; <code>config.port</code>).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_BLINDFOLD_PORT</code></td>
+                      <td>Ghi đè cổng lắng nghe của Blindfold TLS Interceptor (mặc định: 3457).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_STATE_DIR</code></td>
+                      <td>Tách riêng thư mục runtime launch flags và logs ra khỏi data directory.</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_BLINDFOLD_CERTS</code></td>
+                      <td>Đường dẫn tới thư mục chứa chứng chỉ CA (mặc định: <code>blindfold/certs/</code>).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_CODE_ASSIST_URL</code></td>
+                      <td>Địa chỉ máy chủ Google Code Assist nhận cuộc gọi phụ của agy (mặc định: <code>https://daily-cloudcode-pa.googleapis.com</code>).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_CODE_ASSIST_TIMEOUT_MS</code></td>
+                      <td>Thời gian chờ cho các cuộc gọi phụ của agy (mặc định: 300,000 ms = 5 phút).</td>
+                    </tr>
+                    <tr>
+                      <td><code>LLM_SWITCHER_BIFROST_RETRY_MS</code></td>
+                      <td>Thời gian chờ trước khi hỏi lại intact sau khi tra cứu Bifrost thất bại (mặc định: 30,000 ms).</td>
+                    </tr>
+                    <tr>
+                      <td><code>CLAUDE_CONFIG_DIR</code></td>
+                      <td>Thư mục cấu hình của Claude Code khi tìm <code>settings.json</code> để kiểm tra cảnh báo.</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </section>
 
-            <!-- 10. TROUBLESHOOTING & FAQ -->
+            <!-- 11. TROUBLESHOOTING & FAQ -->
             <section class="doc-section" id="doc-faq">
               <div class="doc-section-h">
                 <h2>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                  10. Xử Lý Sự Cố & Câu Hỏi Thường Gặp (FAQ)
+                  11. Xử Lý Sự Cố & Câu Hỏi Thường Gặp (FAQ)
                 </h2>
-                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">Troubleshooting</span>
+                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">Troubleshooting Playbook</span>
               </div>
               <div class="doc-prose">
                 <h3>Q1: Lỗi EADDRINUSE: Cổng 3456 hoặc 3457 đã bị tiến trình khác chiếm dụng?</h3>
                 <p>
-                  Chạy lệnh <code>switch doctor</code> để phát hiện tiến trình đang giữ cổng. Bạn có thể đổi cổng gateway sang cổng khác bất kỳ bằng lệnh: <code>switch port 8080</code> (gateway sẽ tự động cập nhật và khởi động lại).
+                  Chạy lệnh <code>switch doctor</code> để phát hiện tiến trình đang giữ cổng. Bạn có thể đổi cổng gateway sang cổng khác bất kỳ bằng lệnh: <code>switch port 8080</code> (gateway sẽ tự động cập nhật và khởi động lại). Nếu cổng Blindfold bị chiếm, đổi <code>blindfold.port</code> trong <code>config.json</code>.
                 </p>
 
                 <h3>Q2: Claude Code hiển thị banner "Custom API endpoint configured"?</h3>
@@ -2386,7 +3001,7 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
 
                 <h3>Q3: Lệnh <code>claude --resume</code> trong cửa sổ terminal mới không đi qua Gateway?</h3>
                 <p>
-                  Điều này xảy ra khi thư mục shims <code>~/.llm-switcher/bin</code> chưa được đặt lên đầu biến <code>PATH</code> của bạn. Hãy đảm bảo dòng <code>export PATH="$HOME/.llm-switcher/bin:$PATH"</code> có mặt trong <code>~/.bashrc</code> hoặc <code>~/.zshrc</code> và mở một terminal mới.
+                  Điều này xảy ra khi thư mục shims <code>~/.llm-switcher/bin</code> chưa được đặt lên đầu biến <code>PATH</code> của bạn. Hãy kiểm tra bằng lệnh <code>switch shim status</code> và đảm bảo dòng <code>export PATH="$HOME/.llm-switcher/bin:$PATH"</code> có mặt trong <code>~/.bashrc</code> hoặc <code>~/.zshrc</code> và mở một terminal mới.
                 </p>
 
                 <h3>Q4: Claude Code Remote Control (<code>claude rc</code>) có dùng được với Switcher không?</h3>
@@ -2405,6 +3020,26 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
                 <p>
                   LLM Switcher tự động tạo chứng chỉ bằng Node.js crypto khi bạn kích hoạt tool. Nếu muốn tạo thủ công bằng OpenSSL, hãy chạy lệnh <code>bash blindfold/make-certs.sh</code> trong <strong>Git Bash</strong> (không chạy trong PowerShell vì lệnh <code>New-SelfSignedCertificate</code> thiếu thuộc tính <code>serverAuth</code>).
                 </p>
+
+                <h3>Q6: Antigravity CLI báo lỗi 502 Bad Gateway khi gọi qua relay?</h3>
+                <p>
+                  Điều này xảy ra khi Gateway chưa khởi động hoặc phiên bản Gateway cũ hơn relay dẫn đến không vượt qua thử thách <code>gateway.secret</code>. Hãy chạy <code>switch off</code> rồi <code>switch on</code> để khởi động lại Gateway đồng bộ.
+                </p>
+
+                <h3>Q7: Màn hình <code>/model</code> của Codex không hiển thị đúng model mong muốn?</h3>
+                <p>
+                  Đảm bảo profile phục vụ Codex có trường <code>publicModels</code> khai báo danh sách tên model chính thức (ví dụ <code>["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]</code>) tương ứng với các slot <code>main</code>, <code>review</code>, <code>subagent</code> trong <code>defaultModels</code>.
+                </p>
+
+                <h3>Q8: Làm thế nào để gỡ cài đặt sạch sẽ hoặc khôi phục hoàn toàn về mặc định?</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>Terminal · Clean Uninstall</span></div>
+                  <pre>switch off                     # Khôi phục endpoint chính hãng
+switch shim uninstall          # Gỡ bỏ launcher shims
+switch service uninstall       # Gỡ bỏ OS background service
+switch plugin uninstall        # Gỡ bỏ các plugin hook thông báo
+npm uninstall -g llm-switcher  # Gỡ bỏ package npm (nếu cài qua npm)</pre>
+                </div>
               </div>
             </section>
           </div>
@@ -2749,7 +3384,7 @@ switch compact status              # Kiểm tra cấu hình hiện tại</pre>
     function handleRoute() {
       const hash = window.location.hash || '#/routes';
       const route = hash.replace(/^#\/?/, '').split('/')[0] || 'routes';
-      const validRoutes = ['routes', 'compact', 'goal-check', 'models', 'logs', 'doctor', 'docs'];
+      const validRoutes = ['routes', 'logs', 'models', 'docs', 'doctor', 'compact', 'goal-check'];
       const activeRoute = validRoutes.includes(route) ? route : 'routes';
 
       // Update active nav link

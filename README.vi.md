@@ -592,6 +592,24 @@ thể nén prefix lớn hơn; các turn liên tiếp dùng lại prefix ổn đ�
 Khi dùng intact, profile cần API key intact được cấp quyền. User-Agent chỉ chọn đường protocol
 gốc, không thay cho xác thực ở upstream.
 
+### Goal check (Cơ chế Veto Độc Lập Bằng Jev System One)
+
+Trong Claude Code, khi dùng lệnh `/goal`, hệ thống sử dụng một evaluator model chuyên biệt đọc
+transcript và đánh giá điều kiện đã hoàn thành hay chưa. Tuy nhiên, evaluator chỉ đọc văn bản và dễ
+bị ảo giác (hallucinate) — nhầm lẫn giữa việc *sửa báo cáo / rút finding* với việc *sửa code thật sự*
+(false completion).
+
+**Goal Check** chặn phản hồi của evaluator trước khi gửi về client, và gọi mô hình quyết định **Jev
+(System One)** chấm điểm độc lập trên 3 trục:
+- `complete` (>= 0.90): Toàn bộ công việc theo condition đã hoàn thành thực sự.
+- `evidence` (>= 0.85): Có kết quả thực thi tool trực tiếp chứng minh (chạy test, compile, sửa file).
+- `unfinished` (<= 0.10): Không còn công việc dang dở, lỗi chưa xử lý hoặc verification thiếu.
+
+**Nguyên tắc Fail-Closed:** Gateway chỉ trả về `ok: true` khi **cả hai bên** (evaluator gốc và Jev)
+đồng thuận. Mọi lỗi mạng, timeout, thiếu tool evidence hay schema không hợp lệ đều dẫn đến Veto
+(`ok: false`) tự động, yêu cầu agent tiếp tục thực hiện và cung cấp bằng chứng rõ ràng. Cấu hình tại
+tab **Goal Check** trên Web UI hoặc trường `goalCheck` trong `config.json`.
+
 ### Cập nhật
 
 Khi npm có bản mới, dashboard hiện một thông báo. Bấm **Update now** trong thông báo này. Gateway cài bản mới và chạy code mới. Sau đó dashboard tự tải lại. `switch update` làm việc tương tự từ terminal.
@@ -742,7 +760,7 @@ route.
       // Profile phục vụ Codex BẮT BUỘC có publicModels (xem Cấu hình ưu tiên Codex).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // tên chính thức cho main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // không bắt buộc: ghép một vai trò với tên public khác
-      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }
     },
     "agy-default": {
       "name": "agy qua intact",
@@ -756,6 +774,20 @@ route.
     }
   },
   "debug": false,
+  "idleCompact": {
+    "enabled": false,
+    "codex": false,
+    "idleMinutes": 15,
+    "minBytes": 65536,
+    "model": ""
+  },
+  "goalCheck": {
+    "enabled": false,
+    "backend": "jev",
+    "baseURL": "https://intact.example.com/v1",
+    "apiKey": "sk-...",
+    "model": "typesafe/jev-latest"
+  },
   "contractLab": {
     "url": "https://intact.example.com",
     "apiKey": "sk-...",
@@ -785,10 +817,33 @@ Trước khi gửi mẫu, gateway che mọi giá trị string bằng chuỗi `x`
 - `switch contract-probe [--model m]` gửi sáu request thử cho mỗi model và mỗi format qua gateway.
 - `switch contract-check` lấy các finding còn mở từ intact và ghi một file test cho mỗi field bị mất.
 
-### Tự cải thiện cùng intact
+### Tự cải thiện & Vận hành cùng intact (Upstream Pooler khuyên dùng)
 
-[intact](https://github.com/louisphamdev/intact) là proxy giữ credential mà gateway này có thể dùng làm upstream. Hai công cụ tự tìm và tự sửa lỗi của nhau theo hai vòng.
+[intact](https://github.com/louisphamdev/intact) là proxy giữ credential và pool đa tài khoản mà gateway này khuyên dùng làm upstream. Hai công cụ tự tìm và tự sửa lỗi của nhau theo hai vòng khép kín.
 
+#### Cài đặt nhanh intact
+```bash
+# Cài đặt toàn cục qua npm:
+npm install -g intact-gateway
+
+# Hoặc biên dịch từ nguồn Go (Zero-CGO, Pure-Go SQLite):
+git clone https://github.com/louisphamdev/intact.git && cd intact
+CGO_ENABLED=0 go build -o intact ./cmd/intact
+
+# Khởi chạy intact với SQLite database chỉ định:
+intact -db /opt/intact/intact.db -addr 127.0.0.1:20142
+```
+
+#### Thiết lập ban đầu cho intact:
+1. **Lấy mã TOTP:** Chạy `intact -db /opt/intact/intact.db -show-totp` và quét/nhập setup key vào Google Authenticator, 1Password hoặc Aegis.
+2. **Đăng nhập Dashboard:** Mở trình duyệt tại `http://127.0.0.1:20142`, nhập mã 6 số TOTP (bảo mật tuyệt đối, không dùng mật khẩu văn bản).
+3. **Thêm tài khoản:** Vào mục **Providers → Add**, thêm các nhà cung cấp API key (Groq, OpenRouter, Vertex, DeepSeek) hoặc OAuth coding tools (Claude Code, OpenAI Codex, Antigravity `agy`, GitHub Copilot).
+4. **Tạo API key:** Vào **Endpoint → API keys → Create**, tạo key mới dạng `sk-intact-...`.
+5. **Định tuyến trên LLM Switcher:** Mở `switch ui` ➔ Tab **Routes & Profiles** ➔ Bấm **+ Add Profile** ➔ Chọn template **intact** hoặc **agy on intact** để tự động điền cấu hình tối ưu.
+
+> 📖 **Cẩm nang toàn diện:** Để xem toàn bộ bảng tra cứu CLI flags, biến môi trường, file service systemd, cấu hình Cloudflare Tunnel và hướng dẫn vận hành chi tiết nhất, hãy mở Web UI (`switch ui`) và chuyển sang tab **Docs & Guide** (`#/docs`).
+
+#### 2 Vòng tự cải thiện giữa Switcher và intact:
 - **intact sửa những gì provider từ chối.** intact ghi lại mọi lỗi của provider và gom các lỗi lặp lại thành nhóm. Với 429 giả, intact gửi lại request lỗi và bỏ dần từng nửa system prompt. Đoạn nhỏ nhất mà provider từ chối được lưu thành filter trong database của intact. Mọi máy nhận bản sửa ngay, gateway này không cần cập nhật. Hai ví dụ: Antigravity trả 429 giả cho "You are Codex, an agent based on GPT-5" và cho "You are a Claude agent, built on Anthropic's Claude Agent SDK".
 - **Gateway này sửa những gì converter làm mất.** Khi bật contract lab, gateway gửi các mẫu đã che lên intact. intact so mỗi mẫu với request mà intact nhận được, rồi ghi lại mỗi field mà phép chuyển đổi làm mất. `switch contract-check` ghi một test đỏ cho mỗi finding, và bản sửa nằm trong converter.
 

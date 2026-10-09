@@ -597,6 +597,23 @@ reuse a stable prefix. Native Codex compaction remains Codex's own responsibilit
 When using intact, configure the profile with an authorized intact API key. Client User-Agent
 matching chooses the native protocol route; it does not replace upstream authentication.
 
+### Goal check (Jev System One evaluator veto)
+
+In Claude Code, when setting `/goal`, a specialized prompt-based evaluator reads the transcript and
+decides whether the condition was met. However, the evaluator only inspects text and can hallucinate
+completion — mistaking report editing or retracted audit findings for genuine code fixes (false completion).
+
+**Goal Check** intercepts the evaluator response before it reaches Claude Code, and queries the **Jev
+(System One)** decision model across 3 independent scoring axes:
+- `complete` (>= 0.90): The task condition is genuinely fulfilled.
+- `evidence` (>= 0.85): Concrete tool-execution results exist (test runs, builds, file edits).
+- `unfinished` (<= 0.10): No pending work, unaddressed errors, or missing verification.
+
+**Fail-Closed principle:** The gateway yields `ok: true` only when **both** the native evaluator and Jev
+agree. Any network error, timeout, missing evidence, or schema violation results in an automatic Veto
+(`ok: false`), instructing the agent to provide verifiable tool evidence. Configure via the **Goal Check**
+dashboard tab or `config.json` (`goalCheck`).
+
 ### Updates
 
 When npm has a newer release, the dashboard shows a notice. Click **Update now** in this notice. The gateway installs the release and starts the new code. Then the dashboard reloads. `switch update` does the same from a terminal.
@@ -749,7 +766,7 @@ of the routing.
       // A profile that serves Codex MUST have publicModels (see Codex-first setup).
       "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], // official names for main, review, subagent
       "codexRoles": { "review": "gpt-5.6-sol" }, // optional: pair one role with another public name
-      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" },
+      "defaultModels": { "main": "gemini-3.8-flash", "review": "gemini-3.7-flash-medium", "subagent": "gemini-3.6-flash-low" }
     },
     "agy-default": {
       "name": "agy via intact",
@@ -763,6 +780,20 @@ of the routing.
     }
   },
   "debug": false,
+  "idleCompact": {
+    "enabled": false,
+    "codex": false,
+    "idleMinutes": 15,
+    "minBytes": 65536,
+    "model": ""
+  },
+  "goalCheck": {
+    "enabled": false,
+    "backend": "jev",
+    "baseURL": "https://intact.example.com/v1",
+    "apiKey": "sk-...",
+    "model": "typesafe/jev-latest"
+  },
   "contractLab": {
     "url": "https://intact.example.com",
     "apiKey": "sk-...",
@@ -791,10 +822,33 @@ Before it sends a sample, the gateway masks every string value with `x` of the s
 - `switch contract-probe [--model m]` sends six test requests per model and format through the gateway.
 - `switch contract-check` gets the open findings from intact and writes one test file for each lost field.
 
-### Self-improvement with intact
+### Self-improvement & Operation with intact (Recommended Upstream Pooler)
 
-[intact](https://github.com/louisphamdev/intact) is the credential proxy that this gateway can use as its upstream. The two tools find and correct their own faults, in two loops.
+[intact](https://github.com/louisphamdev/intact) is the credential proxy and multi-account pooler that this gateway recommends as its upstream. The two tools find and correct their own faults, in two closed loops.
 
+#### Quick Install for intact
+```bash
+# Global install via npm:
+npm install -g intact-gateway
+
+# Or compile from Go source (Zero-CGO, Pure-Go SQLite):
+git clone https://github.com/louisphamdev/intact.git && cd intact
+CGO_ENABLED=0 go build -o intact ./cmd/intact
+
+# Run intact with a specified SQLite database:
+intact -db /opt/intact/intact.db -addr 127.0.0.1:20142
+```
+
+#### Initial Setup for intact:
+1. **Enroll TOTP:** Run `intact -db /opt/intact/intact.db -show-totp` and add the setup key to Google Authenticator, 1Password, or Aegis.
+2. **Sign In to Dashboard:** Open `http://127.0.0.1:20142`, enter the 6-digit TOTP code (zero password storage).
+3. **Add Accounts:** Under **Providers → Add**, connect API keys (Groq, OpenRouter, Vertex, DeepSeek) or coding tool OAuth accounts (Claude Code, OpenAI Codex, Antigravity `agy`, GitHub Copilot).
+4. **Create API Key:** Under **Endpoint → API keys → Create**, create a key starting with `sk-intact-...`.
+5. **Connect from Switcher:** Open `switch ui` ➔ **Routes & Profiles** ➔ **+ Add Profile** ➔ Click **intact** or **agy on intact** template to auto-fill the optimized profile configuration.
+
+> 📖 **Comprehensive Manual:** For full CLI flags, environment variables, systemd service units, Cloudflare Tunnel ingress configuration, and deep troubleshooting, open the Web UI (`switch ui`) and navigate to the **Docs & Guide** tab (`#/docs`).
+
+#### Two Self-Improvement Loops:
 - **intact corrects what providers refuse.** It records every provider error and groups the errors that recur. For a fake 429, intact replays the failing request and removes the system prompt text in halves. It keeps the smallest text that the provider refuses as a filter in its database. Every machine gets the fix at once, and this gateway needs no update. Two examples: Antigravity answered a fake 429 to "You are Codex, an agent based on GPT-5" and to "You are a Claude agent, built on Anthropic's Claude Agent SDK".
 - **This gateway corrects what its converter loses.** With the contract lab on, the gateway sends masked samples to intact. intact compares each sample with the request that it received, and records each field that the conversion lost. `switch contract-check` writes one failing test for each finding, and the fix goes into the converter.
 

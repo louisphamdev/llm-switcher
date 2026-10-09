@@ -124,10 +124,11 @@ test('documentation tab is properly integrated with sidebar navigation, sections
   // Table of Contents navigation exists
   assert.match(html, /<nav class="docs-toc" id="docsToc"/);
   
-  // All 10 core sections exist
+  // All 11 core sections exist
   const expectedSections = [
     'doc-overview',
     'doc-install',
+    'doc-intact',
     'doc-cli',
     'doc-blindfold',
     'doc-agy',
@@ -149,4 +150,9 @@ test('documentation tab is properly integrated with sidebar navigation, sections
   // Helper functions exist
   assert.match(html, /function copyDocCode\(/);
   assert.match(html, /function initDocsScrollSpy\(/);
+});
+
+test('sidebar menu is arranged logically by frequency of use', () => {
+  const navMatches = [...html.matchAll(/data-nav="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(navMatches, ['routes', 'logs', 'models', 'docs', 'doctor', 'compact', 'goal-check']);
 });
