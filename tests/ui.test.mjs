@@ -115,3 +115,38 @@ test('the 1M switch is gone from the slots, the card and the payload', () => {
   assert.doesNotMatch(functionBody('collectCurrentSlotValues'), /model1M\s*[,}]/);
   assert.doesNotMatch(html, /profilePayload\.model1M/);
 });
+
+test('documentation tab is properly integrated with sidebar navigation, sections, and helpers', () => {
+  // Sidebar navigation link
+  assert.match(html, /<a class="nav-link" href="#\/docs" data-nav="docs"/);
+  // View panel exists
+  assert.match(html, /<div id="view-docs" class="view-panel"/);
+  // Table of Contents navigation exists
+  assert.match(html, /<nav class="docs-toc" id="docsToc"/);
+  
+  // All 10 core sections exist
+  const expectedSections = [
+    'doc-overview',
+    'doc-install',
+    'doc-cli',
+    'doc-blindfold',
+    'doc-agy',
+    'doc-optimizers',
+    'doc-agent-mcp',
+    'doc-advanced',
+    'doc-config',
+    'doc-faq'
+  ];
+  for (const s of expectedSections) {
+    assert.match(html, new RegExp(`id="${s}"`), `Missing section ${s} in ui.html`);
+    assert.match(html, new RegExp(`href="#${s}"`), `Missing TOC link for ${s} in ui.html`);
+  }
+
+  // Hash router handles 'docs'
+  assert.match(html, /validRoutes\s*=\s*\[[^\]]*'docs'[^\]]*\]/);
+  assert.match(html, /activeRoute === 'docs'/);
+
+  // Helper functions exist
+  assert.match(html, /function copyDocCode\(/);
+  assert.match(html, /function initDocsScrollSpy\(/);
+});

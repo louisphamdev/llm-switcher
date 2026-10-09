@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.8 — 2026-10-09
+
+- **Dedicated Documentation & User Guide Hub (`#/docs`):** Integrated a full-featured, zero-dependency documentation viewer into the Web UI. Features a sticky scroll-spy table of contents, 1-click code copy with clipboard toast feedback, and 10 comprehensive guides covering edge gateway architecture, cross-platform installation, complete CLI cheatsheet, Blindfold TLS interception & CA safety guarantees, Antigravity CLI (`agy`) relay security, token optimizer interop with the Healer engine, Agent Skill (`SKILL.md`) & MCP server setup, Idle Compaction, Jev Goal Check gate, annotated `config.json` schema, and troubleshooting.
+- **Audit & Documentation Alignment:** Reconciled documentation across README, localized guides, agent skills, and Model Context Protocol definitions to strictly reflect v1.6.8 multi-active routing, zero-mutation invariants, and Bifrost passthrough dynamics.
+
 ## Release 1.6.7 — 2026-10-09
 
 - **Jev Goal Check Interception Gate:** Intercept Claude Code stopping condition evaluators (`/goal`) and verify task completion independently using Jev System One typed decision judgments (`complete`, `evidence`, `unfinished`). Fails closed on missing or unverified work, preventing premature completion claims when models merely edit reports rather than implementing fixes.

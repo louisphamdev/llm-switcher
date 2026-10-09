@@ -866,6 +866,200 @@
       .row { padding: 0.75rem 1rem; flex-wrap: wrap; }
       .pgrid { grid-template-columns: 1fr; }
     }
+
+    /* Documentation Tab Styles */
+    .docs-container {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 1.5rem;
+      align-items: start;
+    }
+    @media (max-width: 980px) {
+      .docs-container { grid-template-columns: 1fr; }
+      .docs-toc { position: static !important; max-height: none !important; }
+    }
+    .docs-toc {
+      position: sticky;
+      top: 5.5rem;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.85rem;
+      max-height: calc(100vh - 7rem);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      box-shadow: var(--shadow);
+    }
+    .docs-toc-title {
+      font-size: 0.74rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.25rem 0.5rem 0.5rem;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .docs-toc-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 500;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .docs-toc-link:hover {
+      color: var(--fg);
+      background: var(--card2);
+    }
+    .docs-toc-link.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-weight: 600;
+    }
+    .docs-content {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .doc-section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.35rem 1.5rem;
+      scroll-margin-top: 5.5rem;
+    }
+    .doc-section-h {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding-bottom: 0.85rem;
+      margin-bottom: 1.15rem;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    .doc-section-h h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin: 0;
+    }
+    .doc-section-h h2 svg {
+      width: 20px;
+      height: 20px;
+      color: var(--accent);
+      flex: none;
+    }
+    .doc-prose {
+      font-size: 0.88rem;
+      line-height: 1.65;
+      color: var(--fg);
+    }
+    .doc-prose p { margin-bottom: 0.85rem; }
+    .doc-prose p:last-child { margin-bottom: 0; }
+    .doc-prose h3 {
+      font-size: 0.96rem;
+      font-weight: 650;
+      color: var(--fg);
+      margin: 1.25rem 0 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .doc-prose ul, .doc-prose ol {
+      margin: 0.4rem 0 0.85rem 1.4rem;
+    }
+    .doc-prose li {
+      margin-bottom: 0.35rem;
+    }
+    .doc-codebox {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin: 0.75rem 0 1rem;
+      overflow: hidden;
+    }
+    .doc-codebox-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.35rem 0.75rem;
+      background: var(--card2);
+      border-bottom: 1px solid var(--line);
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-family: var(--font-mono);
+    }
+    .doc-codebox pre {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: var(--fg);
+    }
+    .doc-callout {
+      border-left: 3px solid;
+      border-radius: 0 8px 8px 0;
+      padding: 0.75rem 1rem;
+      margin: 0.85rem 0;
+      font-size: 0.84rem;
+      line-height: 1.55;
+      background: var(--card2);
+    }
+    .doc-callout.info {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .doc-callout.warning {
+      border-color: var(--warn);
+      background: var(--warn-soft);
+    }
+    .doc-callout.success {
+      border-color: var(--ok);
+      background: var(--ok-soft);
+    }
+    .doc-callout.danger {
+      border-color: var(--err);
+      background: var(--err-soft);
+    }
+    .doc-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.85rem 0 1.15rem;
+      font-size: 0.82rem;
+    }
+    .doc-table th, .doc-table td {
+      border: 1px solid var(--line);
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+    }
+    .doc-table th {
+      background: var(--card2);
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .doc-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
   </style>
 </head>
 <body>
@@ -925,6 +1119,10 @@
       <a class="nav-link" href="#/doctor" data-nav="doctor">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
         System Doctor
+      </a>
+      <a class="nav-link" href="#/docs" data-nav="docs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10M6 10h10M6 14h7"/></svg>
+        Docs & Guide
       </a>
     </nav>
 
@@ -1536,6 +1734,682 @@
           </div>
         </div>
       </div>
+
+      <!-- VIEW 7: Documentation & Guide -->
+      <div id="view-docs" class="view-panel" style="display:none;">
+        <div class="docs-container">
+          <!-- Sticky Quick Index TOC -->
+          <nav class="docs-toc" id="docsToc" aria-label="Documentation Index">
+            <div class="docs-toc-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10M6 10h10"/></svg>
+              <span>Mục Lục Hướng Dẫn</span>
+            </div>
+            <a class="docs-toc-link active" href="#doc-overview">1. Tổng Quan & Kiến Trúc</a>
+            <a class="docs-toc-link" href="#doc-install">2. Hướng Dẫn Cài Đặt</a>
+            <a class="docs-toc-link" href="#doc-cli">3. Lệnh CLI & Vận Hành</a>
+            <a class="docs-toc-link" href="#doc-blindfold">4. Blindfold Mode & CA</a>
+            <a class="docs-toc-link" href="#doc-agy">5. Antigravity CLI (agy)</a>
+            <a class="docs-toc-link" href="#doc-optimizers">6. Tối Ưu Token & Healer</a>
+            <a class="docs-toc-link" href="#doc-agent-mcp">7. Agent Skill & MCP Server</a>
+            <a class="docs-toc-link" href="#doc-advanced">8. Compaction & Goal Check</a>
+            <a class="docs-toc-link" href="#doc-config">9. Cấu Hình config.json</a>
+            <a class="docs-toc-link" href="#doc-faq">10. Xử Lý Sự Cố (FAQ)</a>
+          </nav>
+
+          <!-- Main Documentation Content -->
+          <div class="docs-content">
+            <!-- 1. OVERVIEW & ARCHITECTURE -->
+            <section class="doc-section" id="doc-overview">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                  1. Tổng Quan & Kiến Trúc Cốt Lõi
+                </h2>
+                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">v1.6.8 · Zero-Dependency</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  <strong>LLM Switcher</strong> là cổng ngõ biên (Edge Gateway) và bộ chuyển đổi đa giao thức LLM siêu nhẹ, hoàn toàn <strong>Zero-Dependency</strong> (xây dựng 100% bằng thư viện chuẩn của Node.js, không cần chạy <code>npm install</code>, khởi động &lt;50ms). Hệ thống đóng vai trò cầu nối thông minh và trong suốt giữa các AI Coding CLI hàng đầu (<strong>Claude Code</strong>, <strong>OpenAI Codex</strong>, <strong>Antigravity CLI <code>agy</code></strong>) với mọi nhà cung cấp mô hình LLM (OpenAI-compatible, Anthropic Native, Vertex Native, Google Code Assist).
+                </p>
+
+                <div class="doc-callout info">
+                  <strong>Tại sao bạn cần LLM Switcher?</strong> Các proxy trung gian thông thường thường làm biến dạng giao thức phản hồi: làm mất khối suy luận <code>thinking_delta</code>, cắt vụn arguments của tool calls, làm lệch cache hoặc khiến Claude Code / Codex hiện banner cảnh báo "custom API endpoint". LLM Switcher chạy ngay trên máy cục bộ (<code>127.0.0.1:3456</code> và <code>:3457</code>), thực hiện <strong>100% Native Emulation</strong> và tự chữa lành (Self-Healing) payload mà tuyệt đối không sửa file cấu hình gốc của công cụ.
+                </div>
+
+                <h3>Kiến Trúc Luồng Dữ Liệu</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>Topology · Luồng Xử Lý Yêu Cầu</span></div>
+                  <pre>[Claude Code / Codex / agy CLI]
+       │ (1. Khởi chạy qua Launcher Shim: nạp HTTPS_PROXY & CA in-memory)
+       ▼
+[Blindfold Interceptor :3457] ──(TLS giải mã nội bộ cho anthropic/openai)
+       │ (2. Strip credential client, chuyển tiếp /v1/messages, /v1/responses)
+       ▼
+[LLM Switcher Edge Gateway :3456]
+       │ ├── Healer Engine (Tự sửa schema rỗng {}, cứu tool_result mồ côi, gộp lượt)
+       │ ├── Protocol IR Engine (Chuyển đổi 2 chiều Anthropic &lt;=&gt; OpenAI &lt;=&gt; Vertex)
+       │ └── Bifrost Engine (Chuyển tiếp nguyên vẹn nếu gọi đúng model của hãng qua intact)
+       ▼
+[Upstream Provider: intact (Khuyên dùng) / 9Router / Vertex / DeepSeek / Direct]</pre>
+                </div>
+
+                <h3>4 Trụ Cột Đột Phá Của Hệ Thống</h3>
+                <ul>
+                  <li><strong>100% Native Emulation:</strong> Chuyển đổi mọi phản hồi từ upstream thành luồng Anthropic SSE chuẩn (<code>thinking_delta</code> + <code>tool_use</code>) cho Claude Code, và Responses API events chuẩn cho Codex.</li>
+                  <li><strong>Zero Config Mutation:</strong> Tuyệt đối không đọc/ghi <code>~/.claude/settings.json</code> hay <code>~/.codex/config.toml</code>. Không bao giờ xuất hiện banner cảnh báo của nhà cung cấp.</li>
+                  <li><strong>Cửa Sổ Context Theo Model Thực Tế:</strong> Tự động phát hiện cửa sổ ngữ cảnh chính thức từ upstream (ví dụ 1M tokens), truyền đúng <code>max_context_window</code> và <code>context_window</code> trong <code>/v1/models</code> để Codex tự tin lập kế hoạch và nén lịch sử chính xác.</li>
+                  <li><strong>Bifrost Passthrough:</strong> Khi bạn dùng tài khoản của chính nhà cung cấp đó trên pool của <a href="https://github.com/louisphamdev/intact" target="_blank" style="color:var(--accent);">intact</a>, request sẽ đi xuyên qua nguyên vẹn 100% byte-for-byte, bỏ qua bộ dịch giao thức và Healer, chỉ thay đổi API key an toàn.</li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- 2. INSTALLATION GUIDE -->
+            <section class="doc-section" id="doc-install">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                  2. Hướng Dẫn Cài Đặt Đa Nền Tảng
+                </h2>
+                <span class="badge" style="background:var(--ok-soft); color:var(--ok); font-weight:600;">Linux · macOS · Windows</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  <strong>Yêu cầu hệ thống:</strong> Node.js phiên bản <strong>18.17 trở lên</strong>. Gateway không yêu cầu bất kỳ thư viện npm phụ thuộc nào bên ngoài.
+                </p>
+
+                <h3>Cách 1: Cài Đặt Toàn Cục Qua npm (Khuyên dùng)</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · npm global install</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'npm install -g llm-switcher\nmkdir -p -m 700 ~/.llm-switcher\ncp &quot;$(npm root -g)/llm-switcher/config.example.json&quot; ~/.llm-switcher/config.json')">Copy</button>
+                  </div>
+                  <pre>npm install -g llm-switcher
+
+# Khởi tạo thư mục dữ liệu và sao chép cấu hình mẫu:
+mkdir -p -m 700 ~/.llm-switcher
+cp "$(npm root -g)/llm-switcher/config.example.json" ~/.llm-switcher/config.json</pre>
+                </div>
+                <p>
+                  <em>Ghi chú:</em> Khi cài đặt qua npm, file cấu hình <code>config.json</code>, khóa token <code>admin.token</code> và các file khởi chạy được lưu trữ an toàn trong <code>~/.llm-switcher</code>. Khi bạn chạy lệnh nâng cấp (update), cấu hình của bạn được giữ nguyên vẹn.
+                </p>
+
+                <h3>Cách 2: Cài Đặt Từ Git Clone (Dành cho Developer)</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Git Checkout</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'git clone https://github.com/louisphamdev/llm-switcher.git\ncd llm-switcher\ncp config.example.json config.json')">Copy</button>
+                  </div>
+                  <pre>git clone https://github.com/louisphamdev/llm-switcher.git
+cd llm-switcher
+
+# Sao chép file cấu hình (config.json được gitignore bảo vệ an toàn):
+cp config.example.json config.json</pre>
+                </div>
+
+                <h3>Cài Đặt Launcher Shims (Bắt buộc để định tuyến trong suốt)</h3>
+                <p>
+                  Lệnh <code>switch shim install</code> tạo các wrapper siêu nhẹ trong <code>~/.llm-switcher/bin</code> để tiêm biến môi trường vào tiến trình CLI mà không can thiệp vào shell hay file cài đặt của hệ thống.
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Cấu hình PATH</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch shim install\n# Linux / macOS: thêm vào ~/.bashrc hoặc ~/.zshrc:\nexport PATH=&quot;$HOME/.llm-switcher/bin:$PATH&quot;')">Copy</button>
+                  </div>
+                  <pre>switch shim install
+
+# Linux & macOS: Thêm dòng sau vào ~/.bashrc hoặc ~/.zshrc rồi mở terminal mới:
+export PATH="$HOME/.llm-switcher/bin:$PATH"
+
+# Windows (Command Prompt): Đặt đường dẫn sau lên trước trong PATH User:
+%USERPROFILE%\.llm-switcher\bin</pre>
+                </div>
+
+                <h3>Cài Đặt Dịch Vụ Nền Tự Khởi Động (OS Background Service)</h3>
+                <p>
+                  Tự động đăng ký dịch vụ chạy ngầm cùng hệ điều hành: <code>systemd</code> (Linux), <code>launchd</code> (macOS) hoặc <code>Task Scheduler</code> (Windows).
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Service Install</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch service install --autoupdate')">Copy</button>
+                  </div>
+                  <pre># Cài đặt dịch vụ chạy ngầm kèm cờ tự động cập nhật bản mới khi đăng nhập:
+switch service install --autoupdate
+
+# Kiểm tra trạng thái hoặc gỡ bỏ khi không dùng:
+switch service uninstall</pre>
+                </div>
+                <div class="doc-callout info">
+                  <strong>Mẹo cho máy chủ Linux (SSH):</strong> Để dịch vụ systemd user service tiếp tục chạy cả khi bạn ngắt kết nối SSH, hãy chạy lệnh: <code>loginctl enable-linger $USER</code> một lần duy nhất.
+                </div>
+              </div>
+            </section>
+
+            <!-- 3. CLI & OPERATION GUIDE -->
+            <section class="doc-section" id="doc-cli">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                  3. Hướng Dẫn Sử Dụng & Bảng Tra Cứu Lệnh CLI
+                </h2>
+                <span class="badge" style="background:var(--card2); color:var(--muted);">Cheatsheet</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  CLI <code>switch</code> cung cấp giao diện quản trị đồng nhất trên toàn bộ các hệ điều hành:
+                </p>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th style="width:38%;">Lệnh CLI</th>
+                      <th>Mô tả chức năng chi tiết</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>switch on [profile]</code></td>
+                      <td>Khởi động Gateway và kích hoạt profile (mặc định nếu không truyền tên).</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch off</code></td>
+                      <td>Dừng hoàn toàn Gateway và khôi phục các công cụ về endpoint chính hãng.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch off claude | codex | agy</code></td>
+                      <td>Tắt chuyển đổi cho một công cụ cụ thể; các công cụ còn lại vẫn tiếp tục hoạt động.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch ui</code></td>
+                      <td>Mở giao diện Web Dashboard trên trình duyệt mặc định kèm access token an toàn.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch status</code></td>
+                      <td>Hiển thị trạng thái hoạt động và cấu hình routing của cả 3 công cụ CLI.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch &lt;profile&gt;</code></td>
+                      <td>Kích hoạt cùng một profile cho cả Claude Code và Codex.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch claude &lt;profile&gt;</code></td>
+                      <td>Kích hoạt profile chỉ định riêng cho <strong>Claude Code</strong>.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch codex &lt;profile&gt;</code></td>
+                      <td>Kích hoạt profile chỉ định riêng cho <strong>OpenAI Codex</strong>.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch agy &lt;profile&gt;</code></td>
+                      <td>Kích hoạt profile chỉ định riêng cho <strong>Antigravity CLI</strong>.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch doctor</code></td>
+                      <td>Quét chẩn đoán: kiểm tra loopback binding, xung đột port, rò rỉ biến môi trường và phiên CLI đang chạy.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch update</code></td>
+                      <td>Tải và nâng cấp lên bản phát hành mới nhất từ npm/git, khởi động lại gateway không làm rớt phiên.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch port &lt;số&gt;</code></td>
+                      <td>Đổi cổng lắng nghe của Gateway (mặc định: 3456) và tự động khởi động lại service.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch shim status</code></td>
+                      <td>Kiểm tra tình trạng các launcher shim và phát hiện phiên CLI chạy lọt ra ngoài.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch plugin install</code></td>
+                      <td>Cài đặt thông báo trạng thái định tuyến bên trong Claude Code, Codex và agy.</td>
+                    </tr>
+                    <tr>
+                      <td><code>switch compact [on|off]</code></td>
+                      <td>Bật / tắt tính năng nén lịch sử hội thoại khi idle lâu ngày.</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="doc-callout warning">
+                  <strong>Quy tắc quan trọng về môi trường:</strong> Tuyệt đối <em>không</em> thêm <code>source env.sh</code> hay <code>call env.cmd</code> vào file rc của shell. Các biến định tuyến được tự động tiêm độc lập vào từng phiên CLI thông qua các wrapper shim trong <code>~/.llm-switcher/bin</code>.
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. BLINDFOLD MODE & CA SECURITY -->
+            <section class="doc-section" id="doc-blindfold">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  4. Blindfold Mode & Bảo Mật Chứng Chỉ CA
+                </h2>
+                <span class="badge" style="background:var(--mint); color:#042f2e; font-weight:600;">Port :3457 · Zero-Warning</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  Trên Codex CLI, khi bạn ghi đè Base URL theo cách thông thường, giao diện <code>/model</code> sẽ hiển thị một dòng cảnh báo phiền toái: <em>"base URL is overridden to http://... Selecting models may not be supported..."</em>.
+                </p>
+                <p>
+                  <strong>Blindfold Mode</strong> giải quyết triệt để vấn đề này. Codex và Claude Code tiếp tục gửi request đến endpoint chính hãng, trong khi LLM Switcher đánh chặn ở tầng mạng thông qua proxy trung gian <code>HTTPS_PROXY=http://127.0.0.1:3457</code>.
+                </p>
+
+                <h3>Bảng Định Tuyến Cố Định Của Interceptor (:3457)</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th>Domain Đích (CONNECT Host)</th>
+                      <th>Đường Dẫn Bị Đánh Chặn (Về Gateway :3456)</th>
+                      <th>Đường Dẫn Còn Lại (Tunnel Ra Internet Thật)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>api.anthropic.com</code></td>
+                      <td><code>/v1/messages</code>, <code>/v1/messages/*</code></td>
+                      <td>Đăng nhập OAuth, telemetry, billing (giữ nguyên vẹn)</td>
+                    </tr>
+                    <tr>
+                      <td><code>api.openai.com</code></td>
+                      <td><code>/v1/responses</code>, <code>/v1/models</code></td>
+                      <td>Tài khoản, đăng nhập, thanh toán (giữ nguyên vẹn)</td>
+                    </tr>
+                    <tr>
+                      <td><code>chatgpt.com</code></td>
+                      <td><code>/backend-api/codex/*</code> (được chuẩn hóa thành <code>/v1</code>)</td>
+                      <td>Mọi request web và session khác (giữ nguyên vẹn)</td>
+                    </tr>
+                    <tr>
+                      <td><em>Mọi domain khác (Google, GitHub, Web)</em></td>
+                      <td><em>Không chặn</em></td>
+                      <td>Tunnel thẳng ra Internet dạng raw TCP, không đọc dữ liệu</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <h3>🔒 Cam Kết An Toàn & Cô Lập Chứng Chỉ CA</h3>
+                <ul>
+                  <li><strong>Tự sinh 100% tại máy cục bộ:</strong> Cặp khóa <code>ca.pem</code> và <code>ca.key</code> được tự động tạo lần đầu bằng thư viện crypto chuẩn của Node.js. Private key được bảo vệ với quyền nghiêm ngặt <code>0600</code>.</li>
+                  <li><strong>Không can thiệp vào Hệ Điều Hành:</strong> Tuyệt đối <em>không</em> cài chứng chỉ vào Windows Certificate Store, macOS Keychain hay Linux <code>/etc/ssl/certs</code>. Bạn <strong>không cần quyền root hay Administrator</strong>.</li>
+                  <li><strong>Chỉ tin cậy trong phạm vi tiến trình (Process-Scoped):</strong> Chứng chỉ chỉ được tiêm vào bộ nhớ RAM của <code>claude</code> (qua <code>NODE_EXTRA_CA_CERTS</code>) và <code>codex</code> (qua <code>CODEX_CA_CERTIFICATE</code>). Trình duyệt web và ứng dụng khác hoàn toàn không tin cậy chứng chỉ này.</li>
+                  <li><strong>Ràng buộc tên miền mật mã học (X.509 Name Constraints):</strong> CA được cấu hình bắt buộc chỉ cho phép ký duy nhất cho 3 domain: <code>api.anthropic.com</code>, <code>api.openai.com</code>, và <code>chatgpt.com</code>. Ngay cả khi lộ private key, mọi kết nối tới ngân hàng, Google, GitHub đều bị từ chối ngay lập tức.</li>
+                  <li><strong>Bảo toàn chứng chỉ VPN / Doanh nghiệp:</strong> Nếu máy bạn có sẵn CA công ty trong <code>NODE_EXTRA_CA_CERTS</code>, script <code>ensure-ca-bundle.mjs</code> sẽ tự động gộp cả 2 chứng chỉ vào một bundle tạm thời, không bao giờ làm đứt mạng nội bộ.</li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- 5. ANTIGRAVITY CLI (AGY) -->
+            <section class="doc-section" id="doc-agy">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                  5. Cấu Hình Antigravity CLI (agy) & Tiếp Sức An Toàn
+                </h2>
+                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">CLOUD_CODE_URL · Relay Proof</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  <strong>Antigravity CLI (<code>agy</code>)</strong> là client dòng lệnh của Google Antigravity. agy đọc biến môi trường <code>CLOUD_CODE_URL</code> và gửi các cuộc gọi Code Assist tới địa chỉ đó. Nhờ vậy, agy không cần thiết lập proxy mạng và không cần chứng chỉ TLS.
+                </p>
+
+                <h3>Quy Trình Thiết Lập Cho agy</h3>
+                <ol>
+                  <li>Đăng nhập agy bằng tài khoản Google của bạn (agy cần phiên đăng nhập này cho các tác vụ nội bộ).</li>
+                  <li>Tạo một profile có <code>"tool": "agy"</code> trong tab Routes (hoặc dùng template có sẵn <strong>agy on intact</strong>).</li>
+                  <li>Kích hoạt định tuyến và khởi chạy:
+                    <div class="doc-codebox">
+                      <div class="doc-codebox-bar">
+                        <span>Terminal · agy setup</span>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'switch shim install\nswitch agy &lt;profile&gt;\nagy')">Copy</button>
+                      </div>
+                      <pre>switch shim install
+switch agy &lt;profile&gt;
+agy</pre>
+                    </div>
+                  </li>
+                </ol>
+
+                <h3>Phân Luồng Yêu Cầu Của agy</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th>Loại Cuộc Gọi</th>
+                      <th>Đích Đến Xử Lý</th>
+                      <th>Ghi Chú Xác Thực</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Agent turn (<code>requestType: "agent"</code>)</td>
+                      <td>Profile của agy trên Switcher (Bifrost intact hoặc convert sang upstream)</td>
+                      <td>Mang API key của profile, không bao giờ mang token Google</td>
+                    </tr>
+                    <tr>
+                      <td>Checkpoint summary, model list, quota, đăng nhập</td>
+                      <td>Google Code Assist chính thức</td>
+                      <td>Giữ nguyên vẹn token và headers Google của bạn</td>
+                    </tr>
+                    <tr>
+                      <td>Mọi cuộc gọi khi agy đang tắt (<code>switch off agy</code>)</td>
+                      <td>Google Code Assist chính thức</td>
+                      <td>Gọi thẳng trực tiếp</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="doc-callout info">
+                  <strong>Bảo vệ Token bằng Relay (<code>agy-relay.mjs</code>):</strong> Do agy gửi token xác thực dạng cleartext tới <code>CLOUD_CODE_URL</code>, shim của Switcher khởi chạy agy đằng sau một relay loopback chuyên dụng. Relay này bắt buộc Gateway phải cung cấp bằng chứng mã hóa dựa trên <code>gateway.secret</code> trước khi chuyển token. Nếu gateway chưa chứng minh được danh tính, agy sẽ nhận mã lỗi 502 và token không bao giờ bị phát tán.
+                </div>
+              </div>
+            </section>
+
+            <!-- 6. TOKEN OPTIMIZERS & HEALER ENGINE -->
+            <section class="doc-section" id="doc-optimizers">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+                  6. Tối Ưu Token & Healer Engine
+                </h2>
+                <span class="badge" style="background:var(--ok-soft); color:var(--ok); font-weight:600;">Headroom · RTK · Ponytail</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  Các công cụ cắt tỉa prompt như <strong>Headroom</strong>, <strong>RTK (Rust Token Killer)</strong> và <strong>Ponytail</strong> cố gắng giảm input tokens bằng cách xóa bớt lịch sử hội thoại hoặc dòng lệnh. Tuy nhiên, hành động này thường <strong>phá vỡ đồ thị tin nhắn</strong>:
+                </p>
+                <ul>
+                  <li><strong>Orphaned <code>tool_result</code>:</strong> Optimizer xóa mất lượt <code>assistant</code> chứa <code>tool_use</code> nhưng lại giữ lại lượt <code>user</code> chứa <code>tool_result</code> $\implies$ Anthropic lập tức văng lỗi <code>HTTP 400 (tool_use_id does not correspond to any tool_use)</code>.</li>
+                  <li><strong>Consecutive <code>user</code> turns:</strong> Xóa các lượt trung gian khiến 2 lượt <code>user</code> đứng liền nhau $\implies$ Vi phạm quy tắc luân phiên role của Anthropic gây crash <code>HTTP 400</code>.</li>
+                  <li><strong>Reasoning Suppression:</strong> Tự ý gọt bỏ tham số <code>thinking</code> hoặc budget để tiết kiệm token $\implies$ Khiến các model tư duy sâu (Opus, Gemini Flash) trở nên nông cạn, trả lời ngắn cũn và lỗi code.</li>
+                </ul>
+
+                <h3>Mô Hình Phân Tầng Bắt Buộc</h3>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>Kiến trúc tầng bảo vệ</span></div>
+                  <pre>[CLI Agent] ──> [Optimizer Proxy: Headroom / RTK] ──> [LLM Switcher :3456] ──> [Internet / Upstream]
+                                                        │
+                                                        ├── 1. Tự chữa lành tool_result mồ côi thành text
+                                                        ├── 2. Tự gộp các lượt cùng role liên tiếp
+                                                        ├── 3. Tự phục hồi tham số suy luận thinking
+                                                        └── 4. Giữ nguyên 100% tracing headers (x-rtk-*)</pre>
+                </div>
+
+                <h3>Ma Trận Bảo Vệ Của Healer Engine</h3>
+                <table class="doc-table">
+                  <thead>
+                    <tr>
+                      <th>Tình Huống Lỗi Do Optimizer Gây Ra</th>
+                      <th>Gọi Trực Tiếp Upstream</th>
+                      <th>Đi Qua LLM Switcher (Healer Engine)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Lượt <code>tool_result</code> bị mồ côi</td>
+                      <td>❌ <strong>HTTP 400 Crash</strong></td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Tự chuyển thành text block <code>[Tool Result (id)]</code></td>
+                    </tr>
+                    <tr>
+                      <td>Hai lượt <code>user</code> đứng liền kề</td>
+                      <td>❌ <strong>HTTP 400 Crash</strong></td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Tự gộp nội dung thành một lượt hợp lệ</td>
+                    </tr>
+                    <tr>
+                      <td>Tham số <code>thinking</code> bị optimizer cắt</td>
+                      <td>⚠️ <strong>Suy luận hời hợt</strong></td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Tự phát hiện reasoning model và bù lại thinking budget</td>
+                    </tr>
+                    <tr>
+                      <td>Schema rỗng <code>{}</code> của Gemini/Vertex</td>
+                      <td>❌ <strong>HTTP 400 Schema Error</strong></td>
+                      <td>✅ <strong>HTTP 200 OK:</strong> Tự bổ sung type string tương thích</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <h3>Cấu Hình Chuỗi Cho Các Optimizer</h3>
+                <p>
+                  <strong>Headroom (headroom.yaml hoặc biến môi trường):</strong>
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>headroom config</span></div>
+                  <pre>ANTHROPIC_BASE_URL="http://127.0.0.1:3456"
+OPENAI_BASE_URL="http://127.0.0.1:3456/v1"</pre>
+                </div>
+                <p>
+                  <strong>RTK (Rust Token Killer):</strong>
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>rtk config</span></div>
+                  <pre>export UPSTREAM_URL="http://127.0.0.1:3456"</pre>
+                </div>
+              </div>
+            </section>
+
+            <!-- 7. AGENT SKILL & MCP SERVER -->
+            <section class="doc-section" id="doc-agent-mcp">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/></svg>
+                  7. Tích Hợp Agent Skill & MCP Server
+                </h2>
+                <span class="badge" style="background:var(--accent-soft); color:var(--accent); font-weight:600;">Control-Plane Assets</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  Để đảm bảo các AI Agent tự hành (Claude Code, Cursor, Opencode, Windsurf) không bao giờ tự ý sửa đổi file cấu hình hệ thống hoặc bypass Gateway, LLM Switcher cung cấp 2 tài nguyên chuẩn hóa:
+                </p>
+
+                <h3>1. Agent Skill (<code>skills/llm-switcher/SKILL.md</code>)</h3>
+                <p>
+                  Tập luật bắt buộc dạy cho AI Agent:
+                </p>
+                <ul>
+                  <li>Mọi request LLM và proxy nén token phải trỏ về <code>http://127.0.0.1:3456</code>.</li>
+                  <li>Tuyệt đối không sửa <code>~/.claude/settings.json</code> hay <code>~/.codex/config.toml</code>.</li>
+                  <li>Không bao giờ hướng dẫn sub-agent chạy <code>source env.sh</code>.</li>
+                </ul>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>Terminal · Cài đặt Skill</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'cp -r skills/llm-switcher ~/.config/opencode/skills/\ncp -r skills/llm-switcher ~/.claude/skills/')">Copy</button>
+                  </div>
+                  <pre># Cài đặt cho Opencode:
+cp -r skills/llm-switcher ~/.config/opencode/skills/
+
+# Cài đặt cho Claude Code:
+cp -r skills/llm-switcher ~/.claude/skills/</pre>
+                </div>
+
+                <h3>2. MCP Server (<code>mcp.mjs</code>)</h3>
+                <p>
+                  Server đạt chuẩn Model Context Protocol hoạt động qua <code>stdio JSON-RPC 2.0</code> (không cần dependencies). Thêm vào cấu hình MCP (ví dụ <code>opencode.jsonc</code> hoặc <code>claude_desktop_config.json</code>):
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>opencode.jsonc / claude_desktop_config.json</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, '{\n  &quot;mcp&quot;: {\n    &quot;llm-switcher&quot;: {\n      &quot;type&quot;: &quot;local&quot;,\n      &quot;command&quot;: [&quot;node&quot;, &quot;/path/to/llm-switcher/mcp.mjs&quot;],\n      &quot;enabled&quot;: true\n    }\n  }\n}')">Copy</button>
+                  </div>
+                  <pre>{
+  "mcp": {
+    "llm-switcher": {
+      "type": "local",
+      "command": ["node", "/path/to/llm-switcher/mcp.mjs"],
+      "enabled": true
+    }
+  }
+}</pre>
+                </div>
+
+                <h3>5 Công Cụ MCP Có Sẵn</h3>
+                <ul>
+                  <li><code>switcher_status</code>: Kiểm tra trạng thái cổng Gateway và profile đang kích hoạt cho từng tool.</li>
+                  <li><code>switcher_audit</code>: Quét toàn diện môi trường máy trạm để phát hiện các request gọi thẳng ra ngoài hoặc tool nén token cấu hình sai.</li>
+                  <li><code>switcher_switch_profile</code>: Đổi profile linh hoạt theo từng CLI (<code>claude</code>, <code>codex</code>, <code>agy</code>).</li>
+                  <li><code>switcher_recent_logs</code>: Xem ring buffer các request gần nhất, độ trễ, số token và kết quả bóc tách reasoning block.</li>
+                  <li><code>switcher_models</code>: Lấy danh mục mô hình mới nhất từ Claude Code và Codex, hỗ trợ đồng bộ động từ upstream.</li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- 8. ADVANCED FEATURES: COMPACTION & GOAL CHECK -->
+            <section class="doc-section" id="doc-advanced">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                  8. Tính Năng Nâng Cao: Compaction & Goal Check
+                </h2>
+                <span class="badge" style="background:var(--card2); color:var(--muted);">Pro Features</span>
+              </div>
+              <div class="doc-prose">
+                <h3>A. Idle Compaction (Nén Prefix Khi Nhàn Rỗi)</h3>
+                <p>
+                  Khi một phiên làm việc dừng lại quá lâu (&gt;15 phút mặc định), prompt cache của các nhà cung cấp LLM (Anthropic: 5 phút, OpenAI: 30 phút, Gemini: 1 giờ) sẽ hết hạn (cold cache). Request tiếp theo sẽ phải thanh toán toàn bộ chi phí token input ban đầu mà không được hưởng giảm giá cache.
+                </p>
+                <p>
+                  <strong>Idle Compaction</strong> phát hiện thời gian nhàn rỗi và tự động nén gọn prefix lịch sử cũ, lưu cache xác thực trong <code>STATE_DIR/idle-compact</code> mà không chạm vào file JSONL của Claude hay SQLite của Codex.
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar"><span>Terminal · Quản trị Compaction</span></div>
+                  <pre>switch compact on                  # Kích hoạt nén cho Claude Code
+switch compact codex on            # Kích hoạt nén cho Codex
+switch compact idle 20             # Đặt ngưỡng nhàn rỗi là 20 phút (1-1440)
+switch compact status              # Kiểm tra cấu hình hiện tại</pre>
+                </div>
+
+                <h3>B. Goal Check: Cơ Chế Veto Độc Lập Bằng Jev System One</h3>
+                <p>
+                  Trong Claude Code, khi dùng lệnh <code>/goal</code>, mô hình evaluator đọc transcript và có nguy cơ bị đánh lừa: coi việc <em>sửa báo cáo (rút finding)</em> là <em>đã sửa code thật</em> và vội vàng đánh dấu hoàn thành (False Completion).
+                </p>
+                <p>
+                  <strong>Goal Check</strong> chặn phản hồi của evaluator trước khi gửi về client, đồng thời gọi mô hình quyết định <strong>Jev (System One)</strong> chấm điểm trên 3 trục độc lập:
+                </p>
+                <ul>
+                  <li><code>complete</code> $\ge 0.90$: Công việc theo condition đã hoàn thành thực sự.</li>
+                  <li><code>evidence</code> $\ge 0.85$: Có tool-result trực tiếp chứng minh kết quả thực thi (chạy test, compile...).</li>
+                  <li><code>unfinished</code> $\le 0.10$: Không còn công việc dang dở hoặc lỗi chưa xử lý.</li>
+                </ul>
+                <div class="doc-callout success">
+                  <strong>Nguyên tắc Fail-Closed:</strong> Gateway chỉ trả về <code>ok: true</code> khi cả evaluator gốc lẫn Jev đồng thuận. Bất kỳ lỗi mạng, timeout hoặc thiếu evidence đều bị Veto (<code>ok: false</code>) để bảo vệ chất lượng công việc. Cấu hình tại tab <strong>Goal Check</strong> trên thanh điều hướng.
+                </div>
+              </div>
+            </section>
+
+            <!-- 9. CONFIG.JSON REFERENCE -->
+            <section class="doc-section" id="doc-config">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  9. Bảng Cấu Trúc Cấu Hình (config.json)
+                </h2>
+                <span class="badge" style="background:var(--code); color:#042f2e; font-weight:600;">JSON Schema</span>
+              </div>
+              <div class="doc-prose">
+                <p>
+                  File <code>config.json</code> nằm trong thư mục dữ liệu (<code>~/.llm-switcher/config.json</code> cho npm, hoặc thư mục gốc repo cho git clone):
+                </p>
+                <div class="doc-codebox">
+                  <div class="doc-codebox-bar">
+                    <span>config.json</span>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="copyDocCode(this, document.getElementById('code-config-sample').textContent)">Copy</button>
+                  </div>
+                  <pre id="code-config-sample">{
+  "port": 3456,                          // Cổng chính của LLM Switcher Edge Gateway
+  "blindfold": { "port": 3457 },         // Cổng của Blindfold TLS Interceptor proxy
+  "activeProfiles": {
+    "claude": "intact-claude",           // Profile kích hoạt cho Claude Code (/v1/messages)
+    "codex": "intact-codex",             // Profile kích hoạt cho Codex (/v1/responses)
+    "agy": "agy-intact"                  // Profile kích hoạt cho Antigravity CLI
+  },
+  "profiles": {
+    "intact-claude": {
+      "name": "Claude via intact",
+      "tool": "claude",                  // claude | codex | agy | null
+      "mode": "convert",                 // convert | hybrid | direct
+      "outFormat": "openai-chat",        // openai-chat | anthropic | vertex
+      "baseURL": "https://intact.example.com/v1",
+      "apiKey": "sk-...",
+      "thinkingMode": "auto",            // auto | native | off
+      "thinkingEffort": "auto",          // auto | none | low | medium | high | max
+      "defaultModels": {
+        "opus": "ag/claude-opus-4-6-thinking",
+        "sonnet": "ag/gemini-3.7-flash",
+        "haiku": "ag/gemini-3.6-flash-medium"
+      }
+    },
+    "intact-codex": {
+      "name": "Codex via intact",
+      "tool": "codex",
+      "mode": "convert",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.example.com/v1",
+      "apiKey": "sk-...",
+      "publicModels": ["gpt-5.6-sol", "gpt-5.6-terra"],
+      "defaultModels": {
+        "main": "gemini-3.8-flash",
+        "review": "gemini-3.7-flash-medium",
+        "subagent": "gemini-3.6-flash-low"
+      }
+    },
+    "agy-intact": {
+      "name": "agy on intact",
+      "tool": "agy",
+      "mode": "convert",
+      "outFormat": "openai-chat",
+      "baseURL": "https://intact.example.com/v1",
+      "apiKey": "sk-...",
+      "defaultModels": { "main": "antigravity/*" } // * giữ nguyên model của agy (Bifrost)
+    }
+  },
+  "debug": false
+}</pre>
+                </div>
+              </div>
+            </section>
+
+            <!-- 10. TROUBLESHOOTING & FAQ -->
+            <section class="doc-section" id="doc-faq">
+              <div class="doc-section-h">
+                <h2>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  10. Xử Lý Sự Cố & Câu Hỏi Thường Gặp (FAQ)
+                </h2>
+                <span class="badge" style="background:var(--warn-soft); color:var(--warn); font-weight:600;">Troubleshooting</span>
+              </div>
+              <div class="doc-prose">
+                <h3>Q1: Lỗi EADDRINUSE: Cổng 3456 hoặc 3457 đã bị tiến trình khác chiếm dụng?</h3>
+                <p>
+                  Chạy lệnh <code>switch doctor</code> để phát hiện tiến trình đang giữ cổng. Bạn có thể đổi cổng gateway sang cổng khác bất kỳ bằng lệnh: <code>switch port 8080</code> (gateway sẽ tự động cập nhật và khởi động lại).
+                </p>
+
+                <h3>Q2: Claude Code hiển thị banner "Custom API endpoint configured"?</h3>
+                <p>
+                  Nguyên nhân do trước đây bạn đã cấu hình <code>ANTHROPIC_BASE_URL</code> trực tiếp vào <code>~/.claude/settings.json</code>. Hãy chạy <code>switch doctor</code>: Switcher sẽ phát hiện và dọn sạch các trường thừa này để trả về trạng thái Zero-Mutation trong suốt.
+                </p>
+
+                <h3>Q3: Lệnh <code>claude --resume</code> trong cửa sổ terminal mới không đi qua Gateway?</h3>
+                <p>
+                  Điều này xảy ra khi thư mục shims <code>~/.llm-switcher/bin</code> chưa được đặt lên đầu biến <code>PATH</code> của bạn. Hãy đảm bảo dòng <code>export PATH="$HOME/.llm-switcher/bin:$PATH"</code> có mặt trong <code>~/.bashrc</code> hoặc <code>~/.zshrc</code> và mở một terminal mới.
+                </p>
+
+                <h3>Q4: Claude Code Remote Control (<code>claude rc</code>) có dùng được với Switcher không?</h3>
+                <p>
+                  Một phiên Remote Control chạy qua 2 hop:
+                </p>
+                <ul>
+                  <li><strong>Session bridge (<code>api.anthropic.com/v1/code/sessions/*</code>):</strong> Chạy trực tiếp qua Anthropic để đồng bộ phiên và kiểm tra gói Max/Pro.</li>
+                  <li><strong>Inference:</strong> Các cuộc gọi model của agent mới đi qua LLM Switcher.</li>
+                </ul>
+                <p>
+                  <em>Lưu ý:</em> Bạn cần duy trì tài khoản Claude còn quota cho hop bridge; nếu tài khoản hết quota, phiên sẽ bị ngắt ngay tại bridge trước khi request model kịp đến Gateway.
+                </p>
+
+                <h3>Q5: Trên Windows, làm thế nào để tạo chứng chỉ cho Blindfold Mode?</h3>
+                <p>
+                  LLM Switcher tự động tạo chứng chỉ bằng Node.js crypto khi bạn kích hoạt tool. Nếu muốn tạo thủ công bằng OpenSSL, hãy chạy lệnh <code>bash blindfold/make-certs.sh</code> trong <strong>Git Bash</strong> (không chạy trong PowerShell vì lệnh <code>New-SelfSignedCertificate</code> thiếu thuộc tính <code>serverAuth</code>).
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1875,7 +2749,7 @@
     function handleRoute() {
       const hash = window.location.hash || '#/routes';
       const route = hash.replace(/^#\/?/, '').split('/')[0] || 'routes';
-      const validRoutes = ['routes', 'compact', 'goal-check', 'models', 'logs', 'doctor'];
+      const validRoutes = ['routes', 'compact', 'goal-check', 'models', 'logs', 'doctor', 'docs'];
       const activeRoute = validRoutes.includes(route) ? route : 'routes';
 
       // Update active nav link
@@ -1900,6 +2774,7 @@
       if (activeRoute === 'goal-check') loadGoalCheck();
       if (activeRoute === 'models') renderCatalogView();
       if (activeRoute === 'logs') loadInspectorLogs();
+      if (activeRoute === 'docs') initDocsScrollSpy();
     }
     window.addEventListener('hashchange', handleRoute);
 
@@ -1966,7 +2841,55 @@
         actionsEl.innerHTML = `
           <button class="btn btn-outline" onclick="loadStatus()">Re-check Status</button>
         `;
+      } else if (route === 'docs') {
+        titleEl.textContent = 'Documentation & User Guide';
+        subEl.textContent = 'Tài liệu hướng dẫn cài đặt, cấu hình, lệnh CLI, MCP, Skill và tối ưu hóa hệ thống chi tiết.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline btn-sm" onclick="copyDocCode(this, 'npm install -g llm-switcher &amp;&amp; switch on')">Copy Quick Start</button>
+          <button class="btn btn-primary btn-sm" onclick="window.open('https://github.com/louisphamdev/llm-switcher', '_blank')">GitHub Repository</button>
+        `;
       }
+    }
+
+    // Docs Helpers
+    function copyDocCode(btn, codeText) {
+      if (!navigator.clipboard) {
+        showToast('Trình duyệt không hỗ trợ sao chép tự động', true);
+        return;
+      }
+      navigator.clipboard.writeText(codeText).then(() => {
+        showToast('Đã sao chép vào bộ nhớ tạm!');
+        if (btn) {
+          const originalText = btn.textContent;
+          btn.textContent = '✓ Copied';
+          setTimeout(() => { btn.textContent = originalText; }, 2000);
+        }
+      }, () => {
+        showToast('Sao chép thất bại', true);
+      });
+    }
+
+    let docsObserver = null;
+    function initDocsScrollSpy() {
+      const tocLinks = document.querySelectorAll('#docsToc .docs-toc-link');
+      if (!tocLinks.length) return;
+      const sections = document.querySelectorAll('#view-docs .doc-section');
+      if (docsObserver) docsObserver.disconnect();
+      docsObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const id = entry.target.id;
+            tocLinks.forEach(link => {
+              if (link.getAttribute('href') === '#' + id) {
+                link.classList.add('active');
+              } else {
+                link.classList.remove('active');
+              }
+            });
+          }
+        });
+      }, { rootMargin: '-10% 0px -75% 0px' });
+      sections.forEach(s => docsObserver.observe(s));
     }
 
     // Modal Tabs
