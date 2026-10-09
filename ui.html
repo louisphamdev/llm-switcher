@@ -910,6 +910,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14h6m0 0v6m0-6L3 21"/><path d="M20 10h-6m0 0V4m0 6l7-7"/><circle cx="12" cy="12" r="2"/></svg>
         Idle Compaction<span class="ct" id="ct-compact"></span>
       </a>
+      <a class="nav-link" href="#/goal-check" data-nav="goal-check">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        Goal Check<span class="ct" id="ct-goal-check"></span>
+      </a>
       <a class="nav-link" href="#/models" data-nav="models">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg>
         Model Catalog<span class="ct" id="ct-models"></span>
@@ -1213,6 +1217,224 @@
                   <code>Deterministic Safety: If no summary model is configured, gateway uses pure heuristic truncation without external calls.</code>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Goal Check (Jev Verification Gate) -->
+      <div id="view-goal-check" class="view-panel" style="display:none;">
+        <div class="sec">
+          <!-- Overview Stats -->
+          <div class="stats">
+            <div class="stat">
+              <div class="k">Goal Check Engine</div>
+              <div class="v" id="stat-goal-check-status" style="color:var(--muted); font-size:1.4rem;">Disabled</div>
+              <div class="status" id="stat-goal-check-indicator" style="margin-top:0.3rem;">Evaluator veto inactive</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Decision Backend</div>
+              <div class="v" id="stat-goal-check-backend" style="color:var(--accent); font-size:1.4rem;">Jev System One</div>
+              <div class="hint" style="margin-top:0.3rem;">Typed 3-axis decision API</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Active Decision Model</div>
+              <div class="v mono" id="stat-goal-check-model" style="color:var(--mint); font-size:1.15rem; word-break:break-all;">typesafe/jev-latest</div>
+              <div class="hint" style="margin-top:0.3rem;">Evaluates complete &amp; evidence</div>
+            </div>
+
+            <div class="stat">
+              <div class="k">Threshold Gate</div>
+              <div class="v" id="stat-goal-check-thresholds" style="color:var(--code); font-size:1.4rem;">90 / 85 / 10%</div>
+              <div class="hint" style="margin-top:0.3rem;">Complete / Evidence / Unfinished</div>
+            </div>
+          </div>
+
+          <!-- Hero Master Card -->
+          <div class="card pad">
+            <div class="sech">
+              <div>
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                  <h2 style="font-size:1.05rem; font-weight:600;">Goal Check: Jev Completion Gate</h2>
+                  <span class="badge outline" id="badge-goal-check">OFF</span>
+                </div>
+                <p class="hint" style="margin-top:0.35rem; max-width:54rem; line-height:1.45;">
+                  Verifies Claude Code stopping conditions (including <code>/goal</code>) using independent Jev System One judgments.
+                  Intercepts evaluator model verdicts and vetoes completion claims that lack tool-executed implementation evidence, preventing false positives from mere report edits.
+                </p>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.8rem;">
+                <label class="switch" title="Toggle Goal Check Gate">
+                  <input type="checkbox" id="goal-check-enabled" onchange="toggleGoalCheckEnabled()">
+                  <span></span>
+                </label>
+              </div>
+            </div>
+            <div id="goal-check-status-msg" style="margin-top:0.75rem; font-size:0.82rem; min-height:1.2rem;" aria-live="polite"></div>
+          </div>
+
+          <!-- Configuration Section (Hidden when inactive) -->
+          <div id="goal-check-config-section" style="display:none; flex-direction:column; gap:1.25rem;">
+            <!-- Card 1: Core Provider & Model Settings -->
+            <div class="card">
+              <div class="cardh">
+                <h3 style="font-size:0.95rem; font-weight:600;">Jev Decision Service &amp; Credentials</h3>
+                <span class="badge ok">Gateway Interceptor</span>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Model Provider Source</div>
+                  <div class="meta" id="goal-check-source-meta">Select existing profile to inherit Base URL and credentials, or configure a custom endpoint</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-left:auto; min-width:18rem; max-width:26rem;">
+                  <select id="goal-check-source-profile" onchange="onGoalCheckSourceProfileChange()" style="flex:1; font-size:0.8rem;"></select>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Base URL</div>
+                  <div class="meta">Provider Base URL (e.g. https://provider.example/v1). Decision endpoint defaults to &lt;Base URL&gt;/systemone</div>
+                </div>
+                <div style="min-width:18rem; flex:1; max-width:26rem; margin-left:auto;">
+                  <input type="text" id="goal-check-base-url" placeholder="https://provider.example/v1" oninput="invalidateGoalCheckProbe()" style="font-family:var(--font-mono); font-size:0.8rem;" title="Base URL for Jev decision provider">
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">API Key</div>
+                  <div class="meta" id="goal-check-key-meta">Leave empty to use credentials from the selected profile, or enter a dedicated key</div>
+                </div>
+                <div style="min-width:18rem; flex:1; max-width:26rem; margin-left:auto;">
+                  <input type="password" id="goal-check-api-key" placeholder="••••••••••••••••" oninput="invalidateGoalCheckProbe()" autocomplete="off" style="font-family:var(--font-mono); font-size:0.8rem;" title="API key for Jev decision service">
+                </div>
+              </div>
+
+              <div class="row" style="align-items:flex-start;">
+                <div class="who" style="padding-top:0.25rem;">
+                  <div class="l">Goal Check Model</div>
+                  <div class="meta" id="goal-check-models-status">Jev decision model ID (default typesafe/jev-latest)</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.5rem; min-width:18rem; flex:1; max-width:26rem; margin-left:auto;">
+                  <div class="combo" id="combo-goal-check-model" style="flex:1;">
+                    <input type="text" id="goal-check-model" placeholder="typesafe/jev-latest" maxlength="256" oninput="invalidateGoalCheckProbe()" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false" style="font-family:var(--font-mono); font-size:0.8rem;" title="Model ID passed in Jev systemone request">
+                    <button type="button" class="combo-toggle" tabindex="-1" aria-label="Show available models">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+                    </button>
+                    <ul class="combo-list" id="goal-check-model-list" role="listbox" aria-label="Available models" hidden></ul>
+                  </div>
+                  <button type="button" class="btn btn-outline btn-sm" id="btn-reload-goal-check-models" onclick="reloadGoalCheckModels()" title="Fetch model catalog from provider">Reload</button>
+                </div>
+              </div>
+
+              <!-- Action Bar -->
+              <div class="row" style="justify-content:flex-end; gap:0.6rem; padding-top:0.75rem; border-top:1px solid var(--border);">
+                <div id="goal-check-probe-badge" style="margin-right:auto; font-size:0.82rem; display:flex; align-items:center; gap:0.4rem;"></div>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-test-goal-check" onclick="testGoalCheckProbe()" title="Probe Jev endpoint with a synthetic decision test">Test Connection</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-save-goal-check" onclick="saveGoalCheckConfig()" title="Save Goal Check settings">Save</button>
+              </div>
+            </div>
+
+            <!-- Card 2: Advanced Thresholds & Boundaries -->
+            <div class="card">
+              <div class="cardh">
+                <h3 style="font-size:0.95rem; font-weight:600;">Advanced Thresholds &amp; Evidence Budget</h3>
+                <span class="badge">Fine Tuning</span>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Decision Endpoint Override</div>
+                  <div class="meta">Leave blank to use default &lt;Base URL&gt;/systemone, or specify absolute URL / custom path</div>
+                </div>
+                <div style="min-width:18rem; flex:1; max-width:26rem; margin-left:auto;">
+                  <input type="text" id="goal-check-decision-endpoint" placeholder="empty = <Base URL>/systemone" oninput="invalidateGoalCheckProbe()" style="font-family:var(--font-mono); font-size:0.8rem;" title="Custom path or absolute URL override for Jev typed decision API">
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Completion Threshold (completeMin)</div>
+                  <div class="meta">Minimum Jev confidence (0.00 – 1.00) that the entire scope required by the stopping condition is done</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-complete-min" min="0" max="1" step="0.01" style="width:6.5rem; text-align:right;" placeholder="0.90" title="Minimum complete score (default: 0.90)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">min</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Evidence Threshold (evidenceMin)</div>
+                  <div class="meta">Minimum Jev confidence (0.00 – 1.00) that execution evidence in the transcript proves the work</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-evidence-min" min="0" max="1" step="0.01" style="width:6.5rem; text-align:right;" placeholder="0.85" title="Minimum evidence score (default: 0.85)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">min</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Unfinished Work Ceiling (unfinishedMax)</div>
+                  <div class="meta">Maximum allowed Jev score (0.00 – 1.00) for remaining work, deferred tasks, or unverified errors</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-unfinished-max" min="0" max="1" step="0.01" style="width:6.5rem; text-align:right;" placeholder="0.10" title="Maximum unfinished score (default: 0.10)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">max</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Jev Decision Timeout</div>
+                  <div class="meta">Timeout for Jev decision API call in milliseconds</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-timeout" min="500" max="60000" step="500" style="width:6.5rem; text-align:right;" placeholder="8000" title="Jev decision call timeout in ms (default: 8000)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">ms</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Total Gate Deadline</div>
+                  <div class="meta">Total deadline for Native and Jev evaluation before timing out</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-total-timeout" min="1000" max="120000" step="1000" style="width:6.5rem; text-align:right;" placeholder="25000" title="Total gate deadline in ms (default: 25000)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">ms</span>
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="who">
+                  <div class="l">Max Evidence State Size</div>
+                  <div class="meta">Maximum characters sent to Jev state (~32k tokens). Exceeding this fails closed as Insufficient evidence</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.45rem; margin-left:auto;">
+                  <input type="number" id="goal-check-max-chars" min="500" max="500000" step="1000" style="width:6.5rem; text-align:right;" placeholder="60000" title="Maximum state characters (default: 60000)">
+                  <span style="font-size:0.8rem; color:var(--muted); min-width:1.5rem;">chars</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 3: Recent Goal Verifications -->
+            <div class="card pad">
+              <div class="sech">
+                <div>
+                  <h3 style="font-size:0.95rem; font-weight:600;">Recent Goal Verifications</h3>
+                  <p class="hint" style="margin-top:0.2rem;">Live ring buffer of stopping condition evaluator queries and Jev gate verdicts.</p>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                  <button type="button" class="btn btn-outline btn-sm" onclick="loadGoalCheckLogs()" title="Refresh verification history">Refresh</button>
+                </div>
+              </div>
+              <div id="goal-check-logs-container" style="margin-top:0.75rem;"></div>
             </div>
           </div>
         </div>
@@ -1653,7 +1875,7 @@
     function handleRoute() {
       const hash = window.location.hash || '#/routes';
       const route = hash.replace(/^#\/?/, '').split('/')[0] || 'routes';
-      const validRoutes = ['routes', 'compact', 'models', 'logs', 'doctor'];
+      const validRoutes = ['routes', 'compact', 'goal-check', 'models', 'logs', 'doctor'];
       const activeRoute = validRoutes.includes(route) ? route : 'routes';
 
       // Update active nav link
@@ -1675,6 +1897,7 @@
 
       // Lazy load view content
       if (activeRoute === 'compact') loadIdleCompact();
+      if (activeRoute === 'goal-check') loadGoalCheck();
       if (activeRoute === 'models') renderCatalogView();
       if (activeRoute === 'logs') loadInspectorLogs();
     }
@@ -1714,6 +1937,14 @@
         actionsEl.innerHTML = `
           <button class="btn btn-outline" onclick="loadIdleCompact()">Refresh</button>
           <button class="btn btn-primary" onclick="saveIdleCompact()">Save Configuration</button>
+        `;
+      } else if (route === 'goal-check') {
+        loadGoalCheck();
+        titleEl.textContent = 'Goal Check';
+        subEl.textContent = 'Independent Jev verification gate for Claude Code stopping conditions and /goal.';
+        actionsEl.innerHTML = `
+          <button class="btn btn-outline" onclick="loadGoalCheck()">Refresh</button>
+          <button class="btn btn-primary" onclick="saveGoalCheckConfig()">Save Configuration</button>
         `;
       } else if (route === 'models') {
         titleEl.textContent = 'Dynamic Model Catalog';
@@ -2284,6 +2515,439 @@
         }
         showToast('Failed to save: ' + e.message, true);
       }
+    }
+
+    // ----------------------------------------------------
+    // Goal Check: Jev Completion Gate
+    // ----------------------------------------------------
+    let goalCheckLoadedConfig = null;
+    let goalCheckLoadedModels = [];
+
+    async function loadGoalCheck() {
+      try {
+        const [rCfg, rLogs] = await Promise.all([
+          api('/api/goal-check'),
+          api('/api/goal-check/logs')
+        ]);
+        if (rCfg.ok) {
+          const data = await rCfg.json();
+          goalCheckLoadedConfig = data.goalCheck;
+          showGoalCheck(data.goalCheck, data.status);
+        }
+        if (rLogs.ok) {
+          renderGoalCheckLogs((await rLogs.json()).logs || []);
+        }
+      } catch (err) {
+        console.error('Failed to load Goal Check', err);
+      }
+    }
+
+    function showGoalCheck(c, st) {
+      c = c || {};
+      st = st || {};
+      const enabled = Boolean(c.enabled);
+
+      const elEnabled = document.getElementById('goal-check-enabled');
+      if (elEnabled) elEnabled.checked = enabled;
+
+      const configSec = document.getElementById('goal-check-config-section');
+      if (configSec) configSec.style.display = enabled ? 'flex' : 'none';
+
+      // Badge on hero card
+      const badge = document.getElementById('badge-goal-check');
+      if (badge) {
+        badge.textContent = enabled ? 'ACTIVE' : 'OFF';
+        badge.className = 'badge ' + (enabled ? 'ok' : 'outline');
+      }
+
+      // Nav link count
+      const ctGc = document.getElementById('ct-goal-check');
+      if (ctGc) ctGc.textContent = enabled ? 'ON' : '';
+
+      // Stats
+      const statStatus = document.getElementById('stat-goal-check-status');
+      if (statStatus) {
+        statStatus.textContent = enabled ? 'Active' : 'Disabled';
+        statStatus.style.color = enabled ? 'var(--ok)' : 'var(--muted)';
+      }
+      const statInd = document.getElementById('stat-goal-check-indicator');
+      if (statInd) {
+        statInd.textContent = enabled ? 'Evaluator veto active' : 'Evaluator veto inactive';
+        statInd.className = 'status ' + (enabled ? 'on' : '');
+      }
+      const statModel = document.getElementById('stat-goal-check-model');
+      if (statModel) {
+        statModel.textContent = c.model || 'typesafe/jev-latest';
+      }
+      const statThresh = document.getElementById('stat-goal-check-thresholds');
+      if (statThresh) {
+        const cP = Math.round((c.completeMin ?? 0.90) * 100);
+        const eP = Math.round((c.evidenceMin ?? 0.85) * 100);
+        const uP = Math.round((c.unfinishedMax ?? 0.10) * 100);
+        statThresh.textContent = `${cP} / ${eP} / ${uP}%`;
+      }
+
+      // Populate Profiles
+      populateGoalCheckSourceProfiles(c.sourceProfile);
+
+      // Populate Inputs
+      const elBaseUrl = document.getElementById('goal-check-base-url');
+      if (elBaseUrl) elBaseUrl.value = c.baseURL || '';
+
+      const elApiKey = document.getElementById('goal-check-api-key');
+      if (elApiKey) {
+        elApiKey.value = c.apiKey === '__LLM_SWITCHER_KEEP_KEY__' ? '__LLM_SWITCHER_KEEP_KEY__' : (c.apiKey || '');
+        elApiKey.placeholder = c.hasApiKey ? '•••••••• (Stored in gateway)' : 'API key or leave empty to inherit';
+      }
+
+      const elModel = document.getElementById('goal-check-model');
+      if (elModel) elModel.value = c.model || 'typesafe/jev-latest';
+
+      const elDecisionEp = document.getElementById('goal-check-decision-endpoint');
+      if (elDecisionEp) elDecisionEp.value = c.decisionEndpoint || '';
+
+      const elCompleteMin = document.getElementById('goal-check-complete-min');
+      if (elCompleteMin) elCompleteMin.value = c.completeMin ?? 0.90;
+
+      const elEvidenceMin = document.getElementById('goal-check-evidence-min');
+      if (elEvidenceMin) elEvidenceMin.value = c.evidenceMin ?? 0.85;
+
+      const elUnfinishedMax = document.getElementById('goal-check-unfinished-max');
+      if (elUnfinishedMax) elUnfinishedMax.value = c.unfinishedMax ?? 0.10;
+
+      const elTimeout = document.getElementById('goal-check-timeout');
+      if (elTimeout) elTimeout.value = c.timeoutMs ?? 8000;
+
+      const elTotalTimeout = document.getElementById('goal-check-total-timeout');
+      if (elTotalTimeout) elTotalTimeout.value = c.totalTimeoutMs ?? 25000;
+
+      const elMaxChars = document.getElementById('goal-check-max-chars');
+      if (elMaxChars) elMaxChars.value = c.maxStateChars ?? 60000;
+    }
+
+    function populateGoalCheckSourceProfiles(selectedKey) {
+      const sel = document.getElementById('goal-check-source-profile');
+      if (!sel) return;
+      const profiles = state.config?.profiles || {};
+      const keys = Object.keys(profiles);
+
+      let html = '<option value="">Custom Endpoint (Manual Configuration)</option>';
+      for (const k of keys) {
+        const p = profiles[k];
+        const isSel = (k === selectedKey) ? 'selected' : '';
+        html += `<option value="${escapeHtml(k)}" ${isSel}>${escapeHtml(p.name || k)} (${escapeHtml(p.baseURL || 'no URL')})</option>`;
+      }
+      sel.innerHTML = html;
+      updateGoalCheckSourceMeta();
+    }
+
+    function updateGoalCheckSourceMeta() {
+      const sel = document.getElementById('goal-check-source-profile');
+      const meta = document.getElementById('goal-check-source-meta');
+      const keyMeta = document.getElementById('goal-check-key-meta');
+      if (!sel || !meta) return;
+
+      const chosen = sel.value;
+      if (!chosen) {
+        meta.textContent = 'Custom Endpoint: Manual Base URL and optional API key';
+        if (keyMeta) keyMeta.textContent = 'Enter dedicated API key for this endpoint';
+        return;
+      }
+      const p = state.config?.profiles?.[chosen];
+      if (p) {
+        meta.textContent = `Inheriting from Profile "${p.name || chosen}": ${p.baseURL || 'no Base URL'}`;
+        if (keyMeta) keyMeta.textContent = p.hasApiKey ? 'Using credential from selected profile' : 'Profile has no stored API key; specify one if required';
+      }
+    }
+
+    function onGoalCheckSourceProfileChange() {
+      const sel = document.getElementById('goal-check-source-profile');
+      if (!sel) return;
+      const chosen = sel.value;
+      updateGoalCheckSourceMeta();
+      invalidateGoalCheckProbe();
+
+      const elBaseUrl = document.getElementById('goal-check-base-url');
+      if (chosen && state.config?.profiles?.[chosen]) {
+        const p = state.config.profiles[chosen];
+        if (elBaseUrl && p.baseURL) elBaseUrl.value = p.baseURL;
+      }
+    }
+
+    function invalidateGoalCheckProbe() {
+      const badge = document.getElementById('goal-check-probe-badge');
+      if (badge) badge.innerHTML = '';
+    }
+
+    async function toggleGoalCheckEnabled() {
+      const isEnabled = document.getElementById('goal-check-enabled').checked;
+      const configSec = document.getElementById('goal-check-config-section');
+      if (configSec) configSec.style.display = isEnabled ? 'flex' : 'none';
+      await saveGoalCheckConfig();
+    }
+
+    async function saveGoalCheckConfig() {
+      const status = document.getElementById('goal-check-status-msg');
+      const isEnabled = document.getElementById('goal-check-enabled').checked;
+      const sourceProf = document.getElementById('goal-check-source-profile')?.value || '';
+      const baseURL = document.getElementById('goal-check-base-url')?.value.trim() || '';
+      const apiKeyRaw = document.getElementById('goal-check-api-key')?.value || '';
+      const model = document.getElementById('goal-check-model')?.value.trim() || 'typesafe/jev-latest';
+      const decisionEndpoint = document.getElementById('goal-check-decision-endpoint')?.value.trim() || '';
+
+      const completeMin = Number(document.getElementById('goal-check-complete-min')?.value ?? 0.90);
+      const evidenceMin = Number(document.getElementById('goal-check-evidence-min')?.value ?? 0.85);
+      const unfinishedMax = Number(document.getElementById('goal-check-unfinished-max')?.value ?? 0.10);
+      const timeoutMs = Number(document.getElementById('goal-check-timeout')?.value ?? 8000);
+      const totalTimeoutMs = Number(document.getElementById('goal-check-total-timeout')?.value ?? 25000);
+      const maxStateChars = Number(document.getElementById('goal-check-max-chars')?.value ?? 60000);
+
+      const patch = {
+        enabled: isEnabled,
+        backend: 'jev',
+        sourceProfile: sourceProf,
+        baseURL,
+        model,
+        decisionEndpoint,
+        completeMin,
+        evidenceMin,
+        unfinishedMax,
+        timeoutMs,
+        totalTimeoutMs,
+        maxStateChars
+      };
+
+      if (apiKeyRaw && apiKeyRaw !== '__LLM_SWITCHER_KEEP_KEY__') {
+        patch.apiKey = apiKeyRaw;
+      } else if (apiKeyRaw === '') {
+        patch.apiKey = '';
+      }
+
+      if (status) {
+        status.textContent = 'Saving Goal Check configuration...';
+        status.style.color = 'var(--muted)';
+      }
+
+      try {
+        const res = await api('/api/goal-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save configuration');
+
+        goalCheckLoadedConfig = data.goalCheck;
+        showGoalCheck(data.goalCheck, data.status);
+
+        if (status) {
+          status.textContent = 'Saved. Goal Check gate configuration active for stopping condition evaluators.';
+          status.style.color = 'var(--ok)';
+          setTimeout(() => { if (status) status.textContent = ''; }, 4500);
+        }
+        showToast('Goal Check configuration saved');
+      } catch (err) {
+        if (status) {
+          status.textContent = 'Not saved: ' + err.message;
+          status.style.color = 'var(--err)';
+        }
+        showToast('Failed to save: ' + err.message, true);
+      }
+    }
+
+    async function testGoalCheckProbe() {
+      const probeBadge = document.getElementById('goal-check-probe-badge');
+      const testBtn = document.getElementById('btn-test-goal-check');
+      if (testBtn) testBtn.disabled = true;
+
+      const sourceProf = document.getElementById('goal-check-source-profile')?.value || '';
+      const baseURL = document.getElementById('goal-check-base-url')?.value.trim() || '';
+      const apiKeyRaw = document.getElementById('goal-check-api-key')?.value || '';
+      const model = document.getElementById('goal-check-model')?.value.trim() || 'typesafe/jev-latest';
+      const decisionEndpoint = document.getElementById('goal-check-decision-endpoint')?.value.trim() || '';
+      const timeoutMs = Number(document.getElementById('goal-check-timeout')?.value ?? 8000);
+
+      if (probeBadge) {
+        probeBadge.innerHTML = '<span class="status pulse" style="color:var(--accent);">Probing Jev endpoint...</span>';
+      }
+
+      try {
+        const res = await api('/api/goal-check/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseURL,
+            sourceProfile: sourceProf,
+            apiKey: apiKeyRaw,
+            model,
+            decisionEndpoint,
+            timeoutMs
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || data.message || 'Probe failed');
+        }
+
+        const scores = data.scores || {};
+        const c = typeof scores.complete === 'number' ? scores.complete.toFixed(2) : '-';
+        const e = typeof scores.evidence === 'number' ? scores.evidence.toFixed(2) : '-';
+        const u = typeof scores.unfinished === 'number' ? scores.unfinished.toFixed(2) : '-';
+
+        if (probeBadge) {
+          probeBadge.innerHTML = `<span class="badge ok">✓ Connected (${data.latencyMs || 0}ms)</span> <span class="hint mono">complete:${c} · ev:${e} · unf:${u}</span>`;
+        }
+        showToast('Jev connection probe succeeded');
+      } catch (err) {
+        if (probeBadge) {
+          probeBadge.innerHTML = `<span class="badge err">✕ ${escapeHtml(err.message)}</span>`;
+        }
+        showToast('Jev probe error: ' + err.message, true);
+      } finally {
+        if (testBtn) testBtn.disabled = false;
+      }
+    }
+
+    async function reloadGoalCheckModels() {
+      const statusEl = document.getElementById('goal-check-models-status');
+      const listEl = document.getElementById('goal-check-model-list');
+      if (statusEl) statusEl.textContent = 'Discovering models from catalog...';
+
+      try {
+        const res = await api('/api/catalog');
+        if (!res.ok) throw new Error('Catalog fetch failed');
+        const catalog = await res.json();
+        const models = new Set(['typesafe/jev-latest', 'typesafe/jev-1.13']);
+
+        for (const item of (catalog || [])) {
+          if (item?.id && (item.id.includes('jev') || item.id.includes('decision'))) {
+            models.add(item.id);
+          }
+        }
+        goalCheckLoadedModels = Array.from(models);
+
+        if (listEl) {
+          listEl.innerHTML = Array.from(models).map(m => {
+            return `<li role="option" class="combo-item" onclick="selectGoalCheckModel('${escapeHtml(m)}')">${escapeHtml(m)}</li>`;
+          }).join('');
+        }
+
+        if (statusEl) statusEl.textContent = `Discovered ${models.size} models. You can also type any custom model ID.`;
+        showToast('Model catalog reloaded');
+      } catch (err) {
+        if (statusEl) statusEl.textContent = 'Catalog reload failed: ' + err.message;
+      }
+    }
+
+    function selectGoalCheckModel(modelId) {
+      const inputEl = document.getElementById('goal-check-model');
+      if (inputEl) inputEl.value = modelId;
+      const listEl = document.getElementById('goal-check-model-list');
+      if (listEl) listEl.hidden = true;
+      invalidateGoalCheckProbe();
+    }
+
+    async function loadGoalCheckLogs() {
+      try {
+        const res = await api('/api/goal-check/logs');
+        if (res.ok) {
+          const data = await res.json();
+          renderGoalCheckLogs(data.logs || []);
+        }
+      } catch (err) {
+        console.error('Failed to load goal check logs', err);
+      }
+    }
+
+    function renderGoalCheckLogs(logs) {
+      const container = document.getElementById('goal-check-logs-container');
+      if (!container) return;
+
+      if (!logs || !logs.length) {
+        container.innerHTML = '<div class="hint" style="text-align:center; padding:1.5rem;">No goal verifications recorded yet. When Claude Code runs stopping condition evaluators or /goal, verdicts appear here.</div>';
+        return;
+      }
+
+      container.innerHTML = logs.map(l => {
+        const dateStr = new Date(l.timestamp).toLocaleTimeString();
+        let badgeClass = 'outline';
+        if (l.verdictType === 'Allowed') badgeClass = 'ok';
+        else if (l.verdictType === 'Blocked') badgeClass = 'err';
+        else if (l.verdictType === 'Unavailable' || l.verdictType === 'Insufficient evidence') badgeClass = 'warn';
+        else if (l.verdictType === 'Unsupported evaluator') badgeClass = 'err';
+
+        const scores = l.jevScores;
+        const scoresStr = scores
+          ? `Complete: ${(scores.complete ?? 0).toFixed(2)} · Evidence: ${(scores.evidence ?? 0).toFixed(2)} · Unfinished: ${(scores.unfinished ?? 0).toFixed(2)}`
+          : 'None';
+
+        const nativeStr = l.nativeVerdict
+          ? (l.nativeVerdict.ok ? '✓ True' : (l.nativeVerdict.impossible ? '✕ Impossible' : '✕ False'))
+          : 'n/a';
+
+        return `
+          <div class="row" style="flex-direction:column; align-items:flex-start; gap:0.4rem; padding:0.75rem 0.5rem; border-bottom:1px solid var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span class="badge ${badgeClass}" style="font-weight:600;">${escapeHtml(l.verdictType || (l.verdict ? 'Allowed' : 'Blocked'))}</span>
+                <span class="mono faint" style="font-size:0.75rem;">${escapeHtml(dateStr)}</span>
+                <span class="mono" style="font-size:0.75rem; color:var(--muted);">${escapeHtml((l.sessionId || '').slice(0, 16))}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <span class="hint mono" style="font-size:0.75rem;">Native: ${escapeHtml(nativeStr)}</span>
+                <span class="hint mono" style="font-size:0.75rem;">${escapeHtml(String(l.latencyMs || 0))}ms</span>
+              </div>
+            </div>
+            <div style="font-size:0.82rem; color:var(--fg); line-height:1.35; margin-top:0.2rem;">
+              <strong>Condition:</strong> ${escapeHtml(l.condition || '(none)')}
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; font-size:0.75rem; color:var(--muted); margin-top:0.15rem;">
+              <span class="mono">${escapeHtml(scoresStr)}</span>
+              <span class="hint" style="max-width:60%; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${escapeHtml(l.reason || '')}">${escapeHtml(l.reason || '')}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderGoalCheckModelOptions(combo, q, current) {
+      const list = combo.querySelector('.combo-list');
+      const defaults = [
+        { id: 'typesafe/jev-latest', label: 'typesafe/jev-latest', desc: 'Default System One decision model' },
+        { id: 'typesafe/jev-1.13', label: 'typesafe/jev-1.13', desc: 'Calibrated System One decision model' }
+      ];
+
+      const all = [...defaults];
+      for (const m of goalCheckLoadedModels) {
+        if (!all.some(it => it.id === m)) {
+          all.push({ id: m, label: m, desc: 'Discovered model' });
+        }
+      }
+
+      const matches = all.filter(it => !q || it.id.toLowerCase().includes(q) || it.label.toLowerCase().includes(q)).slice(0, 100);
+      combo.matches = matches.map(it => it.id);
+
+      if (!matches.length) {
+        list.innerHTML = '<li class="combo-empty">No listed model matches. Custom typed ID will be kept.</li>';
+        return;
+      }
+
+      const matchIds = matches.map(it => it.id);
+      if (!(combo.activeIndex >= 0 && combo.activeIndex < matches.length)) combo.activeIndex = matchIds.indexOf(current);
+
+      list.innerHTML = matches.map((it, i) => {
+        const cut = it.id.lastIndexOf('/') + 1;
+        const prefix = cut ? `<span class="pfx">${markMatch(it.id.slice(0, cut), q)}</span>` : '';
+        const namePart = markMatch(it.id.slice(cut), q);
+        return `<li class="combo-opt" role="option" id="goal-check-model-opt-${i}" data-i="${i}" aria-selected="${i === combo.activeIndex}"`
+          + ` onmousedown="event.preventDefault(); chooseComboOption(this)">`
+          + `<div style="display:flex; flex-direction:column; gap:0.15rem;">`
+          + `<span class="id">${prefix}${namePart}</span>`
+          + `<span class="hint" style="font-size:0.75rem;">${escapeHtml(it.desc)}</span>`
+          + `</div>`
+          + (it.id === current ? '<span class="cur">current</span>' : '') + '</li>';
+      }).join('');
+      setComboActive(combo, combo.activeIndex);
     }
 
     async function loadStatus() {
@@ -2976,6 +3640,10 @@
         renderCompactModelOptions(combo, q, current);
         return;
       }
+      if (input.id === 'goal-check-model') {
+        renderGoalCheckModelOptions(combo, q, current);
+        return;
+      }
 
       const matches = loadedModels.filter(m => !q || m.toLowerCase().includes(q)).slice(0, 200);
       combo.matches = matches;
@@ -3102,6 +3770,9 @@
       updateWindowNotes();
       if (input.id === 'idle-compact-model') {
         saveIdleCompact();
+      }
+      if (input.id === 'goal-check-model') {
+        invalidateGoalCheckProbe();
       }
     }
 
@@ -3447,6 +4118,10 @@
       // Wire Idle Compaction summarization model combobox
       const compactCombo = document.getElementById('combo-compact-model');
       if (compactCombo) wireCombo(compactCombo);
+
+      // Wire Goal Check model combobox
+      const goalCheckCombo = document.getElementById('combo-goal-check-model');
+      if (goalCheckCombo) wireCombo(goalCheckCombo);
 
       // Trigger initial route
       handleRoute();

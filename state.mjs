@@ -1680,6 +1680,11 @@ export function redactConfig(cfg) {
     lab.hasApiKey = Boolean(lab.apiKey);
     lab.apiKey = lab.apiKey ? MASKED_KEY : '';
   }
+  const gc = clone.goalCheck;
+  if (gc && typeof gc === 'object' && !Array.isArray(gc)) {
+    gc.hasApiKey = Boolean(gc.apiKey);
+    gc.apiKey = gc.apiKey ? MASKED_KEY : '';
+  }
   return clone;
 }
 

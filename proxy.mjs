@@ -35,10 +35,24 @@ import { checkForUpdate } from './version.mjs';
 import { applyUpdate } from './update.mjs';
 import { createContractLab, createHalfTap, tapClientWrites, capText, capJson, toolVersionFromUA, finishHalf, PROBE_HEADER, TRACE_ID_RE } from './contract.mjs';
 import {
-  idleCompactPolicy, validateIdleCompactPatch, compactRawHistory, summaryReplacement, IDLE_COMPACT_KEY,
+  idleCompactPolicy, validateIdleCompactPatch, compactRawHistory, summaryReplacement, IDLE_COMPACT_KEY, conversationKey
 } from './idlecompact.mjs';
 import { askSummary } from './idlecall.mjs';
 import { IdlePrefixCache, compactCacheKey, policyFingerprint } from './idlecache.mjs';
+import {
+  GOAL_CHECK_KEY, goalCheckPolicy, validateGoalCheckPatch, redactGoalCheck,
+  isGoalEvaluatorRequest, buildBoundedEvidence, buildJevQuestions,
+  combineVerdicts, parseEvaluatorVerdict
+} from './goalcheck.mjs';
+import { callJev, testJevConnection, resolveJevTarget } from './goalcheck-call.mjs';
+
+const MAX_GOAL_CHECK_LOGS = 64;
+const goalCheckLogs = [];
+const randStr = (n = 6) => crypto.randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n);
+function logGoalCheck(entry) {
+  if (goalCheckLogs.length >= MAX_GOAL_CHECK_LOGS) goalCheckLogs.shift();
+  goalCheckLogs.push({ id: `gc_${Date.now()}_${randStr(4)}`, timestamp: Date.now(), ...entry });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uiHtmlPath = path.join(__dirname, 'ui.html');
@@ -849,6 +863,206 @@ async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, sig
 // once, so a slow or absent intact cannot reach the answer the client is waiting for.
 const contractLab = createContractLab({ settings: () => contractLabSettings(loadConfig()) });
 
+function sendEvaluatorResponse(res, stream, verdict, model) {
+  const jsonText = JSON.stringify({
+    ok: Boolean(verdict.ok),
+    reason: String(verdict.reason || ''),
+    ...(verdict.impossible ? { impossible: true } : {})
+  });
+  const modelName = model || 'evaluator';
+  if (stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    const msgId = `msg_${Date.now()}_${randStr(12)}`;
+    const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    emit('message_start', {
+      type: 'message_start',
+      message: {
+        id: msgId,
+        type: 'message',
+        role: 'assistant',
+        model: modelName,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 }
+      }
+    });
+    emit('content_block_start', {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' }
+    });
+    emit('content_block_delta', {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: jsonText }
+    });
+    emit('content_block_stop', {
+      type: 'content_block_stop',
+      index: 0
+    });
+    emit('message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: Math.max(1, Math.ceil(jsonText.length / 4)) }
+    });
+    emit('message_stop', {
+      type: 'message_stop'
+    });
+    res.end();
+  } else {
+    const msgId = `msg_${Date.now()}_${randStr(12)}`;
+    sendJson(res, 200, {
+      id: msgId,
+      type: 'message',
+      role: 'assistant',
+      model: modelName,
+      content: [{ type: 'text', text: jsonText }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: Math.max(1, Math.ceil(jsonText.length / 4)) }
+    });
+  }
+}
+
+async function executeGoalCheckGate({ req, res, clientFormat, payload, ir, profile, profileKey, policy, condition, opts, log }) {
+  const startTime = Date.now();
+  const sessionId = conversationKey(clientFormat, req, ir) || req.headers['x-claude-code-session-id'] || '';
+  const requestedModel = ir.model || payload.model || '';
+  const mappedModel = mapModel(requestedModel, profile, clientFormat);
+  const bifrost = BIFROST_FORMATS.has(clientFormat) && await crossesBifrost(req, profile, mappedModel);
+  const outFormat = resolveOutFormat(profile, mappedModel);
+
+  const gateAC = new AbortController();
+  const totalTimeout = Number.isFinite(policy.totalTimeoutMs) ? policy.totalTimeoutMs : 25000;
+  const gateTimer = setTimeout(() => gateAC.abort(), totalTimeout);
+  req.on('aborted', () => gateAC.abort());
+
+  const target = resolveJevTarget(policy, (loadConfig() || {}).profiles || {});
+  const evidence = buildBoundedEvidence(payload, policy.maxStateChars);
+  const questions = buildJevQuestions(condition);
+
+  let nativeVerdict = null;
+  let jevResult = null;
+
+  try {
+    const nativePromise = (async () => {
+      try {
+        let url, headers, body;
+        if (bifrost) {
+          url = bifrostURL(profile, clientFormat, req, opts);
+          headers = bifrostHeaders(req, profile);
+          const nativePayload = clientFormat === 'responses' ? expandGatewayCompactions(payload) : payload;
+          const p = { ...nativePayload, model: mappedModel };
+          body = Buffer.from(JSON.stringify(p), 'utf8');
+        } else if (outFormat === 'anthropic') {
+          const ep = upstreamEndpoint(profile, 'anthropic', mappedModel, ir.stream, req);
+          url = ep.url;
+          headers = ep.headers;
+          let json = { ...payload, model: mappedModel };
+          const healed = healAnthropicPayload(json);
+          if (healed.changed) json = healed.payload;
+          if (profile?.thinkingMode === 'off' && json.thinking) delete json.thinking;
+          body = Buffer.from(JSON.stringify(json), 'utf8');
+        } else {
+          const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
+          const reqData = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+          url = reqData.url;
+          headers = reqData.headers;
+          body = JSON.stringify(reqData.upBody);
+        }
+
+        const traceId = clientFormat === 'codeassist' ? null : (probeTraceId(req) || contractLab.traceFor(mappedModel));
+        if (traceId) headers['x-intact-trace'] = traceId;
+
+        const upRes = await fetch(url, { method: 'POST', headers, body, signal: gateAC.signal });
+        if (!upRes.ok) {
+          const errText = await upRes.text().catch(() => '');
+          return { malformed: true, error: `Upstream HTTP ${upRes.status}: ${errText.slice(0, 150)}` };
+        }
+
+        const normalize = createUpstreamNormalizer(outFormat);
+        const col = createCollector();
+        const ctype = upRes.headers.get('content-type') || '';
+        if (ctype.includes('application/json')) {
+          const parsed = await upRes.json();
+          const ev = normalize(parsed);
+          col.add(ev);
+          if (ev.error) return { malformed: true, error: ev.error };
+        } else {
+          for await (const parsed of readUpstreamPayloads(upRes)) {
+            const ev = normalize(parsed);
+            col.add(ev);
+            if (ev.error) return { malformed: true, error: ev.error };
+          }
+        }
+
+        const collectedText = col.text.join('');
+        return parseEvaluatorVerdict(collectedText);
+      } catch (err) {
+        return { malformed: true, error: err.message || 'native fetch error' };
+      }
+    })();
+
+    const jevPromise = (async () => {
+      if (evidence.stateTooLarge) {
+        return { stateTooLarge: true, chars: evidence.chars, maxChars: evidence.maxChars };
+      }
+      try {
+        return await callJev({
+          url: target.url,
+          model: target.model,
+          apiKey: target.apiKey,
+          state: evidence.state,
+          questions,
+          timeoutMs: policy.timeoutMs,
+          signal: gateAC.signal
+        });
+      } catch (err) {
+        return { ok: false, reason: 'error', message: err.message };
+      }
+    })();
+
+    const [nativeSettled, jevSettled] = await Promise.all([nativePromise, jevPromise]);
+    nativeVerdict = nativeSettled;
+    jevResult = jevSettled;
+  } finally {
+    clearTimeout(gateTimer);
+  }
+
+  const finalVerdict = combineVerdicts({ nativeVerdict, jevResult, thresholds: policy });
+  const latencyMs = Date.now() - startTime;
+
+  logGoalCheck({
+    sessionId,
+    condition: condition.slice(0, 300),
+    nativeVerdict: nativeVerdict?.malformed ? { ok: false, malformed: true, error: nativeVerdict.error } : { ok: nativeVerdict?.ok, reason: nativeVerdict?.reason, impossible: nativeVerdict?.impossible },
+    jevScores: jevResult?.scores || null,
+    verdict: finalVerdict.ok,
+    verdictType: finalVerdict.verdictType,
+    reason: finalVerdict.reason,
+    latencyMs
+  });
+
+  console.log(`[llm-switcher:goal-check] session=${sessionId.slice(0, 16)} native=${nativeVerdict?.ok} jev=${finalVerdict.ok} verdict=${finalVerdict.verdictType} (${latencyMs}ms)`);
+
+  if (gateAC.signal.aborted && req.destroyed) {
+    return log({ status: 499, error: 'client disconnected during goal check' });
+  }
+
+  sendEvaluatorResponse(res, ir.stream, finalVerdict, mappedModel);
+  return log({
+    status: 200,
+    responsePreview: `[goal-check:${finalVerdict.verdictType}] ${finalVerdict.reason.slice(0, 100)}`,
+    tokens: { prompt: 0, completion: 0 }
+  });
+}
+
 // ----------------------------------------------------
 // LLM Switcher generic pipeline: client --parse--> IR --emit--> upstream
 // Client (input) formats : anthropic | openai-chat | responses (Codex) | vertex
@@ -910,6 +1124,39 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
   }
   // Code Assist names streaming in the path (:streamGenerateContent), not in the body.
   if (clientFormat === 'codeassist') ir.stream = Boolean(opts.codeAssistStream);
+
+  const evalCheck = isGoalEvaluatorRequest(clientFormat, payload, req.headers);
+  const gcPolicy = goalCheckPolicy(loadConfig());
+  if (evalCheck.isEvaluator && gcPolicy.enabled) {
+    const requestedModel = ir.model || payload.model || '';
+    const mappedModel = mapModel(requestedModel, profile, clientFormat);
+    const reqStartTime = Date.now();
+    const logBase = { clientFormat, outFormat: 'goal-check', profile: profileKey, model: mappedModel, stream: ir.stream, requestPreview: previewOf(ir) };
+    const log = (extra) => logInspection({ ...logBase, duration: Date.now() - reqStartTime, tokens: { prompt: 0, completion: 0 }, ...extra });
+
+    if (!evalCheck.isSupported) {
+      logGoalCheck({
+        sessionId: conversationKey(clientFormat, req, ir) || req.headers['x-claude-code-session-id'] || '',
+        condition: evalCheck.condition || '',
+        nativeVerdict: null,
+        jevScores: null,
+        verdict: false,
+        verdictType: 'Unsupported evaluator',
+        reason: `Unsupported evaluator format: ${evalCheck.reason || 'unrecognized shape'}`,
+        latencyMs: 0
+      });
+      sendEvaluatorResponse(res, ir.stream, {
+        ok: false,
+        reason: `Unsupported evaluator format: ${evalCheck.reason || 'unrecognized shape'}`
+      }, mappedModel);
+      return log({ status: 200, responsePreview: '[goal-check:Unsupported evaluator]' });
+    }
+
+    return await executeGoalCheckGate({
+      req, res, clientFormat, payload, ir, profile, profileKey,
+      policy: gcPolicy, condition: evalCheck.condition, opts, log
+    });
+  }
 
   // Compaction rewrites the request itself, not just the intermediate form: when the client and
   // the provider speak the same shape this gateway forwards the client's own bytes, so a change
@@ -1024,7 +1271,13 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     if (!upstreamRes.ok) {
       const errText = await upstreamRes.text().catch(() => '');
       console.error(`[${profileKey}] Error HTTP ${upstreamRes.status}:`, errText.slice(0, 500));
-      sendClientError(res, clientFormat, upstreamRes.status, extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`, pickRetryHeaders(upstreamRes));
+      let userFriendlyMsg = extractUpstreamMessage(errText) || `Upstream HTTP ${upstreamRes.status}`;
+      if (upstreamRes.status === 404 && (errText.toLowerCase().includes('model') || userFriendlyMsg.toLowerCase().includes('model'))) {
+        userFriendlyMsg = `Model '${mappedModel}' is not available or has been deprecated on profile '${profileKey}' (HTTP 404: ${userFriendlyMsg}). Open 'switch ui' to reconfigure your model.`;
+      } else if (upstreamRes.status === 401 || upstreamRes.status === 403) {
+        userFriendlyMsg = `API key for profile '${profileKey}' was rejected (HTTP ${upstreamRes.status}: ${userFriendlyMsg}). Check credentials in 'switch ui'.`;
+      }
+      sendClientError(res, clientFormat, upstreamRes.status, userFriendlyMsg, pickRetryHeaders(upstreamRes));
       return log({ status: upstreamRes.status, error: errText.slice(0, 300) });
     }
 
@@ -1719,6 +1972,92 @@ async function routeApi(req, res, method, pathname) {
       return sendJson(res, 500, { error: err.message });
     }
     return sendJson(res, 200, { idleCompact: idleCompactPolicy(loadConfig()) });
+  }
+
+  // Goal Check
+  if (method === 'GET' && pathname === '/api/goal-check') {
+    const cfg = loadConfig() || {};
+    const policy = goalCheckPolicy(cfg);
+    const target = resolveJevTarget(policy, cfg.profiles || {});
+    const configured = Boolean(target.url && (target.apiKey || policy.sourceProfile));
+    return sendJson(res, 200, {
+      goalCheck: redactGoalCheck(policy, MASKED_KEY),
+      status: {
+        enabled: policy.enabled,
+        configured,
+        model: policy.model,
+        endpoint: target.url || '(none)'
+      }
+    });
+  }
+  if (method === 'POST' && pathname === '/api/goal-check') {
+    let patch;
+    try {
+      patch = JSON.parse((await readBody(req, 64 * 1024)).toString('utf8'));
+    } catch (err) {
+      return sendJson(res, err.status || 400, { error: err.message });
+    }
+    const currentCfg = loadConfig() || {};
+    const currentPolicy = goalCheckPolicy(currentCfg);
+    const invalid = validateGoalCheckPatch(patch, currentPolicy);
+    if (invalid) return sendJson(res, 400, { error: invalid });
+
+    const currentStoredKey = (currentCfg[GOAL_CHECK_KEY]?.apiKey) || '';
+    if (patch.apiKey === MASKED_KEY) {
+      patch.apiKey = currentStoredKey;
+    } else if (patch.apiKey === undefined && Object.hasOwn(currentCfg, GOAL_CHECK_KEY)) {
+      patch.apiKey = currentStoredKey;
+    }
+
+    currentCfg[GOAL_CHECK_KEY] = { ...(currentCfg[GOAL_CHECK_KEY] || {}), ...patch };
+    try {
+      saveConfig(currentCfg);
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+
+    const updatedPolicy = goalCheckPolicy(loadConfig());
+    const target = resolveJevTarget(updatedPolicy, (loadConfig() || {}).profiles || {});
+    const configured = Boolean(target.url && (target.apiKey || updatedPolicy.sourceProfile));
+    return sendJson(res, 200, {
+      goalCheck: redactGoalCheck(updatedPolicy, MASKED_KEY),
+      status: {
+        enabled: updatedPolicy.enabled,
+        configured,
+        model: updatedPolicy.model,
+        endpoint: target.url || '(none)'
+      }
+    });
+  }
+  if (method === 'POST' && pathname === '/api/goal-check/test') {
+    let body;
+    try {
+      body = JSON.parse((await readBody(req, 64 * 1024)).toString('utf8'));
+    } catch (err) {
+      return sendJson(res, err.status || 400, { error: err.message });
+    }
+    const cfg = loadConfig() || {};
+    const currentGC = cfg[GOAL_CHECK_KEY] || {};
+    const currentStoredKey = currentGC.apiKey || '';
+    const apiKey = body.apiKey === MASKED_KEY ? currentStoredKey : (body.apiKey ?? currentStoredKey);
+    const baseURL = body.baseURL !== undefined ? body.baseURL : (currentGC.baseURL || '');
+    const decisionEndpoint = body.decisionEndpoint !== undefined ? body.decisionEndpoint : (currentGC.decisionEndpoint || '');
+    const model = body.model !== undefined ? body.model : (currentGC.model || 'typesafe/jev-latest');
+    const sourceProfile = body.sourceProfile !== undefined ? body.sourceProfile : (currentGC.sourceProfile || '');
+
+    const testRes = await testJevConnection({
+      baseURL,
+      decisionEndpoint,
+      apiKey,
+      model,
+      sourceProfile,
+      profiles: cfg.profiles || {},
+      timeoutMs: body.timeoutMs || 8000
+    });
+    return sendJson(res, 200, testRes);
+  }
+  if (method === 'GET' && pathname === '/api/goal-check/logs') {
+    return sendJson(res, 200, { logs: goalCheckLogs.slice().reverse() });
   }
 
   if (method !== 'POST') {
