@@ -1,5 +1,12 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.7 — 2026-10-09
+
+- **Jev Goal Check Interception Gate:** Intercept Claude Code stopping condition evaluators (`/goal`) and verify task completion independently using Jev System One typed decision judgments (`complete`, `evidence`, `unfinished`). Fails closed on missing or unverified work, preventing premature completion claims when models merely edit reports rather than implementing fixes.
+- **Dedicated Goal Check Dashboard (`#/goal-check`):** Manage Goal Check with provider source inheritance, custom URL and endpoint overrides, model combobox with auto-discovery, live connection test probe, fine-grained threshold controls, and real-time verification history.
+- **Notice Shim Preflight Model & Credential Check:** Automatically verify upstream endpoint reachability, API key validity, and configured model availability whenever a tool session is launched from the notice shim (`claude`, `codex`, `agy`). Instantly alerts the developer in the terminal if an active model was deprecated or dropped upstream, preventing cryptic downstream errors.
+- **Clear Gateway Error Messages:** Translate ambiguous upstream 404 (model not found) and 401 (invalid key) errors into actionable explanations directing users to reconfigure via `switch ui`.
+
 ## Release 1.6.6 — 2026-10-09
 
 - **Consistent MCP Tool Aliasing across ToolSearch and History:** Ensure tool names in instructions, structured `ToolSearch` references, query history, and upstream declarations use the identical collision-resolved alias mapping across Chat, Anthropic, and Vertex conversions. Original client tool names are restored before Claude Code executes tool calls or queries `ToolSearch`, preventing mid-response stream rejections (`upstream called undeclared tool`) when interacting with MCP tools exceeding 64 characters (such as Chrome DevTools MCP).
