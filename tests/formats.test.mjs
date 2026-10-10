@@ -64,6 +64,48 @@ test('healAnthropicPayload: native Anthropic passthrough keeps the billing heade
   assert.equal(payload.system[0].text, header);
 });
 
+test('healAnthropicPayload: a system turn reaches the system prompt, not dropped with the other turns', () => {
+  const { payload, changed, notes } = healAnthropicPayload({
+    model: 'claude-opus-4-6',
+    messages: [{ role: 'system', content: 'You are Rem.' }, { role: 'user', content: 'hi' }]
+  });
+  assert.equal(changed, true);
+  assert.deepEqual(payload.messages.map(m => m.role), ['user']);
+  assert.equal(payload.system, 'You are Rem.');
+  assert.ok(notes.some(n => n.includes('system turns')));
+});
+
+test('healAnthropicPayload: a folded system turn keeps the system field it arrived with, in order', () => {
+  const { payload } = healAnthropicPayload({
+    model: 'claude-opus-4-6',
+    system: [{ type: 'text', text: 'Base instructions.' }],
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'Output style: concise.' }] },
+      { role: 'user', content: 'hi' }
+    ]
+  });
+  assert.match(payload.system, /^Base instructions\./);
+  assert.match(payload.system, /Output style: concise\.$/);
+});
+
+test('healAnthropicPayload: a system turn with no text leaves the prompt alone', () => {
+  const { payload } = healAnthropicPayload({
+    model: 'claude-opus-4-6',
+    messages: [{ role: 'system', content: [] }, { role: 'user', content: 'hi' }]
+  });
+  assert.equal(payload.system, undefined);
+  assert.deepEqual(payload.messages.map(m => m.role), ['user']);
+});
+
+test('anthropicToIR: a system turn folds into the IR system prompt', () => {
+  const ir = anthropicToIR({
+    model: 'claude-opus-4-6', max_tokens: 10,
+    messages: [{ role: 'system', content: 'You are Rem.' }, { role: 'user', content: 'hi' }]
+  });
+  assert.equal(ir.system, 'You are Rem.');
+  assert.deepEqual(ir.messages.map(m => m.role), ['user']);
+});
+
 test('healToolPairs: orphan result -> user text, missing result -> placeholder, adjacency kept', () => {
   const healed = healToolPairs([
     { role: 'user', content: 'start' },

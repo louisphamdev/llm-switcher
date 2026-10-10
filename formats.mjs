@@ -444,9 +444,25 @@ function anthropicToIR(payload) {
     }
   }
 
+  // Claude Code sends its output style and similar instructions as a turn with
+  // role "system" inside messages. The Messages shape has no such role, so the
+  // emitters below rebuild messages from user and assistant turns only and the
+  // turn is lost with them. Fold it into the system prompt, in order, the way
+  // the Responses and Chat readers already treat their own system turns.
+  const foldSystemTurn = (msg) => {
+    if (msg.role !== 'system' && msg.role !== 'developer') return false;
+    const text =
+      typeof msg.content === 'string'
+        ? msg.content
+        : (msg.content || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+    if (text.trim()) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
+    return true;
+  };
+
   if (Array.isArray(payload.messages)) {
     for (const msg of payload.messages) {
       if (!msg) continue;
+      if (foldSystemTurn(msg)) continue;
       if (typeof msg.content === 'string') {
         ir.messages.push({ role: msg.role, content: msg.content });
         continue;
@@ -1640,7 +1656,33 @@ function toolResultText(block) {
 function healAnthropicPayload(payload) {
   const notes = [];
   if (!payload || !Array.isArray(payload.messages)) return { payload, changed: false, notes };
-  const src = payload.messages.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
+
+  // Claude Code sends its output style and similar instructions as a turn with role "system"
+  // inside messages. The filter below keeps user and assistant turns only, so that turn would be
+  // dropped with them. Fold it into the top-level system prompt first, in order.
+  const kept = [];
+  const folded = [];
+  for (const m of payload.messages) {
+    if (m && (m.role === 'system' || m.role === 'developer')) {
+      const text = typeof m.content === 'string'
+        ? m.content
+        : (m.content || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+      if (text.trim()) folded.push(text);
+      continue;
+    }
+    kept.push(m);
+  }
+  if (folded.length) {
+    const add = folded.join('\n\n');
+    const cur = typeof payload.system === 'string' ? payload.system
+      : Array.isArray(payload.system)
+        ? payload.system.map(s => (typeof s === 'string' ? s : s.text || s.content || '')).filter(Boolean).join('\n\n')
+        : '';
+    payload = { ...payload, system: cur ? `${cur}\n\n${add}` : add };
+    notes.push('folded system turns into the system prompt');
+  }
+
+  const src = kept.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
   let changed = src.length !== payload.messages.length;
 
   // Step 0: drop thinking blocks with fake signatures; merge adjacent user turns (so a tool_result split
