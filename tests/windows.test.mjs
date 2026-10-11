@@ -6,7 +6,8 @@ import path from 'node:path';
 import http from 'node:http';
 import {
   parseModelWindows, parseModelList, fetchProfileWindows,
-  resolveProfileWindows, readWindowsCache, readLocalCodexWindows
+  resolveProfileWindows, readWindowsCache, readLocalCodexWindows,
+  windowsCacheKey, cachedProfileWindows
 } from '../windows.mjs';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-windows-'));
@@ -150,5 +151,58 @@ test('the Codex CLI own cache is a fallback, not a source of truth', () => {
     });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// A profile whose baseURL is spelled with another case or a trailing slash is the same address.
+test('the cache key of a profile ignores the case of scheme and host and a trailing slash', () => {
+  assert.equal(windowsCacheKey('p', 'HTTP://Api.Example.COM:8080/v1/'), 'p@http://api.example.com:8080/v1');
+  assert.equal(windowsCacheKey('p', 'http://api.example.com:8080/v1'), 'p@http://api.example.com:8080/v1');
+  assert.equal(windowsCacheKey('p', 'https://api.example.com/V1//'), 'p@https://api.example.com/V1', 'the path keeps its case');
+  assert.equal(windowsCacheKey(null, 'https://h/v1'), 'profile@https://h/v1');
+});
+
+// The output clamp reads the cache without a refresh, so it trusts only what this profile read within the hour.
+test('cachedProfileWindows answers only for its own key and only while the entry is fresh', () => {
+  const dir = tmpDir();
+  try {
+    const models = { m: { context: 200000, compact: 0, output: 8192 } };
+    fs.writeFileSync(path.join(dir, 'model-windows.json'), JSON.stringify({ 'a@http://h/v1': { at: 1_000, baseURL: 'http://h/v1', models } }));
+    assert.deepEqual(cachedProfileWindows(dir, 'a@http://h/v1', { now: 1_000 + 60_000 }), models);
+    assert.deepEqual(cachedProfileWindows(dir, 'b@http://h/v1', { now: 1_000 + 60_000 }), {}, 'another profile on the same baseURL');
+    assert.deepEqual(cachedProfileWindows(dir, 'a@http://h/v1', { now: 1_000 + 3_600_000 }), {}, 'an entry an hour old');
+    assert.deepEqual(cachedProfileWindows(dir, 'a@http://h/v1', { now: 2_000, ttlMs: 500 }), {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A list that names only an output limit must not erase the windows an earlier read found.
+test('a refresh merges each model into the cached windows instead of replacing them', async () => {
+  const dir = tmpDir();
+  let hits = 0;
+  const sink = http.createServer((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: hits === 1
+      ? [{ id: 'm', context_length: 200000, compact_window: 150000 }, { id: 'n', context_length: 100000 }]
+      : [{ id: 'm', max_output_tokens: 8192 }, { id: 'o', context_length: 50000 }] }));
+  });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${sink.address().port}/v1`;
+  try {
+    await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 });
+    const merged = await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 + 3_600_000 });
+    assert.equal(hits, 2);
+    const expected = {
+      m: { context: 200000, compact: 150000, output: 8192 },
+      n: { context: 100000, compact: 0 },
+      o: { context: 50000, compact: 0 }
+    };
+    assert.deepEqual(merged, expected);
+    assert.deepEqual(readWindowsCache(dir).p.models, expected);
+  } finally {
+    sink.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

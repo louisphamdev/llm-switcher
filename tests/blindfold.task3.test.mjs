@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-task3-'));
+test.after(() => fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 process.env.LLM_SWITCHER_HOME = TMP;
 process.env.LLM_SWITCHER_CONFIG = path.join(TMP, 'config.json');
 delete process.env.LLM_SWITCHER_BLINDFOLD_CERTS;

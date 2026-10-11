@@ -84,13 +84,35 @@ export async function resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey,
   const entry = cache[cacheKey] || {};
   const fresh = entry.at && now - entry.at < ttlMs;
   if (fresh) return entry.models || {};
-  const models = await fetchProfileWindows(baseURL, apiKey);
-  if (Object.keys(models).length) {
+  const listed = await fetchProfileWindows(baseURL, apiKey);
+  if (Object.keys(listed).length) {
+    // Merged per model and per number: a list that names only an output limit keeps the cached windows.
+    const models = { ...(entry.models || {}) };
+    for (const [id, w] of Object.entries(listed)) {
+      const merged = { ...(models[id] || {}) };
+      for (const [k, v] of Object.entries(w)) if (v > 0 || !(merged[k] > 0)) merged[k] = v;
+      models[id] = merged;
+    }
     cache[cacheKey] = { at: now, baseURL, models };
     writeWindowsCache(stateDir, cache);
     return models;
   }
   return entry.models || {};
+}
+
+// One address however it is spelled: scheme and host are case-blind, and a trailing slash adds nothing.
+export function normalizeBaseURL(baseURL) {
+  return String(baseURL || '').trim().replace(/\/+$/, '').replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, m => m.toLowerCase());
+}
+
+export function windowsCacheKey(profileKey, baseURL) {
+  return `${profileKey || 'profile'}@${normalizeBaseURL(baseURL)}`;
+}
+
+// The cached windows of one profile while they are fresh, without reading the list again.
+export function cachedProfileWindows(stateDir, cacheKey, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
+  const entry = readWindowsCache(stateDir)[cacheKey];
+  return entry?.at && now - entry.at < ttlMs ? entry.models || {} : {};
 }
 
 export function windowsCachePath(stateDir) {

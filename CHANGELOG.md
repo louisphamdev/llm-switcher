@@ -1,5 +1,17 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.12 — 2026-10-11
+
+- **Reasoning from an aborted turn.** In a Codex request, reasoning that waits for an assistant turn is dropped at the next user message. Separate reasoning items are joined with a newline.
+- **Token counts with separators.** A context overflow message with `131,072`, `131.072`, `131 072` or `131_072` gives the full number to Claude Code. A message without numbers keeps the plain form.
+- **Context overflow over WebSocket.** A Codex turn on WebSocket fails with the code `context_length_exceeded`, the same as on HTTP.
+- **Goal check and images.** The goal-check request to a chat upstream uses the same image retry as other requests.
+- **Output limit cache.** The output limit comes only from the cache entry of the same profile, and only when the entry is less than one hour old. The cache key ignores the case of scheme and host and a trailing slash. A new model list is merged per model, so a list with only output limits keeps the cached windows.
+- **System messages on the direct Anthropic route.** A `system` message inside `messages` is no longer lost. Its text goes into the next user turn, or into the previous one if no user turn follows, with the prefix `[system] `.
+- **Gemini `_placeholder` in tool calls.** If the model fills the `_placeholder` property that the proxy added, the proxy removes it from the arguments. This applies to stream and non-stream answers, and only where the proxy added the property.
+- **Test temp files.** The tests delete all their temp directories, also when a test fails. `npm test` deletes the `node-compile-cache` directory that npm made at the start of the run.
+- **`replayReasoning` documentation.** The README files now say that `reasoning_content` goes out only on a request with thinking on.
+
 ## Release 1.6.11 — 2026-10-11
 
 - **Output limit.** The proxy keeps the output limit of each model from the `/models` list of the profile (`max_output_tokens` or `top_provider.max_completion_tokens`) in `model-windows.json`. If the client asks for more tokens than this limit, the proxy sends the limit. This applies to `max_tokens`, `max_completion_tokens` and `maxOutputTokens`. If the limit is not known, the value does not change. The limit does not apply to the anthropic-to-anthropic passthrough (direct mode, outFormat `anthropic`, and the native goal-check request). These requests go to the upstream unchanged.

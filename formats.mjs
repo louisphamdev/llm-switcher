@@ -693,10 +693,12 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     if (text) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
   };
 
-  // A reasoning item precedes the assistant output it belongs to.
+  // A reasoning item precedes the assistant output it belongs to. A user message ends that turn,
+  // so reasoning still pending there came from an aborted turn and is dropped.
   let reasoning = '';
+  const joinLines = (a, b) => (a ? `${a}\n${b}` : b);
   const takeReasoning = (m) => {
-    if (reasoning && m?.role === 'assistant') { m.reasoning = (m.reasoning || '') + reasoning; reasoning = ''; }
+    if (reasoning && m?.role === 'assistant') { m.reasoning = joinLines(m.reasoning || '', reasoning); reasoning = ''; }
   };
 
   // Parallel tool calls arrive as consecutive items -> merge into 1 assistant turn,
@@ -715,7 +717,7 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     ir.messages.push({ role: 'user', content: input });
   } else if (Array.isArray(input)) {
     for (const item of input) {
-      if (typeof item === 'string') { pushText('user', item); continue; }
+      if (typeof item === 'string') { reasoning = ''; pushText('user', item); continue; }
       if (!item || typeof item !== 'object') continue;
       // EasyInputMessage ({role, content}) doesn't require `type`.
       if (item.type === 'message' || (!item.type && item.role)) {
@@ -739,6 +741,7 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
           continue;
         }
         const role = item.role === 'assistant' ? 'assistant' : 'user';
+        if (role === 'user') reasoning = '';
         if (parts.every(p => p.type === 'text')) {
           pushText(role, parts.map(p => p.text).join('\n'));
         } else {
@@ -747,7 +750,7 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
         if (role === 'assistant') takeReasoning(ir.messages[ir.messages.length - 1]);
       } else if (item.type === 'reasoning') {
         const texts = (Array.isArray(item.summary) ? item.summary : []).map(x => x?.text).filter(t => typeof t === 'string' && t);
-        reasoning += texts.join('\n');
+        if (texts.length) reasoning = joinLines(reasoning, texts.join('\n'));
       } else if (item.type === 'function_call') {
         pushCall({ id: item.call_id || item.id || null, name: responsesToolName(item.namespace, item.name), args: parseArgs(item.arguments) });
       } else if (item.type === 'custom_tool_call') {
@@ -1560,6 +1563,83 @@ function collapseNullableUnion(branches) {
 // key keeps the type an object; the root of a tool with no arguments may stay empty.
 const GEMINI_PLACEHOLDER_PROPERTIES = { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } };
 
+// A node the padding produced: its only property is the placeholder. Matched by shape, not by
+// reference, because the schema is deep-copied again before it is sent.
+function isGeminiPadded(schema) {
+  const props = schema?.properties;
+  const p = props?._placeholder;
+  return Boolean(p && Object.keys(props).length === 1 && p.type === GEMINI_PLACEHOLDER_PROPERTIES._placeholder.type
+    && p.description === GEMINI_PLACEHOLDER_PROPERTIES._placeholder.description);
+}
+
+// Removes `_placeholder` from the arguments wherever the schema sent upstream was padded, and only there.
+export function stripGeminiPlaceholders(value, schema) {
+  if (!value || typeof value !== 'object' || !schema || typeof schema !== 'object') return value;
+  if (Array.isArray(value)) {
+    if (!schema.items) return value;
+    const out = value.map(v => stripGeminiPlaceholders(v, schema.items));
+    return out.some((v, i) => v !== value[i]) ? out : value;
+  }
+  if (isGeminiPadded(schema)) {
+    if (!Object.hasOwn(value, '_placeholder')) return value;
+    const { _placeholder, ...rest } = value;
+    return rest;
+  }
+  let out = value;
+  const props = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  for (const [k, v] of Object.entries(value)) {
+    if (!Object.hasOwn(props, k)) continue;
+    const next = stripGeminiPlaceholders(v, props[k]);
+    if (next !== v) out = { ...out, [k]: next };
+  }
+  for (const branch of Array.isArray(schema.anyOf) ? schema.anyOf : []) out = stripGeminiPlaceholders(out, branch);
+  return out;
+}
+
+function hasGeminiPadding(schema) {
+  if (!schema || typeof schema !== 'object') return false;
+  if (isGeminiPadded(schema)) return true;
+  return Object.values(schema.properties || {}).some(hasGeminiPadding) || hasGeminiPadding(schema.items)
+    || (Array.isArray(schema.anyOf) && schema.anyOf.some(hasGeminiPadding));
+}
+
+// The upstream tool name -> the schema sent, for each tool whose schema was padded. Reads both the
+// Vertex and the chat body shape; an empty map means no argument needs the strip.
+export function geminiPaddedTools(upBody) {
+  const padded = new Map();
+  for (const t of Array.isArray(upBody?.tools) ? upBody.tools : []) {
+    const decls = Array.isArray(t?.functionDeclarations) ? t.functionDeclarations : t?.function ? [t.function] : [];
+    for (const d of decls) if (d?.name && hasGeminiPadding(d.parameters)) padded.set(d.name, d.parameters);
+  }
+  return padded;
+}
+
+// The tool vocabulary, plus the strip for padded tools. A renderer holds the arguments of a tool
+// whose needsArgsRewrite is true until the JSON is whole, so the strip also works on a stream.
+export function withGeminiPlaceholderStrip(vocab, padded) {
+  if (!padded?.size) return vocab;
+  const schemaOf = (name) => padded.get(name) || padded.get(vocab.name(name))
+    || [...padded].find(([upstream]) => vocab.name(upstream) === name)?.[1];
+  const args = (name, argsJson) => {
+    const out = vocab.args(name, argsJson);
+    const schema = schemaOf(name);
+    if (!schema) return out;
+    let parsed;
+    try { parsed = JSON.parse(out || '{}'); } catch { return out; }
+    const stripped = stripGeminiPlaceholders(parsed, schema);
+    return stripped === parsed ? out : JSON.stringify(stripped);
+  };
+  return {
+    ...vocab,
+    args,
+    needsArgsRewrite: (name) => Boolean(schemaOf(name)) || Boolean(vocab.needsArgsRewrite?.(name)),
+    repair(upstream, argsJson) {
+      const fixedName = vocab.name(upstream);
+      return { name: fixedName, args: args(upstream, argsJson), renamed: fixedName !== upstream };
+    }
+  };
+}
+
 function toGeminiSchema(schema, root, seen) {
   const nested = Boolean(root);
   const emptyProperties = () => (nested ? { ...GEMINI_PLACEHOLDER_PROPERTIES } : {});
@@ -1744,8 +1824,29 @@ function endsInUnsignedToolLoop(messages) {
 function healAnthropicPayload(payload) {
   const notes = [];
   if (!payload || !Array.isArray(payload.messages)) return { payload, changed: false, notes };
-  const src = payload.messages.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
-  let changed = src.length !== payload.messages.length;
+  // Anthropic has no system role inside messages. Its text joins the next user turn (else the previous
+  // one) after the other blocks, because a tool_result must stay first in its turn.
+  const src = [];
+  let pendingSystem = [];
+  const withSystem = (m) => ({ ...m, content: [...toAnthropicBlocks(m.content), ...pendingSystem] });
+  for (const m of payload.messages) {
+    if (m?.role === 'system') {
+      const text = toAnthropicBlocks(m.content).filter(b => b.type === 'text' && !isBlankText(b)).map(b => b.text).join('\n');
+      if (text) pendingSystem.push({ type: 'text', text: `[system] ${text}` });
+      continue;
+    }
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+    if (m.role === 'user' && pendingSystem.length) { src.push(withSystem(m)); pendingSystem = []; continue; }
+    src.push(m);
+  }
+  if (pendingSystem.length) {
+    const i = src.findLastIndex(m => m.role === 'user');
+    if (i >= 0) src[i] = withSystem(src[i]);
+    else src.unshift({ role: 'user', content: pendingSystem });
+  }
+  const hadSystem = payload.messages.some(m => m?.role === 'system');
+  if (hadSystem) notes.push('folded system messages into user turns');
+  let changed = hadSystem || src.length !== payload.messages.length;
 
   let system = payload.system;
   if (Array.isArray(system) && system.some(isBlankText)) {

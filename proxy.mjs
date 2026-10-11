@@ -11,6 +11,7 @@ import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES, VALID_EFFORTS,
+  geminiPaddedTools, withGeminiPlaceholderStrip,
   toGeminiSchema, isAntigravityModel, refusesImageInput, omitChatImages,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
@@ -26,7 +27,7 @@ import {
   codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
-import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, readWindowsCache } from './windows.mjs';
+import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, windowsCacheKey, cachedProfileWindows } from './windows.mjs';
 import { createToolVocab, NULL_TOOL_VOCAB, toolNameMapForIR } from './toolvocab.mjs';
 import { readUpstreamPayloads } from './upstream-stream.mjs';
 import { compactionResponse, emitCompaction, expandGatewayCompactions, collectCompaction } from './compaction.mjs';
@@ -386,10 +387,15 @@ function isContextOverflow(status, message) {
 }
 
 // Claude Code compacts on "prompt is too long: N tokens > M maximum", so the numbers lead when the upstream names them.
+// A count may group its digits ("131,072", "131.072", "131 072", "131_072"); the group form is tried first.
+const TOKEN_COUNT = String.raw`(\d{1,3}(?:[,. _]\d{3})+(?!\d)|\d+)`;
+const MAX_TOKENS_RE = new RegExp(String.raw`(?:maximum context length|context window|limit) (?:is |of )?` + TOKEN_COUNT, 'i');
+const ASKED_TOKENS_RE = new RegExp(String.raw`(?:requested|resulted in|prompt (?:is|has|contains)|input (?:is|has)) (?:about )?` + TOKEN_COUNT, 'i');
+
 function promptTooLongMessage(message) {
   if (/^prompt is too long/i.test(message)) return message;
-  const max = message.match(/(?:maximum context length|context window|limit) (?:is |of )?(\d+)/i)?.[1];
-  const asked = message.match(/(?:requested|resulted in|prompt (?:is|has|contains)|input (?:is|has)) (?:about )?(\d+)/i)?.[1];
+  const max = message.match(MAX_TOKENS_RE)?.[1]?.replace(/\D/g, '');
+  const asked = message.match(ASKED_TOKENS_RE)?.[1]?.replace(/\D/g, '');
   return max && asked ? `prompt is too long: ${asked} tokens > ${max} maximum (${message})` : `prompt is too long: ${message}`;
 }
 
@@ -494,7 +500,10 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
 // declared none pays nothing and a turn where the model agreed with the list changes nothing.
 function toolVocabFor(ir, outFormat) {
   if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
-  if (!ir._vocab) ir._vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
+  if (!ir._vocab) {
+    const vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
+    ir._vocab = withGeminiPlaceholderStrip(vocab, ir._geminiPadded);
+  }
   return ir._vocab;
 }
 
@@ -781,7 +790,7 @@ async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profile
     const summaryModel = mapModel(policy.model, profile, clientFormat);
     const summaryFormat = resolveOutFormat(profile, summaryModel);
     askSummary({ ir: prefixIR, policy, profile, model: summaryModel,
-      build: (prof, model, summaryIR) => buildUpstreamRequest(prof, summaryFormat, summaryIR, model, req),
+      build: (prof, model, summaryIR) => buildUpstreamRequest(prof, summaryFormat, summaryIR, model, req, null, profileKey),
       onDiagnostic: ({ code, status }) => console.warn(`[llm-switcher] idle compact ${key.slice(0, 12)}: ${code}${status ? ` (${status})` : ''}`),
     }).then(summary => {
       if (!summary) return;
@@ -828,30 +837,29 @@ function resolveThinkingEffort(profile, slot, mappedModel) {
   return profile?.thinkingEffort || 'auto';
 }
 
-// The output limit the profile's own model list names for this model, or 0 when no cached list
-// names one. The cache is filled by /v1/models; this only reads it.
-function modelOutputLimit(profile, mappedModel) {
+// The output limit this profile's own model list names for this model, or 0 when no fresh cached
+// list names one. The cache is filled by /v1/models; this only reads it.
+function modelOutputLimit(profileKey, profile, mappedModel) {
   if (!profile?.baseURL || !mappedModel) return 0;
-  for (const entry of Object.values(readWindowsCache(STATE_DIR))) {
-    const output = entry?.baseURL === profile.baseURL ? Number(entry.models?.[mappedModel]?.output) : 0;
-    if (output > 0) return output;
-  }
-  return 0;
+  const output = Number(cachedProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL))[mappedModel]?.output);
+  return output > 0 ? output : 0;
 }
 
-function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null) {
+function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null, profileKey = null) {
   const effort = resolveThinkingEffort(profile, slot, mappedModel);
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
     thinkingMode: profile.thinkingMode,
     thinkingEffort: effort,
     replayReasoning: profile.replayReasoning === true,
-    maxOutputTokens: modelOutputLimit(profile, mappedModel),
+    maxOutputTokens: modelOutputLimit(profileKey, profile, mappedModel),
   });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);
     if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
       upBody.tools = geminiSafeTools(upBody.tools);
     }
+    // Read by toolVocabFor when the answer is rendered: the arguments lose the keys padding added.
+    if (outFormat === 'vertex' || (outFormat === 'openai-chat' && isAntigravityModel(mappedModel))) ir._geminiPadded = geminiPaddedTools(upBody);
   }
   const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
   return { url, headers, upBody };
@@ -1001,7 +1009,7 @@ async function executeGoalCheckGate({ req, res, clientFormat, payload, ir, profi
   try {
     const nativePromise = (async () => {
       try {
-        let url, headers, body;
+        let url, headers, body, upBody = null;
         if (bifrost) {
           url = bifrostURL(profile, clientFormat, req, opts);
           headers = bifrostHeaders(req, profile);
@@ -1019,16 +1027,18 @@ async function executeGoalCheckGate({ req, res, clientFormat, payload, ir, profi
           body = Buffer.from(JSON.stringify(json), 'utf8');
         } else {
           const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-          const reqData = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+          const reqData = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
           url = reqData.url;
           headers = reqData.headers;
-          body = JSON.stringify(reqData.upBody);
+          upBody = reqData.upBody;
         }
 
         const traceId = clientFormat === 'codeassist' ? null : (probeTraceId(req) || contractLab.traceFor(mappedModel));
         if (traceId) headers['x-intact-trace'] = traceId;
 
-        const upRes = await fetch(url, { method: 'POST', headers, body, signal: gateAC.signal });
+        const upRes = upBody
+          ? await fetchUpstream(url, headers, upBody, gateAC.signal, outFormat, profileKey, mappedModel)
+          : await fetch(url, { method: 'POST', headers, body, signal: gateAC.signal });
         if (!upRes.ok) {
           const errText = await upRes.text().catch(() => '');
           return { malformed: true, error: `Upstream HTTP ${upRes.status}: ${errText.slice(0, 150)}` };
@@ -1302,7 +1312,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       return log({ status: 400, error: 'unsupported compaction state' });
     }
     const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
@@ -1962,7 +1972,7 @@ async function servedModels(req) {
 // still gets the cached numbers, because an entry with the template window is better than none.
 async function modelWindowsFor(profileKey, profile) {
   if (!profile?.baseURL) return {};
-  const listed = await resolveProfileWindows(STATE_DIR, `${profileKey || 'profile'}@${profile.baseURL}`, profile.baseURL, profile.apiKey);
+  const listed = await resolveProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL), profile.baseURL, profile.apiKey);
   if (Object.keys(listed).length) return listed;
   return readLocalCodexWindows();
 }
@@ -2385,7 +2395,7 @@ function sendWsFailed(socket, model, message, status = 500, tap = null, code = n
     if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
   }, model || 'main');
   renderer.start();
-  renderer.error(message, code || responsesErrorCode(status));
+  renderer.error(message, code || (isContextOverflow(status, message) ? 'context_length_exceeded' : responsesErrorCode(status)));
 }
 
 // Codex on WebSocket sends only the new items of a turn and names the turn before in
@@ -2573,7 +2583,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
   let answered = false; // set only after a complete answer; the half upload depends on it
   try {
     const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
 

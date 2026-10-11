@@ -62,6 +62,18 @@ const sse = (res, objs, { raw = [] } = {}) => {
   res.end();
 };
 
+// Upstream errors keyed by a MOCK_ERR:<key> marker in the last user message: [status, message].
+const MOCK_ERRORS = {
+  comma: [400, "This model's maximum context length is 131,072 tokens. However, your messages resulted in 140,000 tokens."],
+  dot: [400, 'Input exceeds the context window of 131.072 tokens: requested 140.000 tokens'],
+  space: [400, 'maximum context length is 131 072 tokens, you requested 140 000 tokens'],
+  underscore: [400, 'maximum context length is 131_072 tokens, you requested 140_000 tokens'],
+  prefixed: [400, 'prompt is too long: 200000 tokens > 199999 maximum'],
+  nonumber: [400, 'The input exceeds the context window of this model.'],
+  rate: [429, 'Rate limit reached on context tokens per minute: maximum context length is 131,072'],
+  server: [500, "Internal error: this model's maximum context length is 131,072 tokens"]
+};
+
 function startUpstream() {
   upstream = http.createServer((req, res) => {
     let body = '';
@@ -123,9 +135,27 @@ function startUpstream() {
             { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 15 } }
           ], { raw: ['data: [DONE]\n\n'] });
         }
+        if (lastUser.includes('PLACEHOLDER_ECHO')) {
+          const args = '{"cmd":"ls","env":{"A":"1","_placeholder":true},"opts":{"_placeholder":"keep"},"_placeholder":true}';
+          if (!json.stream) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_ph', type: 'function', function: { name: 'run', arguments: args } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 5, completion_tokens: 5 } }));
+          }
+          return sse(res, [
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_ph', type: 'function', function: { name: 'run', arguments: args.slice(0, 30) } }] } }] },
+            { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args.slice(30) } }] } }] },
+            { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 5, completion_tokens: 5 } }
+          ], { raw: ['data: [DONE]\n\n'] });
+        }
         if (lastUser.includes('RATE_LIMIT')) {
           res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '7' });
           return res.end(JSON.stringify({ error: { message: 'slow down' } }));
+        }
+        const mockErr = lastUser.match(/MOCK_ERR:(\w+)/)?.[1];
+        if (mockErr && MOCK_ERRORS[mockErr]) {
+          const [status, message] = MOCK_ERRORS[mockErr];
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message, type: 'invalid_request_error' } }));
         }
         if (lastUser.includes('CONTEXT_OVERFLOW')) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -262,6 +292,8 @@ before(async () => {
       intactcc: { name: 'Mock intact', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', thinkingMode: 'off', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact-user', defaultModels: { opus: 'claude/claude-opus-5', sonnet: 'gem/flash', haiku: 'claude/claude-haiku-4-5', fable: 'gem/flash' } },
       textonly: { name: 'Mock Text Only', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-textonly', defaultModels: { opus: 'up-textonly', sonnet: 'up-badreq', haiku: 'up-haiku', fable: 'up-fable' } },
       capped: { name: 'Mock Capped Output', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      cappedtwin: { name: 'Mock Capped Twin', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      cappedold: { name: 'Mock Capped Old', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
     }
   };
@@ -628,6 +660,49 @@ test('max_tokens above the listed output limit is clamped; a model with no liste
   assert.equal(received.at(-1).body.max_tokens, 64000);
 });
 
+// The clamp trusts only the list this profile read within the hour, whatever other profile shares its baseURL.
+test('max_tokens is clamped only from a fresh cache entry of the same profile', async () => {
+  const listed = await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'capped' } });
+  await listed.text();
+  const ask = async (profile) => {
+    const res = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }] }, { 'x-llm-profile': profile });
+    assert.equal(res.status, 200, profile);
+    await res.text();
+    assert.equal(received.at(-1).body.model, 'up-capped', profile);
+    return received.at(-1).body.max_tokens;
+  };
+  assert.equal(await ask('cappedtwin'), 64000, 'another profile on the same baseURL has not read its list');
+  const cacheFile = path.join(tmpDir, 'model-windows.json');
+  const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  const base = `http://127.0.0.1:${upstreamPort}/chat/v1`;
+  cache[`cappedold@${base}`] = { at: Date.now() - 2 * 3_600_000, baseURL: base, models: { 'up-capped': { context: 200000, compact: 0, output: 4096 } } };
+  fs.writeFileSync(cacheFile, JSON.stringify(cache));
+  assert.equal(await ask('cappedold'), 64000, 'an entry two hours old is not trusted');
+  assert.equal(await ask('capped'), 8192);
+});
+
+// Gemini gets `_placeholder` on an empty nested object; the client never declared it, so it must not come back.
+test('A _placeholder the gateway added for Gemini is stripped from tool-call arguments, stream and non-stream', async () => {
+  const tools = [{ type: 'function', name: 'run', parameters: { type: 'object', properties: {
+    cmd: { type: 'string' },
+    env: { type: 'object', additionalProperties: { type: 'string' } },
+    opts: { type: 'object', properties: { _placeholder: { type: 'string' } } }
+  } } }];
+  const want = { cmd: 'ls', env: { A: '1' }, opts: { _placeholder: 'keep' }, _placeholder: true };
+
+  const plain = await post('/v1/responses', { model: 'main', stream: false, tools, input: 'PLACEHOLDER_ECHO' }, { 'x-llm-profile': 'agmock' });
+  assert.equal(plain.status, 200);
+  const sent = received.at(-1).body.tools.find(t => t.function.name === 'run').function.parameters;
+  assert.deepEqual(Object.keys(sent.properties.env.properties), ['_placeholder'], 'the schema sent upstream was padded');
+  const call = (await plain.json()).output.find(o => o.type === 'function_call');
+  assert.deepEqual(JSON.parse(call.arguments), want);
+
+  const streamed = await post('/v1/responses', { model: 'main', stream: true, tools, input: 'PLACEHOLDER_ECHO' }, { 'x-llm-profile': 'agmock' });
+  const done = parseSSE(await streamed.text()).find(e => e.data?.type === 'response.completed');
+  assert.ok(done, 'the stream completes');
+  assert.deepEqual(JSON.parse(done.data.response.output.find(o => o.type === 'function_call').arguments), want);
+});
+
 // A text-only model refuses an image that stays in the history, so every later turn would fail too.
 test('An image refused by a text-only chat model is retried once as text in each request', async () => {
   const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
@@ -683,6 +758,36 @@ test('sendClientError maps context overflow per client', async () => {
   const codexJson = await codex.json();
   assert.equal(codexJson.error.code, 'context_length_exceeded');
   assert.match(codexJson.error.message, /maximum context length is 131072/);
+});
+
+test('Context overflow numbers with thousands separators reach Claude Code whole', async () => {
+  const ask = async (key) => {
+    const res = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 10, messages: [{ role: 'user', content: `MOCK_ERR:${key}` }] });
+    return { status: res.status, error: (await res.json()).error };
+  };
+  for (const key of ['comma', 'dot', 'space', 'underscore']) {
+    const { status, error } = await ask(key);
+    assert.equal(status, 400, key);
+    assert.equal(error.type, 'invalid_request_error', key);
+    assert.equal(error.message, `prompt is too long: 140000 tokens > 131072 maximum (${MOCK_ERRORS[key][1]})`, key);
+  }
+  assert.deepEqual(await ask('prefixed'), { status: 400, error: { type: 'invalid_request_error', message: MOCK_ERRORS.prefixed[1] } });
+  assert.deepEqual(await ask('nonumber'), { status: 400, error: { type: 'invalid_request_error', message: `prompt is too long: ${MOCK_ERRORS.nonumber[1]}` } });
+  assert.deepEqual(await ask('rate'), { status: 429, error: { type: 'rate_limit_error', message: MOCK_ERRORS.rate[1] } });
+  assert.deepEqual(await ask('server'), { status: 500, error: { type: 'api_error', message: MOCK_ERRORS.server[1] } });
+});
+
+test('Codex WS: an upstream context overflow fails the turn with context_length_exceeded', async () => {
+  const ws = await rawWs();
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MOCK_ERR:comma over ws' })));
+  assert.ok(await until(() => ws.messages.some(m => m.type === 'response.failed')), 'no response.failed');
+  const failed = ws.messages.find(m => m.type === 'response.failed').response.error;
+  assert.equal(failed.code, 'context_length_exceeded');
+  assert.equal(failed.message, MOCK_ERRORS.comma[1]);
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MOCK_ERR:rate over ws' })));
+  assert.ok(await until(() => ws.messages.filter(m => m.type === 'response.failed').length === 2), 'no second response.failed');
+  assert.equal(ws.messages.filter(m => m.type === 'response.failed')[1].response.error.code, 'rate_limit_exceeded');
+  ws.socket.destroy();
 });
 
 test('Mid-stream upstream error surfaces as an error event instead of a fake end_turn', async () => {

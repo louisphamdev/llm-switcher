@@ -13,8 +13,10 @@ import {
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
   budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage,
-  refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT
+  refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT,
+  stripGeminiPlaceholders, geminiPaddedTools, withGeminiPlaceholderStrip
 } from '../formats.mjs';
+import { NULL_TOOL_VOCAB } from '../toolvocab.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
 test('anthropicToIR: stream defaults to false and thinking budget_tokens is preserved', () => {
@@ -1387,4 +1389,81 @@ test('healAnthropicPayload dedupes repeated tool_use ids', () => {
   // Each result still answers its own call.
   assert.deepEqual(msgs[2].content.map(b => [b.tool_use_id, b.content]), [[ids[0], 'a.txt']]);
   assert.deepEqual(msgs[4].content.map(b => [b.tool_use_id, b.content]), [[ids[1], '/'], [ids[2], 'uid']]);
+});
+
+// Reasoning from an aborted turn must not attach to the assistant turn after the next user message.
+test('responsesToIR drops pending reasoning at a user message and joins reasoning pieces with a newline', () => {
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'plan it' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    { type: 'message', role: 'user', content: 'start over' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'fresh plan' }] },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'second piece' }] },
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] });
+  const assistant = ir.messages.find(m => m.role === 'assistant');
+  assert.equal(assistant.reasoning, 'fresh plan\nsecond piece');
+  const viaString = responsesToIR({ model: 'x', input: [
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    'start over',
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] });
+  assert.equal(viaString.messages.find(m => m.role === 'assistant').reasoning, undefined);
+});
+
+// The direct Anthropic route has no system role inside messages; dropping the message loses its instruction.
+test('healAnthropicPayload folds a mid-conversation system message into a user turn', () => {
+  const roles = (msgs) => msgs.map(m => m.role);
+  const texts = (msgs) => JSON.stringify(msgs);
+  const alternates = (msgs) => msgs.every((m, i) => i === 0 || m.role !== msgs[i - 1].role);
+
+  const r = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'system', content: 'Use British spelling from now on.' },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: 'one file' },
+    { role: 'system', content: [{ type: 'text', text: 'Be brief.' }] }
+  ] });
+  assert.equal(r.changed, true);
+  const msgs = r.payload.messages;
+  assert.ok(!msgs.some(m => m.role === 'system'), 'no system role remains');
+  assert.ok(alternates(msgs), `roles alternate: ${roles(msgs)}`);
+  assert.deepEqual(roles(msgs), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(msgs[2].content, [
+    { type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' },
+    { type: 'text', text: '[system] Use British spelling from now on.' },
+    { type: 'text', text: '[system] Be brief.' }
+  ], 'a tool_result stays first; with no user turn after it, the last text joins the previous user turn');
+  assert.ok(!texts(msgs[3]).includes('[system]'));
+
+  const only = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'system', content: 'Answer in French.' },
+    { role: 'assistant', content: 'Bonjour' }
+  ] }).payload.messages;
+  assert.deepEqual(only, [{ role: 'user', content: [{ type: 'text', text: '[system] Answer in French.' }] }, { role: 'assistant', content: 'Bonjour' }]);
+});
+
+// Vertex path: the schema is deep-copied before it is sent, and an Anthropic client streams the call.
+test('a Vertex tool padded for Gemini loses _placeholder in streamed arguments, and only where padded', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'run', input_schema: {
+    type: 'object', properties: { env: { type: 'object' }, list: { type: 'array', items: { type: 'object' } }, opts: { type: 'object', properties: { _placeholder: { type: 'string' } } } }
+  } }, { name: 'plain', input_schema: { type: 'object', properties: { a: { type: 'string' } } } }] });
+  const body = JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro')));
+  const padded = geminiPaddedTools(body);
+  assert.deepEqual([...padded.keys()], ['run'], 'only the tool with a padded node');
+  const args = { env: { A: '1', _placeholder: true }, list: [{ _placeholder: false, b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 };
+  assert.deepEqual(stripGeminiPlaceholders(args, padded.get('run')), { env: { A: '1' }, list: [{ b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 });
+
+  const events = [];
+  const r = createAnthropicStream((e, d) => events.push(d), 'm', { vocab: withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, padded) });
+  r.start();
+  const json = JSON.stringify(args);
+  r.tool({ index: 0, id: 'c1', name: 'run', args: json.slice(0, 12) });
+  r.tool({ index: 0, args: json.slice(12) });
+  r.finish('tool_calls');
+  const streamed = events.filter(d => d.delta?.type === 'input_json_delta').map(d => d.delta.partial_json).join('');
+  assert.deepEqual(JSON.parse(streamed), { env: { A: '1' }, list: [{ b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 });
+  assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, padded).args('plain', '{"_placeholder":true}'), '{"_placeholder":true}');
+  assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, new Map()), NULL_TOOL_VOCAB, 'no padding, no wrapper');
 });

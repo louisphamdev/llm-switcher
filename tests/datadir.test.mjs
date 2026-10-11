@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,7 +6,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveDataDir } from '../state.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-sw-datadir-'));
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-sw-datadir-')); made.push(d); return d; };
 
 test('a git checkout keeps its data next to the code', () => {
   const root = tmp();

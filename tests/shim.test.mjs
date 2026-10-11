@@ -34,7 +34,10 @@ if (process.platform !== 'win32') {
 // Only node, never the directory it lives in: an npm install puts the real claude and codex next to it.
 const NODE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'shimnode-'));
 if (process.platform !== 'win32') fs.symlinkSync(process.execPath, path.join(NODE_DIR, 'node'));
+// Per-test fake binaries live here, so one teardown removes them even when a test fails.
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'shimscratch-'));
 test.after(() => {
+  fs.rmSync(SCRATCH, { recursive: true, force: true });
   fs.rmSync(NODE_DIR, { recursive: true, force: true });
   fs.rmSync(RENDER_DIR, { recursive: true, force: true });
   fs.rmSync(STATE, { recursive: true, force: true });
@@ -61,7 +64,7 @@ function runShim(name, args, { active, fakeDir, extraPath = '', env = {}, files 
 // Prints every value the switcher could have touched, so a test can see both what was scrubbed
 // and what must have been kept.
 function makeEnvBin(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimenv-'));
+  const dir = fs.mkdtempSync(path.join(SCRATCH, 'shimenv-'));
   fs.writeFileSync(path.join(dir, name),
     '#!/usr/bin/env bash\n'
     + 'echo "HTTPS_PROXY=${HTTPS_PROXY:-NONE} BASE=${ANTHROPIC_BASE_URL:-NONE} OPENAI=${OPENAI_BASE_URL:-NONE} MODEL=${ANTHROPIC_MODEL:-NONE} DEFOPUS=${ANTHROPIC_DEFAULT_OPUS_MODEL:-NONE} CA=${NODE_EXTRA_CA_CERTS:-NONE}"\n'
@@ -73,14 +76,14 @@ function makeEnvBin(name) {
 
 // A fake binary that prints every argument on its own line, so the test sees argument boundaries.
 function makeArgvBin(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimargv-'));
+  const dir = fs.mkdtempSync(path.join(SCRATCH, 'shimargv-'));
   fs.writeFileSync(path.join(dir, name), '#!/usr/bin/env bash\necho "HTTPS_PROXY=${HTTPS_PROXY:-NONE}"\nprintf \'%s\\n\' "$@"\n');
   fs.chmodSync(path.join(dir, name), 0o755);
   return dir;
 }
 
 function makeFakeBin(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shimtest-'));
+  const dir = fs.mkdtempSync(path.join(SCRATCH, 'shimtest-'));
   fs.writeFileSync(path.join(dir, name),
     '#!/usr/bin/env bash\necho "BASE=${ANTHROPIC_BASE_URL:-NONE} ARGS=$*"\n');
   fs.chmodSync(path.join(dir, name), 0o755);
@@ -118,7 +121,7 @@ test('shim never recurses into itself', (t) => {
 
 test('shim fails loudly (127) when the real binary is missing', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'shimempty-'));
+  const empty = fs.mkdtempSync(path.join(SCRATCH, 'shimempty-'));
   assert.throws(
     () => runShim('claude', [], { active: true, fakeDir: empty }),
     (err) => err.status === 127,
@@ -583,7 +586,7 @@ for (const [kind, routed] of [['forged', false], ['silent', false], ['real', tru
     const server = await agyListener(kind);
     t.after(() => server.close());
     const port = server.address().port;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyposix-'));
+    const dir = fs.mkdtempSync(path.join(SCRATCH, 'agyposix-'));
     fs.writeFileSync(path.join(dir, 'agy'), `#!/usr/bin/env bash\necho "CCU=[\${CLOUD_CODE_URL:-}]"\nnode "${AGY_REQUEST}"\n`);
     fs.chmodSync(path.join(dir, 'agy'), 0o755);
     for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });

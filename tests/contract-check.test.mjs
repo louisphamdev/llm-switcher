@@ -1,7 +1,7 @@
 // `switch contract-check`: it turns open findings of intact into JSON test data, and never into
 // JavaScript. Every path, enum value and name in a finding or a fixture is untrusted text, so the
 // hostile-finding test hashes every .mjs file of the repository before and after a run.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -15,8 +15,13 @@ import { runCheck, loadExclusions, matchExclusion, FINDING_ID_RE } from '../cont
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOSTILE = "x');require('child_process')";
 
+// Every directory is removed once more after the file, so a failed test leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 function tmpDir(name) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `lsw-${name}-`));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `lsw-${name}-`));
+  made.push(dir);
+  return dir;
 }
 
 // One fake intact: it serves the findings list and one fixture per known trace id.
