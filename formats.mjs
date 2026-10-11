@@ -1675,7 +1675,8 @@ export const IMAGE_OMITTED_TEXT = '[image omitted: this model does not accept im
 
 export function refusesImageInput(text) {
   const t = String(text || '').toLowerCase();
-  return t.includes('image_url') || t.includes('does not support image') || t.includes('image input is not supported')
+  return t.includes('unknown variant `image_url`') || t.includes('image_url is only supported by certain models')
+    || t.includes('does not support image') || t.includes('image input is not supported')
     || (t.includes('vision') && t.includes('not supported'));
 }
 

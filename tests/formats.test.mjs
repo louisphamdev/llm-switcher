@@ -49,7 +49,8 @@ test('refusesImageInput matches the known no-image errors and nothing else', () 
     'Image input is not supported for this model',
     'Vision is not supported by deepseek-chat'
   ]) assert.equal(refusesImageInput(t), true, t);
-  for (const t of ['', 'temperature must be between 0 and 2', 'maximum context length exceeded', 'vision model overloaded', 'not supported: tool_choice'])
+  for (const t of ['', 'temperature must be between 0 and 2', 'maximum context length exceeded', 'vision model overloaded', 'not supported: tool_choice',
+    'Invalid image_url: could not decode base64', "Invalid 'messages[0].content[1].image_url.url'. Expected a base64-encoded data URL"])
     assert.equal(refusesImageInput(t), false, t);
 });
 

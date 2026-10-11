@@ -102,6 +102,10 @@ function startUpstream() {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: { message: 'Failed to deserialize the JSON body: messages[0]: unknown variant `image_url`, expected `text`', type: 'invalid_request_error' } }));
         }
+        if (json.model === 'up-textonly' && lastUser.includes('RETRY_FAILS')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message: 'try again later', type: 'invalid_request_error' } }));
+        }
         if (json.model === 'up-badreq') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: { message: 'temperature must be between 0 and 2', type: 'invalid_request_error' } }));
@@ -625,7 +629,7 @@ test('max_tokens above the listed output limit is clamped; a model with no liste
 });
 
 // A text-only model refuses an image that stays in the history, so every later turn would fail too.
-test('An image refused by a text-only chat model is retried once as text, and later turns drop it up front', async () => {
+test('An image refused by a text-only chat model is retried once as text in each request', async () => {
   const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
   const calls = model => received.filter(r => r.url.startsWith('/chat/v1/chat/completions') && r.body.model === model).length;
   const sentImage = r => r.body.messages.some(m => Array.isArray(m.content) && m.content.some(p => p?.type === 'image_url'));
@@ -643,8 +647,14 @@ test('An image refused by a text-only chat model is retried once as text, and la
   ] }, { 'x-llm-profile': 'textonly' });
   assert.equal(second.status, 200);
   await second.text();
-  assert.equal(calls('up-textonly'), 3, 'the second request needs one call');
+  assert.equal(calls('up-textonly'), 4, 'nothing is remembered: one refusal, one retry again');
+  assert.equal(sentImage(received.at(-2)), true);
   assert.equal(sentImage(received.at(-1)), false);
+
+  const failed = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 100, messages: [{ role: 'user', content: [image, { type: 'text', text: 'RETRY_FAILS' }] }] }, { 'x-llm-profile': 'textonly' });
+  assert.equal(failed.status, 400);
+  assert.match((await failed.json()).error.message, /try again later/, 'the client gets the error of the retry, not the first refusal');
+  assert.equal(calls('up-textonly'), 6);
 
   const other = await post('/v1/messages', { model: 'claude-sonnet-4-6', max_tokens: 100, messages: [{ role: 'user', content: [image, { type: 'text', text: 'hi' }] }] }, { 'x-llm-profile': 'textonly' });
   assert.equal(other.status, 400);

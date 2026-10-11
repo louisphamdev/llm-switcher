@@ -857,25 +857,17 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
   return { url, headers, upBody };
 }
 
-// (profile, model) pairs whose chat upstream refused an image. The image stays in the history, so
-// their later requests send the text marker from the start instead of failing every turn.
-const textOnlyModels = new Set();
-
 // Sends the upstream request. A chat 400 that says the model takes no images is retried once with
 // every image replaced by text. The status arrives before any byte goes to the client, so the client
-// sees only the retry's answer.
+// sees only the retry's answer. Nothing is remembered: a false refusal costs one request, not the model.
 async function fetchUpstream(url, headers, upBody, signal, outFormat, profileKey, mappedModel) {
-  const chat = outFormat === 'openai-chat';
-  const key = `${profileKey}\n${mappedModel}`;
-  if (chat && textOnlyModels.has(key)) omitChatImages(upBody);
   const send = () => fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal });
   const res = await send();
-  const hasImage = chat && upBody.messages?.some(m => Array.isArray(m?.content) && m.content.some(p => p?.type === 'image_url'));
+  const hasImage = outFormat === 'openai-chat' && upBody.messages?.some(m => Array.isArray(m?.content) && m.content.some(p => p?.type === 'image_url'));
   if (res.status !== 400 || !hasImage) return res;
   const errText = await res.text().catch(() => '');
   if (!refusesImageInput(errText)) return new Response(errText, { status: res.status, statusText: res.statusText, headers: res.headers });
-  textOnlyModels.add(key);
-  console.warn(`[${profileKey}] ${mappedModel} refused ${omitChatImages(upBody)} image(s); retrying as text, and sending text from now on`);
+  console.warn(`[${profileKey}] ${mappedModel} refused ${omitChatImages(upBody)} image(s); retrying this request as text`);
   return send();
 }
 
