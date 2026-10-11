@@ -39,6 +39,8 @@ function canonFinish(raw) {
   if (['length', 'max_tokens', 'max_output_tokens'].includes(r)) return 'length';
   if (['tool_calls', 'tool_call', 'function_call', 'function_calls', 'tool_use'].includes(r)) return 'tool_calls';
   if (['content_filter', 'safety', 'recitation', 'language', 'blocklist', 'prohibited_content', 'spii'].includes(r)) return 'content_filter';
+  // Gemini gave up on a tool call: as 'stop' the client would see a silent, empty turn.
+  if (r === 'malformed_function_call') return 'error';
   return 'stop';
 }
 
@@ -394,6 +396,7 @@ function parseArgs(v) {
   if (v === undefined || v === null) return {};
   if (typeof v === 'object') return v;
   if (typeof v === 'string') {
+    if (!v.trim()) return {};
     try { return JSON.parse(v); } catch { return { raw: v }; }
   }
   return {};
@@ -788,7 +791,9 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     ir.thinking = thinkingFromReasoningParam(payload.reasoning);
   }
   ir.responseFormat = responseFormatIR(payload.text?.format);
-  if (ir.compaction) { ir.tools = []; ir.toolChoice = 'none'; ir.responseFormat = null; }
+  // Tools stay declared: Anthropic refuses tool_use history without them, and OpenAI refuses
+  // tool_choice without tools. 'none' alone keeps the summary turn free of calls.
+  if (ir.compaction) { ir.toolChoice = ir.tools.length ? 'none' : null; ir.responseFormat = null; }
   return ir;
 }
 
@@ -1232,7 +1237,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (m.role === 'tool') {
       messages.push({
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: m.toolCallId,
+        content: [{ type: 'tool_result', tool_use_id: safeToolId(m.toolCallId),
           content: m.images?.length ? [...contentToAnthropicBlocks(m.content), ...contentToAnthropicBlocks(m.images)] : m.content ?? '' }]
       });
       continue;
@@ -1240,7 +1245,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (m.role === 'assistant') {
       const blocks = contentToAnthropicBlocks(m.content).filter(b => b.type === 'text');
       for (const tc of (m.toolCalls || [])) {
-        blocks.push({ type: 'tool_use', id: tc.id, name: toolName(tc.name), input: parseArgs(tc.args) });
+        blocks.push({ type: 'tool_use', id: safeToolId(tc.id), name: toolName(tc.name), input: parseArgs(tc.args) });
       }
       if (blocks.length) messages.push({ role: 'assistant', content: blocks });
       continue;
@@ -1629,6 +1634,11 @@ function toAnthropicBlocks(content) {
   return Array.isArray(content) ? content.filter(Boolean) : [];
 }
 
+// Anthropic refuses a text block with no visible text ("text content blocks must be non-empty").
+function isBlankText(b) {
+  return b?.type === 'text' && !(typeof b.text === 'string' && b.text.trim());
+}
+
 function toolResultText(block) {
   const c = block.content;
   const text = typeof c === 'string' ? c
@@ -1643,9 +1653,20 @@ function healAnthropicPayload(payload) {
   const src = payload.messages.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
   let changed = src.length !== payload.messages.length;
 
-  // Step 0: drop thinking blocks with fake signatures; merge adjacent user turns (so a tool_result split
-  // into a later turn can still be matched with its tool_use).
+  let system = payload.system;
+  if (Array.isArray(system) && system.some(isBlankText)) {
+    system = system.filter(b => !isBlankText(b));
+    changed = true;
+    notes.push('dropped empty text blocks');
+  }
+  const dropSystem = Array.isArray(system) ? !system.length : typeof system === 'string' && !system.trim();
+  if (dropSystem) changed = true;
+
+  // Step 0: drop thinking blocks with fake signatures and empty text blocks; rewrite foreign tool ids;
+  // merge adjacent user turns (so a tool_result split into a later turn can still be matched with its tool_use).
   const msgs = [];
+  const emptyTurn = () => ({ role: 'user', content: [{ type: 'text', text: '(empty)' }] });
+  let emptyUser = false;
   for (const m of src) {
     let content = m.content;
     if (m.role === 'assistant' && Array.isArray(content)) {
@@ -1655,11 +1676,31 @@ function healAnthropicPayload(payload) {
         notes.push('stripped placeholder-signed thinking blocks');
         content = kept;
       }
-      if (!content.length) {
+    }
+    if (Array.isArray(content)) {
+      const kept = [];
+      let renamed = false;
+      for (const b of content) {
+        if (isBlankText(b)) continue;
+        if (b?.type === 'tool_use' && b.id && safeToolId(b.id) !== b.id) { kept.push({ ...b, id: safeToolId(b.id) }); renamed = true; }
+        else if (b?.type === 'tool_result' && b.tool_use_id && safeToolId(b.tool_use_id) !== b.tool_use_id) { kept.push({ ...b, tool_use_id: safeToolId(b.tool_use_id) }); renamed = true; }
+        else kept.push(b);
+      }
+      if (kept.length !== content.length) notes.push('dropped empty text blocks');
+      if (renamed) notes.push('sanitized foreign tool ids');
+      if (renamed || kept.length !== content.length) {
         changed = true;
-        continue;
+        content = kept;
       }
     }
+    if (!toAnthropicBlocks(typeof content === 'string' ? content.trim() : content).length) {
+      // An emptied user turn still holds its place between two assistant turns, or at the end.
+      changed = true;
+      if (m.role === 'user') emptyUser = true;
+      continue;
+    }
+    if (emptyUser && m.role === 'assistant' && msgs[msgs.length - 1]?.role !== 'user') msgs.push(emptyTurn());
+    emptyUser = false;
     const last = msgs[msgs.length - 1];
     if (m.role === 'user' && last && last.role === 'user') {
       last.content = [...toAnthropicBlocks(last.content), ...toAnthropicBlocks(content)];
@@ -1668,6 +1709,7 @@ function healAnthropicPayload(payload) {
     }
     msgs.push({ ...m, content });
   }
+  if (emptyUser && msgs[msgs.length - 1]?.role !== 'user') msgs.push(emptyTurn());
 
   // Steps 1-3: pair up tool_use / tool_result.
   const out = [];
@@ -1723,6 +1765,8 @@ function healAnthropicPayload(payload) {
   }
 
   let body = { ...payload, messages: out };
+  if (dropSystem) delete body.system;
+  else if (system !== payload.system) body.system = system;
 
   // Step 5: thinking + an in-progress tool loop whose last assistant turn doesn't open with thinking.
   const thinkingOn = payload.thinking && payload.thinking.type && payload.thinking.type !== 'disabled';
@@ -1887,6 +1931,7 @@ function normalizeUpstream(parsed, outFormat) {
   for (const tc of smartToolCalls(node)) ev.tools.push(chunkToolFull(tc));
   const f = smartFinish(parsed, choice);
   if (f) ev.finish = canonFinish(f);
+  if (ev.finish === 'error') { ev.finish = null; ev.error = `Upstream finished with ${f}`; }
   return ev;
 }
 
@@ -2054,6 +2099,17 @@ function rand(n = 6) {
   return s.slice(0, n);
 }
 
+// Anthropic takes tool ids matching ^[a-zA-Z0-9_-]+$ only (Kimi sends "functions.Read:0"). The map must
+// stay pure: a replayed history has to give the same id, and the hash keeps "a.b" and "a:b" apart.
+function safeToolId(id) {
+  const s = String(id ?? '');
+  if (!s) return `toolu_${rand(24)}`;
+  if (/^[a-zA-Z0-9_-]+$/.test(s)) return s;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return `${s.replace(/[^a-zA-Z0-9_-]/g, '_')}_${(h >>> 0).toString(36)}`;
+}
+
 function anthropicStopReason(canonical, hasTools) {
   if (canonical === 'length') return 'max_tokens';
   if (hasTools) return 'tool_use';
@@ -2147,7 +2203,7 @@ function createAnthropicStream(emit, model, opts = {}) {
         const fixed = vocab ? vocab.name(tc.name) : tc.name;
         const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
         st = {
-          index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: fixed || 'tool', closed: false,
+          index: nextIndex++, id: safeToolId(tc.id), name: fixed || 'tool', closed: false,
           // Shortened names keep caller's schema; ToolSearch query aliases still need restoring.
           buffered: '', held: Boolean(vocab && ((fixed && fixed !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name)))
         };
@@ -2212,7 +2268,7 @@ function buildAnthropicMessage({ model, think, text, tools, finish, prompt, comp
     // The name is written in the vocabulary the caller declared. A name it already uses is not
     // touched, so the whole layer costs nothing on a turn where the model agreed with the list.
     const fixed = repairToolCall(tc, vocab);
-    content.push({ type: 'tool_use', id: tc.id || `toolu_${rand(24)}`, name: fixed.name, input: parseArgs(fixed.args) });
+    content.push({ type: 'tool_use', id: safeToolId(tc.id), name: fixed.name, input: parseArgs(fixed.args) });
   }
   if (!content.length) content.push({ type: 'text', text: '' });
   const p = prompt || 0;

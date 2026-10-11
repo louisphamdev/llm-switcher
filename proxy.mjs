@@ -831,8 +831,9 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
 async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal, sink, tag }) {
   let streamError = null;
   let events = 0;
+  const framing = {};
   try {
-    for await (const parsed of readUpstreamPayloads(upstreamRes)) {
+    for await (const parsed of readUpstreamPayloads(upstreamRes, framing)) {
       events++;
       const ev = normalize(parsed);
       col.add(ev);
@@ -850,6 +851,8 @@ async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, sig
       await drained(sink, signal);
     }
     if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
+    // A clean close with no finish reason is a cut: rendered as done, it hands the client half a tool call.
+    else if (!streamError && col.finish == null && !framing.done) streamError = 'Upstream stream ended before a finish reason';
   } catch (streamErr) {
     if (!signal.aborted) {
       console.error(`[${tag}] Stream error:`, streamErr.message);

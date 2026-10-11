@@ -1,5 +1,14 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.9 — 2026-10-11
+
+- **Compaction keeps the tools.** A Codex compaction turn with tool history now keeps the `tools` list and sets `tool_choice` to `none`. Before, Anthropic and OpenAI chat upstreams refused this turn with HTTP 400.
+- **Foreign tool ids.** Tool ids that do not match `^[a-zA-Z0-9_-]+$` (for example `functions.Read:0`) are rewritten before they go to Anthropic. The rewrite is deterministic, so a replayed history gives the same id.
+- **Empty text blocks.** The direct Anthropic route removes empty `system` blocks and empty text blocks. Anthropic refused them with HTTP 400.
+- **Cut streams.** If an upstream stream closes without a finish reason and without `[DONE]`, the client receives an error. Before, the client received a completed turn with a partial tool call.
+- **Gemini `MALFORMED_FUNCTION_CALL`.** This finish reason is now an error, not an empty turn.
+- **Empty tool arguments.** An empty arguments string becomes `{}`, not `{"raw":""}`.
+
 ## Release 1.6.8 — 2026-10-09
 
 - **Reorganized Sidebar Navigation by Frequency of Use:** Reordered sidebar navigation to align strictly with developer operational workflows: 1. `Routes & Profiles` (daily configuration & profile switching), 2. `Request Inspector` (live request monitoring & debugging), 3. `Model Catalog` (model discovery & testing), 4. `System Doctor` (health checks, port conflicts & shims), 5. `Goal Check` (agent task completion verification & veto), 6. `Idle Compaction` (idle prefix compaction & cache metrics), and 7. `Docs & Guide` (reference manual & technical guides at the bottom of navigation).

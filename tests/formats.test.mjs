@@ -12,7 +12,7 @@ import {
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
-  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS
+  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -1052,4 +1052,118 @@ test('thinkingEffort profile option overrides client effort across all upstreams
   // 5. 'auto' inherits client's original effort ('low')
   const autoChat = emitUpstreamBody('openai-chat', clientIR, 'gpt-5', { thinkingEffort: 'auto' });
   assert.equal(autoChat.reasoning_effort, 'low');
+});
+
+test('compaction_trigger with tool history keeps tools and forces tool_choice none', () => {
+  const ir = responsesToIR({
+    model: 'm', tools: [fn('Read')], text: { format: { type: 'json_object' } }, input: [
+      { role: 'user', content: 'read it' },
+      { type: 'function_call', call_id: 'c1', name: 'Read', arguments: '{"p":"a"}' },
+      { type: 'function_call_output', call_id: 'c1', output: 'data' },
+      { type: 'compaction_trigger' }
+    ]
+  });
+  assert.equal(ir.toolChoice, 'none');
+  assert.equal(ir.responseFormat, null);
+  const chat = irToChatBody(ir, 'gpt-x');
+  assert.equal(chat.tools?.length, 1);
+  assert.equal(chat.tool_choice, 'none');
+  assert.equal(chat.response_format, undefined);
+  const anthropic = irToAnthropicBody(ir, 'claude-x');
+  assert.equal(anthropic.tools?.length, 1);
+  assert.deepEqual(anthropic.tool_choice, { type: 'none' });
+  assert.ok(anthropic.messages.some(m => m.content.some(b => b.type === 'tool_use')));
+  const vertex = irToVertexBody(ir, 'gemini-x');
+  assert.equal(vertex.tools?.[0].functionDeclarations.length, 1);
+  assert.equal(vertex.toolConfig.functionCallingConfig.mode, 'NONE');
+  // With no tools at all there is nothing to switch off: tool_choice without tools is refused.
+  const bare = responsesToIR({ model: 'm', input: [{ role: 'user', content: 'hi' }, { type: 'compaction_trigger' }] });
+  assert.equal(irToChatBody(bare, 'gpt-x').tool_choice, undefined);
+  assert.equal(irToAnthropicBody(bare, 'claude-x').tool_choice, undefined);
+});
+
+test('anthropic emitters sanitize foreign tool ids consistently', () => {
+  const foreign = 'functions.Read:0';
+  const valid = /^[a-zA-Z0-9_-]+$/;
+  const history = [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: foreign, name: 'Read', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: foreign, content: 'ok' }] }
+  ];
+  const ir = anthropicToIR({ model: 'x', tools: [{ name: 'Read', input_schema: { type: 'object', properties: {} } }], messages: history });
+  const body = irToAnthropicBody(ir, 'claude-x');
+  const use = body.messages[1].content.find(b => b.type === 'tool_use');
+  assert.match(use.id, valid);
+  assert.equal(body.messages[2].content[0].tool_use_id, use.id);
+  assert.equal(irToAnthropicBody(ir, 'claude-x').messages[1].content[0].id, use.id, 'a replayed history maps identically');
+
+  const message = buildAnthropicMessage({ model: 'x', tools: [{ id: foreign, name: 'Read', args: '{}' }], finish: 'tool_calls' });
+  assert.equal(message.content[0].id, use.id);
+  const events = [];
+  const stream = createAnthropicStream((e, d) => events.push(d), 'x');
+  stream.start();
+  stream.tool({ index: 0, id: foreign, name: 'Read', args: '{}' });
+  stream.finish('tool_calls');
+  assert.equal(events.find(e => e.type === 'content_block_start').content_block.id, use.id);
+
+  const healed = healAnthropicPayload({ model: 'claude', messages: history });
+  assert.equal(healed.changed, true);
+  assert.equal(healed.payload.messages[1].content[0].id, use.id);
+  assert.equal(healed.payload.messages[2].content[0].tool_use_id, use.id);
+
+  // Two ids that differ only in an invalid character must not collide, and a valid id is kept.
+  const ids = ['a.b', 'a:b', 'a_b'].map(id => buildAnthropicMessage({ model: 'x', tools: [{ id, name: 'f', args: '{}' }] }).content[0].id);
+  assert.equal(new Set(ids).size, 3);
+  assert.equal(ids[2], 'a_b');
+  assert.match(buildAnthropicMessage({ model: 'x', tools: [{ id: '', name: 'f', args: '{}' }] }).content[0].id, valid);
+});
+
+test('healAnthropicPayload drops empty system and empty text blocks', () => {
+  const nonEmpty = msgs => msgs.every(m => typeof m.content === 'string' ? m.content.trim()
+    : m.content.length && m.content.every(b => b.type !== 'text' || b.text.trim()));
+  const alternates = msgs => msgs[0].role === 'user' && msgs.every((m, i) => !i || m.role !== msgs[i - 1].role);
+  const r = healAnthropicPayload({
+    model: 'claude', system: [{ type: 'text', text: '' }], messages: [
+      { role: 'user', content: [{ type: 'text', text: '' }, { type: 'text', text: 'hi' }] },
+      { role: 'assistant', content: [{ type: 'text', text: ' ' }, { type: 'tool_use', id: 't1', name: 'f', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'text', text: '' }] },
+      { role: 'user', content: [{ type: 'text', text: 'next' }] }
+    ]
+  });
+  assert.equal(r.changed, true);
+  assert.equal('system' in r.payload, false);
+  assert.ok(nonEmpty(r.payload.messages), JSON.stringify(r.payload.messages));
+  assert.ok(alternates(r.payload.messages), JSON.stringify(r.payload.messages));
+  assert.deepEqual(r.payload.messages.at(-1).content.map(b => b.type), ['tool_result', 'text']);
+
+  // A user turn that empties out between two assistant turns, or at the end, keeps its place.
+  const r2 = healAnthropicPayload({
+    model: 'claude', system: [{ type: 'text', text: 'sys' }, { type: 'text', text: '' }], messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: [{ type: 'text', text: '' }] },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: '' }
+    ]
+  });
+  assert.deepEqual(r2.payload.system, [{ type: 'text', text: 'sys' }]);
+  assert.ok(nonEmpty(r2.payload.messages), JSON.stringify(r2.payload.messages));
+  assert.ok(alternates(r2.payload.messages), JSON.stringify(r2.payload.messages));
+  assert.equal(r2.payload.messages.length, 5);
+  assert.equal(r2.payload.messages.at(-1).role, 'user');
+});
+
+test("parseArgs('') returns {}", () => {
+  assert.deepEqual(parseArgs(''), {});
+  assert.deepEqual(parseArgs('  \n'), {});
+  assert.deepEqual(parseArgs('{"a":1}'), { a: 1 });
+});
+
+test('Gemini MALFORMED_FUNCTION_CALL finish is an error, not stop', () => {
+  const ev = normalizeUpstream({ candidates: [{ content: { parts: [] }, finishReason: 'MALFORMED_FUNCTION_CALL' }] }, 'vertex');
+  assert.equal(ev.finish, null);
+  assert.match(String(ev.error), /MALFORMED_FUNCTION_CALL/);
+  const chat = normalizeUpstream({ choices: [{ delta: {}, finish_reason: 'malformed_function_call' }] }, 'openai-chat');
+  assert.match(String(chat.error), /malformed_function_call/i);
 });

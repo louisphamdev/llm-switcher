@@ -21,7 +21,7 @@ async function fixture(t) {
       if (body.stream) {
         res.setHeader('content-type', 'text/event-stream');
         res.write(`data: {"choices":\ndata: [{"index":0,"delta":{"content":"${summary}"}}]}\n\n`);
-        if (!truncate) res.write(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"${finish}"}]}\n\ndata: [DONE]\n\n`);
+        if (!truncate) res.write(`data: {"choices":[{"index":0,"delta":{},"finish_reason":${JSON.stringify(finish)}}]}\n\ndata: [DONE]\n\n`);
         res.end();
       } else { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: summary }, finish_reason: finish }] })); }
     });
@@ -76,4 +76,20 @@ test('WS compaction replays the compacted state through previous_response_id', {
   await until(() => f.received.length === 2);
   assert.match(JSON.stringify(f.received.at(-1).messages), /KEEP_DECISION_7391.*NEXT_TURN/);
   assert.doesNotMatch(JSON.stringify(f.received.at(-1).messages), /ORIGINAL_HISTORY/);
+});
+test('stream cut without finish_reason renders error, not completed', { timeout: 20000 }, async t => {
+  const f = await fixture(t); f.failure('stop', true);
+  const codex = events(await (await f.send({ model: 'm', stream: true, input: [{ role: 'user', content: 'hi' }] })).text());
+  assert.ok(codex.some(e => e.type === 'response.failed'), JSON.stringify(codex));
+  assert.ok(!codex.some(e => e.type === 'response.completed'), JSON.stringify(codex));
+  const claude = await fetch(`http://127.0.0.1:${f.port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-profile': 'p1' },
+    body: JSON.stringify({ model: 'm', max_tokens: 64, stream: true, messages: [{ role: 'user', content: 'hi' }] }) });
+  const claudeEvents = events(await claude.text());
+  assert.ok(claudeEvents.some(e => e.type === 'error'), JSON.stringify(claudeEvents));
+  assert.ok(!claudeEvents.some(e => e.type === 'message_stop'), JSON.stringify(claudeEvents));
+});
+test('stream closed by [DONE] without finish_reason still completes', { timeout: 20000 }, async t => {
+  const f = await fixture(t); f.failure(null);
+  const codex = events(await (await f.send({ model: 'm', stream: true, input: [{ role: 'user', content: 'hi' }] })).text());
+  assert.ok(codex.some(e => e.type === 'response.completed'), JSON.stringify(codex));
 });
