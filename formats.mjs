@@ -1101,6 +1101,7 @@ function normThinkingEffort(effort) {
 //  - 'native' (genuine OpenAI / strict OpenAI-compatible servers): only send `reasoning_effort` when
 //             the client requests thinking, don't touch the system prompt, use `max_completion_tokens`.
 //  - 'off'    : never send reasoning params, never inject prompts.
+// opts.replayReasoning: profile opt-in; native mode sends reasoning_content on tool-call turns only when it is true.
 function irToChatBody(ir, model, opts = {}) {
   const names = toolNameMapForIR(ir);
   const toolName = names.name;
@@ -1114,6 +1115,8 @@ function irToChatBody(ir, model, opts = {}) {
   const wantsThinking = mode === 'off' ? false
     : mode === 'native' ? clientWantsThinking
     : Boolean(clientWantsThinking || (modelIsThinking && (!ir.thinking || ir.thinking.type !== 'disabled')));
+  // Strict OpenAI-compatible servers may refuse an unknown message key, so native mode needs the profile flag.
+  const replayReasoning = wantsThinking && (mode === 'auto' || opts.replayReasoning === true);
 
   let systemText = ir.system || '';
   if (mode === 'auto' && wantsThinking && !modelIsThinking && !String(model).toLowerCase().includes('gemini')) {
@@ -1150,7 +1153,7 @@ function irToChatBody(ir, model, opts = {}) {
       });
       if (out.content === undefined || out.content === '') out.content = null;
       // DeepSeek/Kimi thinking mode refuse the next tool step without it; an empty string is accepted.
-      if (wantsThinking) out.reasoning_content = m.reasoning ?? '';
+      if (replayReasoning) out.reasoning_content = m.reasoning ?? '';
     }
     if (out.content === undefined) out.content = '';
     messages.push(out);

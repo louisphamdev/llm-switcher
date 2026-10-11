@@ -833,6 +833,7 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
     thinkingMode: profile.thinkingMode,
     thinkingEffort: effort,
+    replayReasoning: profile.replayReasoning === true,
   });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);

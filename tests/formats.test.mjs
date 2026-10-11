@@ -1177,10 +1177,10 @@ test('irToChatBody replays thinking as reasoning_content on tool-call turns', ()
     { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'pwd' } }] },
     { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: '/' }] }
   ] });
-  for (const thinkingMode of ['auto', 'native']) {
-    const calls = irToChatBody(ir, 'deepseek-reasoner', { thinkingMode }).messages.filter(m => m.tool_calls);
-    assert.equal(calls[0].reasoning_content, 'I should run ls', thinkingMode);
-    assert.equal(calls[1].reasoning_content, '', thinkingMode);
+  for (const opts of [{ thinkingMode: 'auto' }, { thinkingMode: 'native', replayReasoning: true }]) {
+    const calls = irToChatBody(ir, 'deepseek-reasoner', opts).messages.filter(m => m.tool_calls);
+    assert.equal(calls[0].reasoning_content, 'I should run ls', opts.thinkingMode);
+    assert.equal(calls[1].reasoning_content, '', opts.thinkingMode);
   }
   const off = emitUpstreamBody('openai-chat', ir, 'deepseek-reasoner', { thinkingMode: 'off' });
   assert.ok(off.messages.every(m => !('reasoning_content' in m)));
@@ -1191,8 +1191,30 @@ test('irToChatBody replays thinking as reasoning_content on tool-call turns', ()
     { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{}' },
     { type: 'function_call_output', call_id: 'c1', output: 'ok' }
   ] });
-  const rb = irToChatBody(rir, 'kimi-k2-thinking', { thinkingMode: 'native' });
+  const rb = irToChatBody(rir, 'kimi-k2-thinking', { thinkingMode: 'native', replayReasoning: true });
   assert.equal(rb.messages.find(m => m.tool_calls).reasoning_content, 'Plan: run ls');
+});
+
+// Strict OpenAI-compatible servers may refuse the extra key, so native mode sends it only on the profile opt-in.
+test('irToChatBody native mode sends no reasoning_content without the profile opt-in', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 8000, thinking: { type: 'enabled', budget_tokens: 4000 }, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: 'I should run ls', signature: 'sig' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'pwd' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: '/' }] }
+  ] });
+  const cases = [
+    ['gpt-5', ir, { thinkingMode: 'native' }],
+    ['deepseek-reasoner', ir, { thinkingMode: 'native' }],
+    ['gpt-5', ir, { thinkingMode: 'native', replayReasoning: 'yes' }],
+    ['gpt-5', { ...ir, replayReasoning: true }, { thinkingMode: 'native' }]
+  ];
+  for (const [model, input, opts] of cases) {
+    const body = irToChatBody(input, model, opts);
+    assert.ok(body.messages.some(m => m.tool_calls), 'fixture has tool-call turns');
+    assert.ok(body.messages.every(m => !('reasoning_content' in m)), `${model} ${JSON.stringify(opts)}`);
+  }
 });
 
 test('irToAnthropicBody drops thinking for an unsigned tool loop', () => {

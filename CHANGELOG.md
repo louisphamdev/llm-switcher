@@ -1,5 +1,15 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.10 — 2026-10-11
+
+- **`reasoning_content` replay.** On assistant tool-call turns, `auto` mode sends the earlier thinking as `reasoning_content`. `native` mode sends it only when the profile sets `replayReasoning: true`, because a strict OpenAI-compatible server can refuse the field. `off` mode never sends it.
+- **Codex to Anthropic with thinking.** If an open tool loop has no signed thinking, the request drops `thinking`. Anthropic refused this request with HTTP 400.
+- **Gemini schema and turn shape.** A nested object with no properties gets an optional `_placeholder` property. An untyped `const` becomes a string. Tool output with keys that start with `$` is wrapped as `{result: ...}`. A request never ends on a model turn: the proxy adds a user turn `Continue.`.
+- **Schema sanitizer.** Keywords with a `null` value and `pattern` values with lookaround are removed.
+- **Long tool names from Codex.** Names longer than 64 characters use the hashed shortener, so two long names do not collide.
+- **Repeated tool ids.** On the direct Anthropic route, a repeated `tool_use` id gets a suffix (`_2`, `_3`), and the matching `tool_result` changes with it.
+- **Context overflow errors.** Anthropic clients receive `invalid_request_error` with a message that starts with `prompt is too long`. Responses clients receive the code `context_length_exceeded`.
+
 ## Release 1.6.9 — 2026-10-11
 
 - **Compaction keeps the tools.** A Codex compaction turn with tool history now keeps the `tools` list and sets `tool_choice` to `none`. Before, Anthropic and OpenAI chat upstreams refused this turn with HTTP 400.
