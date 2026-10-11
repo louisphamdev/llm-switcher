@@ -112,6 +112,10 @@ function startUpstream() {
           res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '7' });
           return res.end(JSON.stringify({ error: { message: 'slow down' } }));
         }
+        if (lastUser.includes('CONTEXT_OVERFLOW')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message: "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (132000 in the messages, 8000 in the completion). Please reduce the length of the messages or completion.", type: 'invalid_request_error', code: 'invalid_request_error' } }));
+        }
         if (lastUser.includes('APPLY_PATCH')) {
           return sse(res, [
             { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_patch', type: 'function', function: { name: 'apply_patch', arguments: '{"input":"*** Begin Patch\\n' } }] } }] },
@@ -407,7 +411,7 @@ test('Codex via ag/* target: Gemini-hostile tool schemas are rewritten before up
   const params = up.body.tools[0].function.parameters;
   assert.deepEqual(params.properties.ids, { type: 'array', items: { type: 'string' }, nullable: true });
   assert.deepEqual(params.properties.part, { type: 'object', properties: { t: { type: 'string' } } });
-  assert.deepEqual(params.properties.raw, { type: 'object', properties: {} });
+  assert.deepEqual(params.properties.raw, { type: 'object', properties: { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } } });
   assert.deepEqual(params.required, ['ids']);
   assert.ok(!JSON.stringify(params).includes('$ref'), 'no $ref survives');
   assert.equal(params.$defs, undefined);
@@ -592,6 +596,20 @@ test('Upstream 429 is returned in Anthropic error shape with retry-after', async
   assert.equal(res.headers.get('retry-after'), '7');
   const json = await res.json();
   assert.deepEqual(json, { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } });
+});
+
+// Claude Code compacts only on "prompt is too long", and Codex only on context_length_exceeded.
+test('sendClientError maps context overflow per client', async () => {
+  const cc = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 10, messages: [{ role: 'user', content: 'CONTEXT_OVERFLOW' }] });
+  assert.equal(cc.status, 400);
+  const ccJson = await cc.json();
+  assert.equal(ccJson.error.type, 'invalid_request_error');
+  assert.match(ccJson.error.message, /^prompt is too long: 140000 tokens > 131072 maximum/);
+  const codex = await post('/v1/responses', { model: 'gpt-5-codex', input: 'CONTEXT_OVERFLOW' });
+  assert.equal(codex.status, 400);
+  const codexJson = await codex.json();
+  assert.equal(codexJson.error.code, 'context_length_exceeded');
+  assert.match(codexJson.error.message, /maximum context length is 131072/);
 });
 
 test('Mid-stream upstream error surfaces as an error event instead of a fake end_turn', async () => {

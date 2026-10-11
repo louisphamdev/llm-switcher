@@ -378,15 +378,33 @@ function vertexStatus(status) {
   }
 }
 
+// A chat upstream names an overflow its own way; a 429 about tokens per minute is a rate limit, not this.
+const CONTEXT_OVERFLOW_RE = /maximum context length|context[_ ]length[_ ]exceeded|prompt is too long|exceeds? the (?:model'?s? )?context window/i;
+
+function isContextOverflow(status, message) {
+  return status !== 429 && status < 500 && CONTEXT_OVERFLOW_RE.test(String(message || ''));
+}
+
+// Claude Code compacts on "prompt is too long: N tokens > M maximum", so the numbers lead when the upstream names them.
+function promptTooLongMessage(message) {
+  if (/^prompt is too long/i.test(message)) return message;
+  const max = message.match(/(?:maximum context length|context window|limit) (?:is |of )?(\d+)/i)?.[1];
+  const asked = message.match(/(?:requested|resulted in|prompt (?:is|has|contains)|input (?:is|has)) (?:about )?(\d+)/i)?.[1];
+  return max && asked ? `prompt is too long: ${asked} tokens > ${max} maximum (${message})` : `prompt is too long: ${message}`;
+}
+
 // Each SDK parses errors in its own shape; Claude Code relies on error.type + retry-after to decide retries.
 function sendClientError(res, clientFormat, status, message, headers = {}) {
   let body;
+  const overflow = isContextOverflow(status, message);
   if (clientFormat === 'anthropic') {
-    body = { type: 'error', error: { type: anthropicErrorType(status), message } };
+    body = overflow
+      ? { type: 'error', error: { type: 'invalid_request_error', message: promptTooLongMessage(String(message)) } }
+      : { type: 'error', error: { type: anthropicErrorType(status), message } };
   } else if (clientFormat === 'vertex' || clientFormat === 'codeassist') {
     body = { error: { code: status, message, status: vertexStatus(status) } };
   } else {
-    body = { error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', code: String(status) } };
+    body = { error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', code: overflow ? 'context_length_exceeded' : String(status) } };
   }
   sendJson(res, status, body, headers);
 }

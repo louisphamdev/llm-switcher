@@ -256,13 +256,18 @@ function smartDelta(choice) {
 }
 
 const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+// Instance data, not schema: null is a real value here, and nothing inside may be rewritten.
+const SCHEMA_VALUES = new Set(['default', 'const', 'enum', 'examples', 'example']);
+// Lookahead and lookbehind; RE2 upstreams refuse the whole request ("invalid regex").
+const LOOKAROUND_RE = /\(\?<?[=!]/;
 
 function sanitizeJsonSchema(schema) {
   if (schema === null || schema === undefined) return { type: 'object', properties: {} };
   return sanitizeSchemaNode(schema);
 }
 
-// Inside a schema 0, false, "" and null are values (minimum: 0, additionalProperties: false), not a missing schema.
+// Inside a schema 0, false and "" are values (minimum: 0, additionalProperties: false), not a missing schema.
+// A null keyword is dropped (strict upstreams answer "null is not of type array"), except as instance data.
 function sanitizeSchemaNode(schema) {
   if (schema === null || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeSchemaNode);
@@ -270,6 +275,9 @@ function sanitizeSchemaNode(schema) {
   for (const [k, v] of Object.entries(schema)) {
     if (k === '$schema' || k === 'cache_control' || k === 'encrypted') continue;
     if (k === 'format' && ['uri', 'uri-reference'].includes(v)) continue;
+    if (SCHEMA_VALUES.has(k)) { clean[k] = v; continue; }
+    if (v === null) continue;
+    if (k === 'pattern' && typeof v === 'string' && LOOKAROUND_RE.test(v)) continue;
     // A name map: each value is a schema, the map itself is not. A parameter may be named "properties".
     if (SCHEMA_MAPS.has(k) && v && typeof v === 'object' && !Array.isArray(v)) {
       clean[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, sanitizeSchemaNode(sub)]));
@@ -457,10 +465,13 @@ function anthropicToIR(payload) {
       if (Array.isArray(msg.content)) {
         const parts = [];
         const toolCalls = [];
+        let reasoning = '';
         for (const part of msg.content) {
           if (!part) continue;
           if (part.type === 'text') {
             if (part.text) parts.push({ type: 'text', text: part.text });
+          } else if (part.type === 'thinking' && typeof part.thinking === 'string') {
+            reasoning += part.thinking;
           } else if (part.type === 'image' && part.source?.type === 'base64') {
             const mimeType = part.source.media_type || 'image/jpeg';
             parts.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${part.source.data}` } });
@@ -501,6 +512,7 @@ function anthropicToIR(payload) {
           out.content = parts.every(p => p.type === 'text') ? parts.map(p => p.text).join('\n') : parts;
         }
         if (toolCalls.length) out.toolCalls = toolCalls;
+        if (reasoning && msg.role === 'assistant') out.reasoning = reasoning;
         if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
       } else if (msg.content) {
         // Fallback for payloads that preprocessing/compression tools mangled into an object
@@ -631,9 +643,10 @@ const LOCAL_SHELL_PARAMS = {
   required: ['command']
 };
 
+// A plain cut at 64 would give two long namespaced tools one name; the hashed form keeps them apart.
 function responsesToolName(namespace, name) {
   const raw = namespace ? `${namespace}__${name}` : String(name || '');
-  return raw.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+  return raw ? sanitizeToolName(raw) : '';
 }
 
 function customToolDescription(t) {
@@ -680,12 +693,19 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     if (text) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
   };
 
+  // A reasoning item precedes the assistant output it belongs to.
+  let reasoning = '';
+  const takeReasoning = (m) => {
+    if (reasoning && m?.role === 'assistant') { m.reasoning = (m.reasoning || '') + reasoning; reasoning = ''; }
+  };
+
   // Parallel tool calls arrive as consecutive items -> merge into 1 assistant turn,
   // otherwise OpenAI Chat/Anthropic will error that tool_calls aren't answered adjacently.
   const pushCall = (call) => {
     const last = ir.messages[ir.messages.length - 1];
     if (last && last.role === 'assistant') last.toolCalls = [...(last.toolCalls || []), call];
     else ir.messages.push({ role: 'assistant', toolCalls: [call] });
+    takeReasoning(ir.messages[ir.messages.length - 1]);
   };
 
   // Responses Lite sends the tools as an input item, not in payload.tools.
@@ -724,6 +744,10 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
         } else {
           ir.messages.push({ role, content: parts });
         }
+        if (role === 'assistant') takeReasoning(ir.messages[ir.messages.length - 1]);
+      } else if (item.type === 'reasoning') {
+        const texts = (Array.isArray(item.summary) ? item.summary : []).map(x => x?.text).filter(t => typeof t === 'string' && t);
+        reasoning += texts.join('\n');
       } else if (item.type === 'function_call') {
         pushCall({ id: item.call_id || item.id || null, name: responsesToolName(item.namespace, item.name), args: parseArgs(item.arguments) });
       } else if (item.type === 'custom_tool_call') {
@@ -1125,6 +1149,8 @@ function irToChatBody(ir, model, opts = {}) {
         return call;
       });
       if (out.content === undefined || out.content === '') out.content = null;
+      // DeepSeek/Kimi thinking mode refuse the next tool step without it; an empty string is accepted.
+      if (wantsThinking) out.reasoning_content = m.reasoning ?? '';
     }
     if (out.content === undefined) out.content = '';
     messages.push(out);
@@ -1332,6 +1358,8 @@ function irToAnthropicBody(ir, model, opts = {}) {
       body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
     }
   }
+  // This route never emits signed thinking blocks, so an open tool loop cannot keep thinking on.
+  if (body.thinking && endsInUnsignedToolLoop(body.messages)) delete body.thinking;
   if (body.thinking) {
     // When thinking is on, Anthropic rejects temperature != 1, top_k, or top_p < 0.95.
     if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
@@ -1349,6 +1377,12 @@ function dataUrlToInlineData(url) {
   const m = String(url || '').match(/^data:([^;]+);base64,(.+)$/s);
   if (!m) return null;
   return { inlineData: { mimeType: m[1], data: m[2] } };
+}
+
+function hasDollarKey(v) {
+  if (Array.isArray(v)) return v.some(hasDollarKey);
+  if (!v || typeof v !== 'object') return false;
+  return Object.entries(v).some(([k, x]) => k.startsWith('$') || hasDollarKey(x));
 }
 
 // IR -> Vertex generateContent body.
@@ -1400,6 +1434,8 @@ function irToVertexBody(ir, model, opts = {}) {
         const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
         // functionResponse.response must be an object (Struct), not an array/primitive.
         resp = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed ?? '' };
+        // Gemini refuses a Struct key that starts with `$` (`$ref` in a schema file), so send the text.
+        if (hasDollarKey(resp)) resp = { result: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
       } catch { resp = { result: m.content ?? '' }; }
       // Gemini API & Vertex only accept roles 'user' | 'model' (functionResponse lives in the 'user' role).
       push('user', [{ functionResponse: { name: toolName(m.name || 'tool'), response: resp } }]);
@@ -1423,6 +1459,9 @@ function irToVertexBody(ir, model, opts = {}) {
     push('user', textPartsOf(m.content));
   }
   flushImages();
+  // Gemini refuses a request that ends on a model turn (an assistant prefill). A user turn is
+  // appended rather than the prefill dropped, so no text the client sent is lost.
+  if (contents[contents.length - 1]?.role === 'model') contents.push({ role: 'user', parts: [{ text: 'Continue.' }] });
 
   const body = { contents };
   if (ir.system && ir.system.trim()) {
@@ -1514,15 +1553,21 @@ function collapseNullableUnion(branches) {
   return { schema: rest[0], nullable: rest.length !== branches.length };
 }
 
+// Gemini refuses a nested OBJECT with no properties (a free-form map such as `env`). One optional
+// key keeps the type an object; the root of a tool with no arguments may stay empty.
+const GEMINI_PLACEHOLDER_PROPERTIES = { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } };
+
 function toGeminiSchema(schema, root, seen) {
+  const nested = Boolean(root);
+  const emptyProperties = () => (nested ? { ...GEMINI_PLACEHOLDER_PROPERTIES } : {});
   // Shorthand left by some MCP servers: a bare "object"/"string" where a Schema belongs.
   // Vertex rejects the raw string with INVALID_ARGUMENT, so expand it.
   if (typeof schema === 'string') {
-    return schema === 'object' ? { type: 'object', properties: {} } : { type: schema };
+    return schema === 'object' ? { type: 'object', properties: emptyProperties() } : { type: schema };
   }
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
   // The same hole as the string shorthand above: an empty schema has no type Vertex can read.
-  if (Object.keys(schema).length === 0) return { type: 'object', properties: {} };
+  if (Object.keys(schema).length === 0) return { type: 'object', properties: emptyProperties() };
   root = root || schema;
   seen = seen || new Set();
   if (seen.has(schema)) return {};
@@ -1573,8 +1618,13 @@ function toGeminiSchema(schema, root, seen) {
     }
   }
   if (!out.type && out.properties) out.type = 'object';
-  if (out.type === 'object' && !out.properties) out.properties = {};
-  if (out.enum && !out.type) out.type = 'string';
+  if (out.type === 'object' && !(out.properties && Object.keys(out.properties).length)) out.properties = emptyProperties();
+  if (out.enum && !out.type) {
+    // Gemini enum values are strings only; an untyped `const: true` would otherwise stay boolean.
+    out.type = 'string';
+    out.enum = out.enum.filter(x => x !== null).map(String);
+    if (!out.enum.length) delete out.enum;
+  }
   if (out.enum && out.type !== 'string') {
     // Gemini supports enum for strings only. Keep the constraint as text for the model.
     const values = (schema.enum || (Object.hasOwn(schema, 'const') ? [schema.const] : [])).filter(x => x !== null);
@@ -1647,6 +1697,15 @@ function toolResultText(block) {
   return `[Tool Result${block.tool_use_id ? ` (${block.tool_use_id})` : ''}]: ${text}`;
 }
 
+// Anthropic: "a final assistant message must start with a thinking block" when thinking is on mid tool loop.
+function endsInUnsignedToolLoop(messages) {
+  const lastUser = messages[messages.length - 1];
+  const lastAssistant = messages[messages.length - 2];
+  const inToolLoop = lastUser?.role === 'user' && toAnthropicBlocks(lastUser.content).some(b => b.type === 'tool_result');
+  const first = lastAssistant?.role === 'assistant' ? toAnthropicBlocks(lastAssistant.content)[0] : null;
+  return Boolean(inToolLoop && first && first.type !== 'thinking' && first.type !== 'redacted_thinking');
+}
+
 function healAnthropicPayload(payload) {
   const notes = [];
   if (!payload || !Array.isArray(payload.messages)) return { payload, changed: false, notes };
@@ -1711,6 +1770,41 @@ function healAnthropicPayload(payload) {
   }
   if (emptyUser && msgs[msgs.length - 1]?.role !== 'user') msgs.push(emptyTurn());
 
+  // Step 0b: an upstream that reuses an id (Kimi `functions.Bash:0`) leaves one id on two tool_use
+  // blocks, which Anthropic refuses. A later use gets a suffix, and so does its result in the next turn.
+  const allIds = new Set(msgs.flatMap(m => toAnthropicBlocks(m.content).filter(b => b.type === 'tool_use' && b.id).map(b => b.id)));
+  const usedIds = new Set();
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role !== 'assistant' || !Array.isArray(msgs[i].content)) continue;
+    const resultIds = new Map();
+    let renamed = false;
+    const content = msgs[i].content.map(b => {
+      if (b?.type !== 'tool_use' || !b.id) return b;
+      let id = b.id;
+      if (usedIds.has(id)) {
+        let n = 2;
+        while (allIds.has(`${b.id}_${n}`)) n++;
+        id = `${b.id}_${n}`;
+        allIds.add(id);
+        renamed = true;
+      }
+      usedIds.add(id);
+      resultIds.set(b.id, [...(resultIds.get(b.id) || []), id]);
+      return id === b.id ? b : { ...b, id };
+    });
+    if (!renamed) continue;
+    msgs[i] = { ...msgs[i], content };
+    const next = msgs[i + 1];
+    if (next?.role === 'user' && Array.isArray(next.content)) {
+      msgs[i + 1] = { ...next, content: next.content.map(b => {
+        const id = b?.type === 'tool_result' ? resultIds.get(b.tool_use_id)?.shift() : undefined;
+        return id && id !== b.tool_use_id ? { ...b, tool_use_id: id } : b;
+      }) };
+    }
+    changed = true;
+    notes.push('deduplicated repeated tool_use ids');
+  }
+
   // Steps 1-3: pair up tool_use / tool_result.
   const out = [];
   for (let i = 0; i < msgs.length; i++) {
@@ -1771,11 +1865,7 @@ function healAnthropicPayload(payload) {
   // Step 5: thinking + an in-progress tool loop whose last assistant turn doesn't open with thinking.
   const thinkingOn = payload.thinking && payload.thinking.type && payload.thinking.type !== 'disabled';
   if (thinkingOn) {
-    const lastUser = out[out.length - 1];
-    const lastAssistant = out[out.length - 2];
-    const inToolLoop = lastUser?.role === 'user' && toAnthropicBlocks(lastUser.content).some(b => b.type === 'tool_result');
-    const first = lastAssistant?.role === 'assistant' ? toAnthropicBlocks(lastAssistant.content)[0] : null;
-    if (inToolLoop && first && first.type !== 'thinking' && first.type !== 'redacted_thinking') {
+    if (endsInUnsignedToolLoop(out)) {
       body = { ...body };
       delete body.thinking;
       changed = true;

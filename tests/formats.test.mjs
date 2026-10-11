@@ -420,7 +420,7 @@ test('toGeminiSchema: bare string shorthands become Schema objects (Vertex 400 f
   assert.deepEqual(toGeminiSchema('string'), { type: 'string' });
   assert.deepEqual(
     toGeminiSchema({ type: 'object', properties: { tags: { type: 'array', items: 'object' }, n: 'string' } }),
-    { type: 'object', properties: { tags: { type: 'array', items: { type: 'object', properties: {} } }, n: { type: 'string' } } }
+    { type: 'object', properties: { tags: { type: 'array', items: { type: 'object', properties: { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } } } }, n: { type: 'string' } } }
   );
 });
 
@@ -1166,4 +1166,158 @@ test('Gemini MALFORMED_FUNCTION_CALL finish is an error, not stop', () => {
   assert.match(String(ev.error), /MALFORMED_FUNCTION_CALL/);
   const chat = normalizeUpstream({ choices: [{ delta: {}, finish_reason: 'malformed_function_call' }] }, 'openai-chat');
   assert.match(String(chat.error), /malformed_function_call/i);
+});
+
+// DeepSeek/Kimi thinking mode refuse a tool step whose earlier tool-call turn lost its reasoning_content.
+test('irToChatBody replays thinking as reasoning_content on tool-call turns', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 8000, thinking: { type: 'enabled', budget_tokens: 4000 }, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: 'I should run ls', signature: 'sig' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'pwd' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: '/' }] }
+  ] });
+  for (const thinkingMode of ['auto', 'native']) {
+    const calls = irToChatBody(ir, 'deepseek-reasoner', { thinkingMode }).messages.filter(m => m.tool_calls);
+    assert.equal(calls[0].reasoning_content, 'I should run ls', thinkingMode);
+    assert.equal(calls[1].reasoning_content, '', thinkingMode);
+  }
+  const off = emitUpstreamBody('openai-chat', ir, 'deepseek-reasoner', { thinkingMode: 'off' });
+  assert.ok(off.messages.every(m => !('reasoning_content' in m)));
+
+  const rir = responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Plan: run ls' }], encrypted_content: 'opaque' },
+    { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'ok' }
+  ] });
+  const rb = irToChatBody(rir, 'kimi-k2-thinking', { thinkingMode: 'native' });
+  assert.equal(rb.messages.find(m => m.tool_calls).reasoning_content, 'Plan: run ls');
+});
+
+test('irToAnthropicBody drops thinking for an unsigned tool loop', () => {
+  const ir = responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: [
+    { type: 'message', role: 'user', content: 'run ls' },
+    { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{"command":["ls"]}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'a.txt' }
+  ] });
+  const body = irToAnthropicBody(ir, 'claude-opus-4-6');
+  assert.equal(body.thinking, undefined);
+  assert.equal(body.messages.at(-1).content[0].type, 'tool_result');
+  const forced = irToAnthropicBody(ir, 'claude-opus-4-6', { thinkingEffort: 'high' });
+  assert.equal(forced.thinking, undefined);
+  const fresh = irToAnthropicBody(responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: 'hi' }), 'claude-opus-4-6');
+  assert.equal(fresh.thinking?.type, 'enabled');
+});
+
+test('toGeminiSchema never emits an empty nested OBJECT', () => {
+  const out = toGeminiSchema({ type: 'object', properties: {
+    env: { type: 'object', additionalProperties: { type: 'string' } },
+    list: { type: 'array', items: { type: 'object' } },
+    either: { anyOf: [{ type: 'object' }, { type: 'string' }] },
+    short: 'object'
+  } });
+  const walk = (s, nested) => {
+    if (!s || typeof s !== 'object') return;
+    if (nested && s.type === 'object') assert.ok(Object.keys(s.properties || {}).length, JSON.stringify(s));
+    for (const p of Object.values(s.properties || {})) walk(p, true);
+    if (s.items) walk(s.items, true);
+    for (const b of s.anyOf || []) walk(b, true);
+  };
+  walk(out, false);
+  assert.deepEqual(toGeminiSchema({ type: 'object' }), { type: 'object', properties: {} });
+});
+
+test('irToVertexBody wraps tool output with $ keys', () => {
+  const output = JSON.stringify({ $ref: '#/definitions/Pet', definitions: { Pet: { $id: 'p' } } });
+  const nested = JSON.stringify({ a: { b: [{ $schema: 'x' }] } });
+  const ir = { ...anthropicToIR({ model: 'x', messages: [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }, { type: 'tool_use', id: 't2', name: 'Bash', input: {} }, { type: 'tool_use', id: 't3', name: 'Bash', input: {} }] },
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 't1', content: output },
+      { type: 'tool_result', tool_use_id: 't2', content: nested },
+      { type: 'tool_result', tool_use_id: 't3', content: '{"ok":true}' }
+    ] }
+  ] }) };
+  const responses = irToVertexBody(ir, 'gemini-2.5-pro').contents.flatMap(c => c.parts).filter(p => p.functionResponse).map(p => p.functionResponse.response);
+  assert.deepEqual(responses[0], { result: output });
+  assert.deepEqual(responses[1], { result: nested });
+  assert.deepEqual(responses[2], { ok: true });
+});
+
+test('toGeminiSchema stringifies an untyped const', () => {
+  const out = toGeminiSchema({ type: 'object', properties: { flag: { const: true }, n: { const: 3 }, s: { const: 'x' } } });
+  assert.deepEqual(out.properties.flag, { enum: ['true'], type: 'string' });
+  assert.deepEqual(out.properties.n, { enum: ['3'], type: 'string' });
+  assert.deepEqual(out.properties.s, { enum: ['x'], type: 'string' });
+});
+
+test('responsesToIR keeps long colliding tool names distinct', () => {
+  const ns = `mcp__${'server_with_a_long_name_'.repeat(3)}`;
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'function_call', call_id: 'c1', namespace: ns, name: 'list_items_with_filter_b', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'ok' }
+  ], tools: [{ type: 'namespace', name: ns, tools: [
+    { type: 'function', name: 'list_items_with_filter_a', parameters: { type: 'object', properties: {} } },
+    { type: 'function', name: 'list_items_with_filter_b', parameters: { type: 'object', properties: {} } }
+  ] }] });
+  const names = ir.tools.map(t => t.name);
+  assert.equal(names.length, 2);
+  assert.notEqual(names[0], names[1]);
+  assert.ok(names.every(n => n.length <= 64 && /^[A-Za-z0-9_-]+$/.test(n)), names.join());
+  assert.equal(ir.toolMeta[names[1]].name, 'list_items_with_filter_b');
+  assert.equal(ir.messages[1].toolCalls[0].name, names[1]);
+  assert.equal(responsesToIR({ model: 'x', input: 'hi', tools: [{ type: 'function', name: 'read_file', parameters: {} }] }).tools[0].name, 'read_file');
+});
+
+test('sanitizeJsonSchema drops null keywords and lookaround patterns', () => {
+  const out = sanitizeJsonSchema({ type: 'object', required: null, description: null, properties: {
+    slug: { type: 'string', pattern: '^(?!-)[a-z-]+$' },
+    tag: { type: 'string', pattern: '(?<=#)\\w+' },
+    plain: { type: 'string', pattern: '^[a-z]+$', default: null },
+    named: { type: 'string', pattern: '^(?<year>\\d{4})$' },
+    pattern: { type: 'string', enum: ['a', null], const: null }
+  } });
+  assert.equal('required' in out, false);
+  assert.equal('description' in out, false);
+  assert.equal('pattern' in out.properties.slug, false);
+  assert.equal('pattern' in out.properties.tag, false);
+  assert.equal(out.properties.plain.pattern, '^[a-z]+$');
+  assert.equal(out.properties.plain.default, null);
+  assert.equal(out.properties.named.pattern, '^(?<year>\\d{4})$');
+  assert.deepEqual(out.properties.pattern, { type: 'string', enum: ['a', null], const: null });
+  assert.deepEqual(sanitizeJsonSchema({ type: 'object', properties: {}, default: { a: null, b: {} } }).default, { a: null, b: {} });
+});
+
+test('irToVertexBody never ends on a model turn', () => {
+  const ir = anthropicToIR({ model: 'x', messages: [
+    { role: 'user', content: 'Write a haiku' },
+    { role: 'assistant', content: 'Autumn moon' }
+  ] });
+  const body = irToVertexBody(ir, 'gemini-2.5-pro');
+  assert.equal(body.contents.at(-1).role, 'user');
+  assert.ok(body.contents.some(c => c.role === 'model' && c.parts.some(p => p.text === 'Autumn moon')), 'the prefill text is kept');
+});
+
+test('healAnthropicPayload dedupes repeated tool_use ids', () => {
+  const use = (id, cmd) => ({ type: 'tool_use', id, name: 'Bash', input: { command: cmd } });
+  const result = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text });
+  const r = healAnthropicPayload({ model: 'claude', messages: [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [use('functions_Bash_0', 'ls')] },
+    { role: 'user', content: [result('functions_Bash_0', 'a.txt')] },
+    { role: 'assistant', content: [use('functions_Bash_0', 'pwd'), use('functions_Bash_1', 'id')] },
+    { role: 'user', content: [result('functions_Bash_0', '/'), result('functions_Bash_1', 'uid')] }
+  ] });
+  assert.equal(r.changed, true);
+  const msgs = r.payload.messages;
+  const ids = msgs.filter(m => m.role === 'assistant').flatMap(m => m.content.filter(b => b.type === 'tool_use').map(b => b.id));
+  assert.equal(new Set(ids).size, ids.length, ids.join());
+  assert.ok(ids.every(id => /^[a-zA-Z0-9_-]+$/.test(id)));
+  assert.equal(ids[0], 'functions_Bash_0');
+  // Each result still answers its own call.
+  assert.deepEqual(msgs[2].content.map(b => [b.tool_use_id, b.content]), [[ids[0], 'a.txt']]);
+  assert.deepEqual(msgs[4].content.map(b => [b.tool_use_id, b.content]), [[ids[1], '/'], [ids[2], 'uid']]);
 });
