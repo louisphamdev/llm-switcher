@@ -11,14 +11,14 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { assertValidAnthropicEvents } from './helpers.mjs';
+import { assertValidAnthropicEvents, stopChild, reapDir, reapDirSync, onAbnormalExit } from './helpers.mjs';
 import { createFrameReader } from '../blindfold/wsframe.mjs';
 
 const MASKED = '__LLM_SWITCHER_KEEP_KEY__';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-let upstream, upstreamPort, proxy, proxyPort, tmpDir, fakeInterceptor, blindfoldPort, certsDir;
+let upstream, upstreamPort, proxy, proxyPort, tmpDir, fakeInterceptor, blindfoldPort, certsDir, cancelExitReap;
 const received = []; // { url, headers, body }
 const hangState = { closed: false, slowAborted: false };
 const bigState = { finishedAt: 0 };
@@ -83,7 +83,8 @@ function startUpstream() {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ data: [
           { id: 'gpt-5.6-sol', context_length: 1048576, compact_window: 272000 },
-          { id: 'up-opus', context_length: 200000 }
+          { id: 'up-opus', context_length: 200000 },
+          { id: 'up-capped', context_length: 200000, max_output_tokens: 8192 }
         ] }));
       }
       if (req.url.startsWith('/intact/v1/messages')) {
@@ -95,6 +96,16 @@ function startUpstream() {
         return res.end(JSON.stringify({ id: 'c1', object: 'chat.completion', model: json.model, choices: [{ index: 0, message: { role: 'assistant', content: 'converted ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
       }
       if (req.url.startsWith('/chat/v1/chat/completions')) {
+        // A text-only model: it refuses any image part, and one that refuses for an unrelated reason.
+        const hasImage = (json.messages || []).some(m => Array.isArray(m.content) && m.content.some(p => p?.type === 'image_url'));
+        if (json.model === 'up-textonly' && hasImage) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message: 'Failed to deserialize the JSON body: messages[0]: unknown variant `image_url`, expected `text`', type: 'invalid_request_error' } }));
+        }
+        if (json.model === 'up-badreq') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message: 'temperature must be between 0 and 2', type: 'invalid_request_error' } }));
+        }
         if (lastUser.includes('TOOL_ALIAS_REPLAY')) {
           const reference = json.messages.find(m => m.role === 'tool');
           const name = JSON.parse(reference.content).tool_name;
@@ -220,6 +231,8 @@ before(async () => {
   await startUpstream();
   proxyPort = await freePort();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-switcher-test-'));
+  // A run that ends with no after() still stops the gateway and the interceptor it started detached.
+  cancelExitReap = onAbnormalExit(() => reapDirSync(tmpDir, [proxy?.pid, fakeInterceptor?.pid]));
 
   // R3b: both tools are active in this fixture, so every admin write runs through
   // checkBlindfoldTarget. Give the interceptor a port of its own and a certificate minted for
@@ -243,6 +256,8 @@ before(async () => {
       roles: { name: 'Mock Public Roles', mode: 'convert', inFormat: 'responses', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-roles', publicModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], defaultModels: { main: 'ag/mock-flash', review: 'ag/mock-review', subagent: 'ag/mock-low' } },
       native: { name: 'Mock Strict OpenAI', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', thinkingMode: 'native', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-native', defaultModels: models },
       intactcc: { name: 'Mock intact', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', thinkingMode: 'off', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact-user', defaultModels: { opus: 'claude/claude-opus-5', sonnet: 'gem/flash', haiku: 'claude/claude-haiku-4-5', fable: 'gem/flash' } },
+      textonly: { name: 'Mock Text Only', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-textonly', defaultModels: { opus: 'up-textonly', sonnet: 'up-badreq', haiku: 'up-haiku', fable: 'up-fable' } },
+      capped: { name: 'Mock Capped Output', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
     }
   };
@@ -302,9 +317,11 @@ before(async () => {
   }
 });
 
-after(() => {
-  fakeInterceptor?.kill();
-  proxy?.kill();
+after(async () => {
+  cancelExitReap?.();
+  // The gateway first: once it is gone it can start no interceptor.
+  await stopChild(proxy);
+  await stopChild(fakeInterceptor);
   upstream?.close();
   // A test that changes the tool set makes the gateway start a real interceptor. It is detached on
   // purpose, so it outlives the gateway; stop the one the gateway recorded before its state goes.
@@ -312,7 +329,8 @@ after(() => {
     const { pid } = JSON.parse(fs.readFileSync(path.join(tmpDir, 'blindfold.json'), 'utf8'));
     if (Number.isInteger(pid) && pid !== fakeInterceptor?.pid) process.kill(pid);
   } catch {}
-  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  // One it had not recorded yet still names the dir on its command line.
+  if (tmpDir) await reapDir(tmpDir);
 });
 
 const url = (p) => `http://127.0.0.1:${proxyPort}${p}`;
@@ -588,6 +606,51 @@ test('A8: /v1/chat/completions and /chat/completions answer 404 on the gateway',
     assert.match((await res.json()).error.message, /Not found/, p);
   }
   assert.equal(received.length, before, 'a removed route never reaches an upstream');
+});
+
+// The profile's own list names the output limit, so a max_tokens above it is clamped instead of refused.
+test('max_tokens above the listed output limit is clamped; a model with no listed limit keeps it', async () => {
+  const listed = await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'capped' } });
+  assert.equal(listed.status, 200);
+  await listed.text();
+  const res = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }] }, { 'x-llm-profile': 'capped' });
+  assert.equal(res.status, 200);
+  await res.text();
+  assert.equal(received.at(-1).body.model, 'up-capped');
+  assert.equal(received.at(-1).body.max_tokens, 8192);
+  const free = await post('/v1/messages', { model: 'claude-sonnet-4-6', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }] }, { 'x-llm-profile': 'capped' });
+  await free.text();
+  assert.equal(received.at(-1).body.model, 'up-sonnet');
+  assert.equal(received.at(-1).body.max_tokens, 64000);
+});
+
+// A text-only model refuses an image that stays in the history, so every later turn would fail too.
+test('An image refused by a text-only chat model is retried once as text, and later turns drop it up front', async () => {
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+  const calls = model => received.filter(r => r.url.startsWith('/chat/v1/chat/completions') && r.body.model === model).length;
+  const sentImage = r => r.body.messages.some(m => Array.isArray(m.content) && m.content.some(p => p?.type === 'image_url'));
+  const first = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 100, messages: [{ role: 'user', content: [image, { type: 'text', text: 'what is this' }] }] }, { 'x-llm-profile': 'textonly' });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).type, 'message');
+  assert.equal(calls('up-textonly'), 2, 'one refusal, one retry');
+  assert.equal(sentImage(received.at(-1)), false);
+  assert.ok(JSON.stringify(received.at(-1).body).includes('[image omitted: this model does not accept images]'));
+
+  const second = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 100, stream: true, messages: [
+    { role: 'user', content: [image, { type: 'text', text: 'what is this' }] },
+    { role: 'assistant', content: 'an image' },
+    { role: 'user', content: 'and now?' }
+  ] }, { 'x-llm-profile': 'textonly' });
+  assert.equal(second.status, 200);
+  await second.text();
+  assert.equal(calls('up-textonly'), 3, 'the second request needs one call');
+  assert.equal(sentImage(received.at(-1)), false);
+
+  const other = await post('/v1/messages', { model: 'claude-sonnet-4-6', max_tokens: 100, messages: [{ role: 'user', content: [image, { type: 'text', text: 'hi' }] }] }, { 'x-llm-profile': 'textonly' });
+  assert.equal(other.status, 400);
+  assert.match((await other.json()).error.message, /temperature must be between 0 and 2/);
+  assert.equal(calls('up-badreq'), 1, 'an unrelated 400 is relayed, never retried');
+  assert.equal(sentImage(received.at(-1)), true);
 });
 
 test('Upstream 429 is returned in Anthropic error shape with retry-after', async () => {

@@ -11,7 +11,7 @@ import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES, VALID_EFFORTS,
-  toGeminiSchema, isAntigravityModel,
+  toGeminiSchema, isAntigravityModel, refusesImageInput, omitChatImages,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
   createCodeAssistStream, buildCodeAssistMessage
@@ -26,7 +26,7 @@ import {
   codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
-import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows } from './windows.mjs';
+import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, readWindowsCache } from './windows.mjs';
 import { createToolVocab, NULL_TOOL_VOCAB, toolNameMapForIR } from './toolvocab.mjs';
 import { readUpstreamPayloads } from './upstream-stream.mjs';
 import { compactionResponse, emitCompaction, expandGatewayCompactions, collectCompaction } from './compaction.mjs';
@@ -828,12 +828,24 @@ function resolveThinkingEffort(profile, slot, mappedModel) {
   return profile?.thinkingEffort || 'auto';
 }
 
+// The output limit the profile's own model list names for this model, or 0 when no cached list
+// names one. The cache is filled by /v1/models; this only reads it.
+function modelOutputLimit(profile, mappedModel) {
+  if (!profile?.baseURL || !mappedModel) return 0;
+  for (const entry of Object.values(readWindowsCache(STATE_DIR))) {
+    const output = entry?.baseURL === profile.baseURL ? Number(entry.models?.[mappedModel]?.output) : 0;
+    if (output > 0) return output;
+  }
+  return 0;
+}
+
 function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null) {
   const effort = resolveThinkingEffort(profile, slot, mappedModel);
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
     thinkingMode: profile.thinkingMode,
     thinkingEffort: effort,
     replayReasoning: profile.replayReasoning === true,
+    maxOutputTokens: modelOutputLimit(profile, mappedModel),
   });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);
@@ -843,6 +855,28 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
   }
   const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
   return { url, headers, upBody };
+}
+
+// (profile, model) pairs whose chat upstream refused an image. The image stays in the history, so
+// their later requests send the text marker from the start instead of failing every turn.
+const textOnlyModels = new Set();
+
+// Sends the upstream request. A chat 400 that says the model takes no images is retried once with
+// every image replaced by text. The status arrives before any byte goes to the client, so the client
+// sees only the retry's answer.
+async function fetchUpstream(url, headers, upBody, signal, outFormat, profileKey, mappedModel) {
+  const chat = outFormat === 'openai-chat';
+  const key = `${profileKey}\n${mappedModel}`;
+  if (chat && textOnlyModels.has(key)) omitChatImages(upBody);
+  const send = () => fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal });
+  const res = await send();
+  const hasImage = chat && upBody.messages?.some(m => Array.isArray(m?.content) && m.content.some(p => p?.type === 'image_url'));
+  if (res.status !== 400 || !hasImage) return res;
+  const errText = await res.text().catch(() => '');
+  if (!refusesImageInput(errText)) return new Response(errText, { status: res.status, statusText: res.statusText, headers: res.headers });
+  textOnlyModels.add(key);
+  console.warn(`[${profileKey}] ${mappedModel} refused ${omitChatImages(upBody)} image(s); retrying as text, and sending text from now on`);
+  return send();
 }
 
 // Feeds upstream stream events to a client renderer until the stream ends, fails or is aborted.
@@ -1282,7 +1316,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
 
     let upstreamRes;
     try {
-      upstreamRes = await fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal: ac.signal });
+      upstreamRes = await fetchUpstream(url, headers, upBody, ac.signal, outFormat, profileKey, mappedModel);
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}] Network error:`, fetchErr.message);
@@ -2553,7 +2587,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
 
     let upstreamRes;
     try {
-      upstreamRes = await fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal: ac.signal });
+      upstreamRes = await fetchUpstream(url, headers, upBody, ac.signal, outFormat, profileKey, mappedModel);
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}:ws] Network error:`, fetchErr.message);

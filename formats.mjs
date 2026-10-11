@@ -1654,12 +1654,43 @@ function emitUpstreamBody(outFormat, ir, model, opts = {}) {
   // thinkingMode 'off' applies to all upstreams: drop the client's thinking entirely.
   let src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
   if (isAntigravityModel(model) && src.system) src = { ...src, system: src.system.replace(BILLING_HEADER_RE, '') };
+  // An upstream refuses a max tokens above the model's output limit. The Anthropic body always
+  // carries one (4096 when the client sent none), so that default is clamped too.
+  const limit = opts.maxOutputTokens;
+  if (Number.isFinite(limit) && limit > 0) {
+    const asked = typeof src.params?.maxTokens === 'number' ? src.params.maxTokens : (outFormat === 'anthropic' ? 4096 : null);
+    if (asked != null && asked > limit) src = { ...src, params: { ...src.params, maxTokens: limit } };
+  }
   switch (outFormat) {
     case 'anthropic': return irToAnthropicBody(src, model, opts);
     case 'vertex': return irToVertexBody(src, model, opts);
     case 'openai-chat':
     default: return irToChatBody(src, model, opts);
   }
+}
+
+// A text-only chat model refuses an image part with a 400. These are the refusals seen so far;
+// a looser match would turn an unrelated 400 into a silent retry without the image.
+export const IMAGE_OMITTED_TEXT = '[image omitted: this model does not accept images]';
+
+export function refusesImageInput(text) {
+  const t = String(text || '').toLowerCase();
+  return t.includes('image_url') || t.includes('does not support image') || t.includes('image input is not supported')
+    || (t.includes('vision') && t.includes('not supported'));
+}
+
+// Replaces every image part of a chat body with IMAGE_OMITTED_TEXT, in place. Returns how many it replaced.
+export function omitChatImages(body) {
+  let replaced = 0;
+  for (const m of Array.isArray(body?.messages) ? body.messages : []) {
+    if (!Array.isArray(m?.content)) continue;
+    m.content = m.content.map(p => {
+      if (p?.type !== 'image_url') return p;
+      replaced++;
+      return { type: 'text', text: IMAGE_OMITTED_TEXT };
+    });
+  }
+  return replaced;
 }
 
 // ---------------- native Anthropic healer (direct passthrough) ----------------

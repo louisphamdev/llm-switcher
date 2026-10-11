@@ -12,7 +12,8 @@ import {
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
-  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage
+  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage,
+  refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT
 } from '../formats.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
@@ -37,6 +38,49 @@ test('Chat emitter restores thinking for versioned Claude Opus model IDs', () =>
     const body = irToChatBody(ir, model);
     assert.ok(body.thinking, `${model} should receive restored thinking settings`);
   }
+});
+
+// Only an answer that says the model takes no images may turn into a text-only retry.
+test('refusesImageInput matches the known no-image errors and nothing else', () => {
+  for (const t of [
+    '{"error":{"message":"Invalid content type. image_url is only supported by certain models."}}',
+    'Failed to deserialize the JSON body into the target type: messages[0]: unknown variant `image_url`, expected `text`',
+    'This model does not support image input',
+    'Image input is not supported for this model',
+    'Vision is not supported by deepseek-chat'
+  ]) assert.equal(refusesImageInput(t), true, t);
+  for (const t of ['', 'temperature must be between 0 and 2', 'maximum context length exceeded', 'vision model overloaded', 'not supported: tool_choice'])
+    assert.equal(refusesImageInput(t), false, t);
+});
+
+test('omitChatImages replaces every image part with text and counts them', () => {
+  const body = { messages: [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }, { type: 'text', text: 'what?' }] },
+    { role: 'assistant', content: 'a cat' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://x/y.png' } }] }
+  ] };
+  assert.equal(omitChatImages(body), 2);
+  assert.deepEqual(body.messages[1].content, [{ type: 'text', text: IMAGE_OMITTED_TEXT }, { type: 'text', text: 'what?' }]);
+  assert.deepEqual(body.messages[3].content, [{ type: 'text', text: IMAGE_OMITTED_TEXT }]);
+  assert.equal(IMAGE_OMITTED_TEXT, '[image omitted: this model does not accept images]');
+  assert.equal(omitChatImages(body), 0, 'nothing left to replace');
+  assert.equal(omitChatImages({}), 0);
+});
+
+// A max_tokens above the model's own output limit is refused upstream, so it is clamped when the limit is known.
+test('emitUpstreamBody clamps max tokens to a known output limit, and leaves it when the limit is unknown', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { maxOutputTokens: 8192 }).max_tokens, 8192);
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { thinkingMode: 'native', maxOutputTokens: 8192 }).max_completion_tokens, 8192);
+  assert.equal(emitUpstreamBody('anthropic', ir, 'm', { maxOutputTokens: 8192 }).max_tokens, 8192);
+  assert.equal(emitUpstreamBody('vertex', ir, 'm', { maxOutputTokens: 8192 }).generationConfig.maxOutputTokens, 8192);
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm').max_tokens, 64000, 'unknown limit: unchanged');
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { maxOutputTokens: 128000 }).max_tokens, 64000, 'under the limit: unchanged');
+  assert.equal(ir.params.maxTokens, 64000, 'the client IR is not changed');
+  const bare = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal('max_tokens' in emitUpstreamBody('openai-chat', bare, 'm', { maxOutputTokens: 8192 }), false, 'no max tokens sent: none invented');
+  assert.equal(emitUpstreamBody('anthropic', bare, 'm', { maxOutputTokens: 2048 }).max_tokens, 2048, 'the Anthropic default of 4096 is clamped too');
 });
 
 test('emitUpstreamBody: billing header stripped only for antigravity (ag/) models', () => {

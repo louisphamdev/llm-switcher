@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.11 — 2026-10-11
+
+- **Output limit.** The proxy keeps the output limit of each model from the `/models` list of the profile (`max_output_tokens` or `top_provider.max_completion_tokens`) in `model-windows.json`. If the client asks for more tokens than this limit, the proxy sends the limit. This applies to `max_tokens`, `max_completion_tokens` and `maxOutputTokens`. If the limit is not known, the value does not change.
+- **Images to a text-only chat model.** If a chat upstream refuses an image with HTTP 400, the proxy sends the request one more time. In that request, each image is the text `[image omitted: this model does not accept images]`. The proxy keeps the profile and the model in memory and removes the images from all later requests to that model.
+- **Test cleanup.** The browser tests and the gateway tests stop the gateway, the stand-in interceptor, an interceptor that the gateway started, and Chromium. They also delete their temp directories. This occurs also when a test fails or the test process gets `SIGTERM`, `SIGINT` or `SIGHUP`.
+
 ## Release 1.6.10 — 2026-10-11
 
 - **`reasoning_content` replay.** On assistant tool-call turns, `auto` mode sends the earlier thinking as `reasoning_content`. `native` mode sends it only when the profile sets `replayReasoning: true`, because a strict OpenAI-compatible server can refuse the field. `off` mode never sends it.

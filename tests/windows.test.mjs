@@ -20,9 +20,20 @@ test('a list entry gives the whole window and the window to compress at', () => 
   assert.deepEqual(parseModelWindows({ id: 'groq/q', context_window: 131072 }), { context: 131072, compact: 0 },
     'one window is the whole window, not a threshold');
   assert.deepEqual(parseModelWindows({ id: 'or/r', context_length: 262144, top_provider: { context_length: 262144, max_completion_tokens: 32768 } }),
-    { context: 262144, compact: 0 });
+    { context: 262144, compact: 0, output: 32768 });
   assert.deepEqual(parseModelWindows({ id: 'bare' }), null, 'a model with no limits says nothing');
   assert.deepEqual(parseModelWindows({ id: 'zero', context_length: 0, compact_window: 0 }), null);
+});
+
+// The output limit lets the gateway clamp a max_tokens the model would refuse.
+test('a list entry keeps the output limit it names, and leaves it out when it names none', () => {
+  assert.deepEqual(parseModelWindows({ id: 'i/m', context_length: 200000, max_output_tokens: 8192 }),
+    { context: 200000, compact: 0, output: 8192 });
+  assert.deepEqual(parseModelWindows({ id: 'only-out', max_output_tokens: 4096 }), { context: 0, compact: 0, output: 4096 },
+    'an output limit alone is still worth keeping');
+  assert.equal('output' in parseModelWindows({ id: 'g', context_length: 131072 }), false);
+  assert.deepEqual(parseModelList({ data: [{ id: 'i/m', context_length: 200000, max_output_tokens: 8192 }] }),
+    { 'i/m': { context: 200000, compact: 0, output: 8192 } });
 });
 
 test('parseModelList keys the windows by the id a profile maps, and drops the nameless', () => {
@@ -84,6 +95,25 @@ test('windows are cached for an hour, and a failed refresh keeps the stale answe
     await new Promise(r => sink.close(r));
     assert.equal((await resolveProfileWindows(dir, key, base, 'k', { now: 1_000 + 7_200_000 })).m.context, 400000);
     assert.equal(readWindowsCache(dir)[key].models.m.context, 400000, 'and the cache still holds it');
+  } finally {
+    sink.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the cache persists the output limit, and an old cache file without it still reads', async () => {
+  const dir = tmpDir();
+  const sink = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'm', context_length: 200000, max_output_tokens: 8192 }] }));
+  });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${sink.address().port}/v1`;
+  try {
+    await resolveProfileWindows(dir, 'p@' + base, base, 'k', { now: 1_000 });
+    assert.equal(readWindowsCache(dir)['p@' + base].models.m.output, 8192);
+    fs.writeFileSync(path.join(dir, 'model-windows.json'), JSON.stringify({ old: { at: 1_000, baseURL: base, models: { m: { context: 200000, compact: 0 } } } }));
+    assert.deepEqual(await resolveProfileWindows(dir, 'old', base, 'k', { now: 2_000 }), { m: { context: 200000, compact: 0 } });
   } finally {
     sink.close();
     fs.rmSync(dir, { recursive: true, force: true });

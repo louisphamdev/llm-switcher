@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { reapDirSync, onAbnormalExit } from './helpers.mjs';
 
 const CANDIDATES = [
   process.env.LLM_SWITCHER_CHROMIUM,
@@ -48,7 +49,10 @@ export async function launchBrowser() {
     'about:blank'
   ];
   // POSIX: a process group of its own, so close() can stop the renderers and helpers too.
-  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir }, detached: process.platform !== 'win32' });
+  // TMPDIR too: Chromium makes its own org.chromium.* dirs there, and they go with the profile.
+  const child = spawn(findChromium(), args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HOME: dir, TMPDIR: dir }, detached: process.platform !== 'win32' });
+  // The browser runs detached, so a test process that ends without close() would leave it running.
+  const cancelExitReap = onAbnormalExit(() => reapDirSync(dir, process.platform !== 'win32' ? [-child.pid] : [child.pid]));
   const stop = (signal) => {
     try {
       if (process.platform !== 'win32') process.kill(-child.pid, signal);
@@ -71,6 +75,8 @@ export async function launchBrowser() {
       stop('SIGKILL');
       await new Promise(r => { child.once('exit', r); setTimeout(r, 3000); });
     }
+    cancelExitReap();
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     throw new Error(`Chromium did not open a debugging port (exit: ${exited ?? 'killed'})\n${stderr}`);
   }
 
@@ -84,6 +90,7 @@ export async function launchBrowser() {
       return page;
     },
     async close() {
+      cancelExitReap();
       for (const p of pages) p.close();
       // The whole group: a helper that outlives the main process keeps writing into the profile.
       stop('SIGTERM');

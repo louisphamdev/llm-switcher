@@ -21,7 +21,8 @@ const FETCH_TIMEOUT_MS = 15000;
 
 const n = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
 
-// One entry of a provider's list -> the two windows, or null when it names none.
+// One entry of a provider's list -> the two windows, plus `output` (the most the model writes)
+// when the list names it; null when it names none.
 export function parseModelWindows(m) {
   if (!m || typeof m !== 'object') return null;
   const top = m.top_provider && typeof m.top_provider === 'object' ? m.top_provider : {};
@@ -30,8 +31,9 @@ export function parseModelWindows(m) {
   // smaller of the two windows it publishes.
   const compact = n(m.compact_window) || n(m.compaction_threshold)
     || (context && n(m.context_window) && n(m.context_window) < context ? n(m.context_window) : 0);
-  if (!context && !compact) return null;
-  return { context, compact };
+  const output = n(m.max_output_tokens) || n(top.max_completion_tokens);
+  if (!context && !compact && !output) return null;
+  return output ? { context, compact, output } : { context, compact };
 }
 
 // The list as it names the models, so a caller can look one up by the id a profile maps.
