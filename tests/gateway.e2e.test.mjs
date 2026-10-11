@@ -292,6 +292,7 @@ before(async () => {
       intactcc: { name: 'Mock intact', mode: 'convert', tool: 'claude', outFormat: 'openai-chat', thinkingMode: 'off', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact-user', defaultModels: { opus: 'claude/claude-opus-5', sonnet: 'gem/flash', haiku: 'claude/claude-haiku-4-5', fable: 'gem/flash' } },
       textonly: { name: 'Mock Text Only', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-textonly', defaultModels: { opus: 'up-textonly', sonnet: 'up-badreq', haiku: 'up-haiku', fable: 'up-fable' } },
       capped: { name: 'Mock Capped Output', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      agyph: { name: 'Mock agy to AG via chat', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-agy', defaultModels: { main: 'ag/mock-flash' } },
       cappedtwin: { name: 'Mock Capped Twin', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       cappedold: { name: 'Mock Capped Old', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
@@ -701,6 +702,29 @@ test('A _placeholder the gateway added for Gemini is stripped from tool-call arg
   const done = parseSSE(await streamed.text()).find(e => e.data?.type === 'response.completed');
   assert.ok(done, 'the stream completes');
   assert.deepEqual(JSON.parse(done.data.response.output.find(o => o.type === 'function_call').arguments), want);
+});
+
+test('A Code Assist (agy) client gets tool-call args without the padded _placeholder, stream and non-stream', async () => {
+  const envelope = { project: 'p', requestId: 'agent/s/1/t/1', model: 'gemini-3.8-flash-high', userAgent: 'antigravity', requestType: 'agent', request: {
+    contents: [{ role: 'user', parts: [{ text: 'PLACEHOLDER_ECHO' }] }],
+    tools: [{ functionDeclarations: [{ name: 'run', description: 'Run.', parameters: { type: 'OBJECT', properties: {
+      cmd: { type: 'STRING' }, env: { type: 'OBJECT' }, opts: { type: 'OBJECT', properties: { _placeholder: { type: 'STRING' } } }
+    } } }] }]
+  } };
+  const want = { cmd: 'ls', env: { A: '1' }, opts: { _placeholder: 'keep' }, _placeholder: true };
+  const headers = { 'content-type': 'application/json', 'x-llm-profile': 'agyph' };
+  const callOf = (chunks) => chunks.flatMap(c => c.response?.candidates?.[0]?.content?.parts || []).find(p => p.functionCall)?.functionCall;
+
+  const whole = await fetch(url('/v1internal:generateContent'), { method: 'POST', headers, body: JSON.stringify(envelope) });
+  assert.equal(whole.status, 200);
+  const sent = received.at(-1).body.tools.find(t => t.function.name === 'run').function.parameters;
+  assert.deepEqual(Object.keys(sent.properties.env.properties), ['_placeholder'], 'the schema sent upstream was padded');
+  assert.deepEqual(callOf([await whole.json()]).args, want);
+
+  const streamed = await fetch(url('/v1internal:streamGenerateContent?alt=sse'), { method: 'POST', headers, body: JSON.stringify(envelope) });
+  assert.equal(streamed.status, 200);
+  const chunks = parseSSE(await streamed.text()).map(e => e.data).filter(Boolean);
+  assert.deepEqual(callOf(chunks).args, want);
 });
 
 // A text-only model refuses an image that stays in the history, so every later turn would fail too.

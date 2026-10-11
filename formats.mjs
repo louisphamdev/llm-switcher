@@ -2854,7 +2854,7 @@ function vertexUsage(prompt, completion, cached, reasoning) {
   return u;
 }
 
-function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig, ids = false }) {
+function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig, ids = false, vocab = null }) {
   const parts = [];
   const thinking = (think || []).join('');
   if (thinking) {
@@ -2865,7 +2865,8 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
   const body = (text || []).join('');
   if (body) parts.push({ text: body });
   for (const tc of (tools || [])) {
-    const part = { functionCall: { ...(ids && tc.id ? { id: tc.id } : {}), name: tc.name || 'tool', args: parseArgs(tc.args) } };
+    const args = vocab && typeof tc.args === 'string' ? vocab.args(tc.name, tc.args) : tc.args;
+    const part = { functionCall: { ...(ids && tc.id ? { id: tc.id } : {}), name: tc.name || 'tool', args: parseArgs(args) } };
     const tsig = tc.sig || lookupToolSignature(tc.id);
     if (tsig) part.thoughtSignature = tsig;
     parts.push(part);
@@ -2879,7 +2880,7 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
 }
 
 // ids: name each functionCall, as Code Assist does. Plain Vertex has no call id.
-function createVertexStream(emit, model, { ids = false } = {}) {
+function createVertexStream(emit, model, { ids = false, vocab = null } = {}) {
   const cand = (parts) => emit(null, { candidates: [{ content: { role: 'model', parts }, index: 0 }], modelVersion: model });
   // Tool args arrive from OpenAI/Anthropic as deltas; Vertex needs complete functionCalls -> buffer them, emit at the end.
   const tools = new Map();
@@ -2906,7 +2907,8 @@ function createVertexStream(emit, model, { ids = false } = {}) {
       const parts = [...tools.values()]
         .filter(t => t.name)
         .map(t => {
-          const part = { functionCall: { ...(ids && t.id ? { id: t.id } : {}), name: t.name, args: parseArgs(t.args || '{}') } };
+          const args = vocab ? vocab.args(t.name, t.args || '{}') : (t.args || '{}');
+          const part = { functionCall: { ...(ids && t.id ? { id: t.id } : {}), name: t.name, args: parseArgs(args) } };
           const tsig = t.sig || lookupToolSignature(t.id);
           if (tsig) part.thoughtSignature = tsig;
           return part;
@@ -2931,10 +2933,10 @@ function codeAssistTrace() {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 
-function createCodeAssistStream(emit, model) {
+function createCodeAssistStream(emit, model, { vocab = null } = {}) {
   const traceId = codeAssistTrace();
   const responseId = `agy-${traceId}`;
-  return createVertexStream((e, d) => emit(e, d?.error ? d : { response: { ...d, responseId }, traceId }), model, { ids: true });
+  return createVertexStream((e, d) => emit(e, d?.error ? d : { response: { ...d, responseId }, traceId }), model, { ids: true, vocab });
 }
 
 function buildCodeAssistMessage(args) {

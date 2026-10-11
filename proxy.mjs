@@ -510,8 +510,8 @@ function toolVocabFor(ir, outFormat) {
 function clientRenderer(clientFormat, res, model, opts = {}) {
   if (clientFormat === 'anthropic') return createAnthropicStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'responses') return createResponsesStream((e, d) => sendSSE(res, e, d), model, opts);
-  if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model);
-  if (clientFormat === 'codeassist') return createCodeAssistStream((e, d) => sendSSE(res, null, d), model);
+  if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model, opts);
+  if (clientFormat === 'codeassist') return createCodeAssistStream((e, d) => sendSSE(res, null, d), model, opts);
   return createChatStream((e, d) => sendSSE(res, null, d), model, opts);
 }
 

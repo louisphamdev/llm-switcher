@@ -177,30 +177,38 @@ test('cachedProfileWindows answers only for its own key and only while the entry
   }
 });
 
-// A list that names only an output limit must not erase the windows an earlier read found.
-test('a refresh merges each model into the cached windows instead of replacing them', async () => {
+// A list that names only an output limit must not erase the windows an earlier read found, and an
+// output limit lives only as long as the newest list still states it.
+test('a refresh merges each model into the cached windows, but never carries an output limit forward', async () => {
   const dir = tmpDir();
+  const lists = [
+    [{ id: 'm', context_length: 200000, compact_window: 150000, max_output_tokens: 4096 }, { id: 'n', context_length: 100000, max_output_tokens: 2048 }],
+    [{ id: 'm', context_length: 300000 }, { id: 'o', context_length: 50000 }],
+    [{ id: 'm', max_output_tokens: 8192 }]
+  ];
   let hits = 0;
   const sink = http.createServer((req, res) => {
-    hits++;
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ data: hits === 1
-      ? [{ id: 'm', context_length: 200000, compact_window: 150000 }, { id: 'n', context_length: 100000 }]
-      : [{ id: 'm', max_output_tokens: 8192 }, { id: 'o', context_length: 50000 }] }));
+    res.end(JSON.stringify({ data: lists[hits++] }));
   });
   await new Promise(r => sink.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${sink.address().port}/v1`;
   try {
     await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 });
-    const merged = await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 + 3_600_000 });
-    assert.equal(hits, 2);
+    const second = await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 + 3_600_000 });
     const expected = {
-      m: { context: 200000, compact: 150000, output: 8192 },
+      m: { context: 300000, compact: 150000 },
       n: { context: 100000, compact: 0 },
       o: { context: 50000, compact: 0 }
     };
-    assert.deepEqual(merged, expected);
+    assert.deepEqual(second, expected, 'a changed window replaces the cached one; no output limit the list did not state');
     assert.deepEqual(readWindowsCache(dir).p.models, expected);
+    const fresh = cachedProfileWindows(dir, 'p', { now: 1_000 + 3_600_000 + 60_000 });
+    assert.equal(fresh.m.output, undefined);
+    assert.equal(fresh.m.context, 300000);
+    const third = await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 + 7_200_000 });
+    assert.equal(hits, 3);
+    assert.deepEqual(third.m, { context: 300000, compact: 150000, output: 8192 }, 'an output-only list keeps the windows');
   } finally {
     sink.close();
     fs.rmSync(dir, { recursive: true, force: true });

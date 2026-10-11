@@ -16,7 +16,7 @@ import {
   refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT,
   stripGeminiPlaceholders, geminiPaddedTools, withGeminiPlaceholderStrip
 } from '../formats.mjs';
-import { NULL_TOOL_VOCAB } from '../toolvocab.mjs';
+import { NULL_TOOL_VOCAB, createToolVocab } from '../toolvocab.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
 test('anthropicToIR: stream defaults to false and thinking budget_tokens is preserved', () => {
@@ -1466,4 +1466,50 @@ test('a Vertex tool padded for Gemini loses _placeholder in streamed arguments, 
   assert.deepEqual(JSON.parse(streamed), { env: { A: '1' }, list: [{ b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 });
   assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, padded).args('plain', '{"_placeholder":true}'), '{"_placeholder":true}');
   assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, new Map()), NULL_TOOL_VOCAB, 'no padding, no wrapper');
+});
+
+// A vertex client gets complete functionCalls, so the strip applies when the call is written out.
+test('a vertex client gets tool-call args without the padded _placeholder, stream and non-stream', () => {
+  const declared = [{ name: 'run', parameters: { type: 'object', properties: { env: { type: 'object' }, opts: { type: 'object', properties: { _placeholder: { type: 'string' } } } } } }];
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: declared.map(t => ({ name: t.name, input_schema: t.parameters })) });
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  const vocab = withGeminiPlaceholderStrip(createToolVocab(ir.tools, { allowHyphens: false }), padded);
+  const args = JSON.stringify({ env: { A: '1', _placeholder: true }, opts: { _placeholder: 'keep' } });
+  const want = { env: { A: '1' }, opts: { _placeholder: 'keep' } };
+
+  const chunks = [];
+  const s = createVertexStream((e, d) => chunks.push(d), 'm', { vocab });
+  s.tool({ index: 0, id: 'c1', name: 'run', args: args.slice(0, 9) });
+  s.tool({ index: 0, args: args.slice(9) });
+  s.finish('tool_calls');
+  const streamed = chunks.flatMap(c => c.candidates?.[0]?.content?.parts || []).find(p => p.functionCall);
+  assert.deepEqual(streamed.functionCall.args, want);
+
+  const whole = buildVertexMessage({ model: 'm', tools: [{ index: 0, id: 'c1', name: 'run', args }], finish: 'tool_calls', vocab });
+  assert.deepEqual(whole.candidates[0].content.parts.find(p => p.functionCall).functionCall.args, want);
+});
+
+// The Vertex body names a tool without hyphens, so the strip must find the schema by either name.
+test('the placeholder strip finds a hyphenated tool by its upstream name and by its client name', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'my-tool', input_schema: { type: 'object', properties: { env: { type: 'object' } } } }] });
+  const vocab = createToolVocab(ir.tools, { allowHyphens: false, names: ['my-tool'] });
+  assert.equal(vocab.name('my_tool'), 'my-tool', 'fixture: the upstream name is the sanitized one');
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  assert.deepEqual([...padded.keys()], ['my_tool']);
+  const strip = withGeminiPlaceholderStrip(vocab, padded);
+  const args = '{"env":{"A":"1","_placeholder":true}}';
+  assert.deepEqual(JSON.parse(strip.args('my_tool', args)), { env: { A: '1' } }, 'upstream name');
+  assert.deepEqual(JSON.parse(strip.args('my-tool', args)), { env: { A: '1' } }, 'client name');
+});
+
+// A union with an object branch becomes anyOf for Gemini, and that object branch is padded too.
+test('the placeholder strip reaches a padded object inside an anyOf branch', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'run', input_schema: {
+    type: 'object', properties: { env: { oneOf: [{ type: 'object' }, { type: 'string' }] } }
+  } }] });
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  const schema = padded.get('run');
+  assert.ok(Array.isArray(schema?.properties?.env?.anyOf), 'fixture: env is an anyOf with a padded branch');
+  assert.deepEqual(stripGeminiPlaceholders({ env: { A: '1', _placeholder: true } }, schema), { env: { A: '1' } });
+  assert.deepEqual(stripGeminiPlaceholders({ env: 'plain' }, schema), { env: 'plain' });
 });

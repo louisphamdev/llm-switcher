@@ -87,7 +87,12 @@ export async function resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey,
   const listed = await fetchProfileWindows(baseURL, apiKey);
   if (Object.keys(listed).length) {
     // Merged per model and per number: a list that names only an output limit keeps the cached windows.
-    const models = { ...(entry.models || {}) };
+    // An output limit is never carried forward: the entry is stamped now, so it must be one this list states.
+    const models = {};
+    for (const [id, w] of Object.entries(entry.models || {})) {
+      const { output: _output, ...windows } = w && typeof w === 'object' ? w : {};
+      models[id] = windows;
+    }
     for (const [id, w] of Object.entries(listed)) {
       const merged = { ...(models[id] || {}) };
       for (const [k, v] of Object.entries(w)) if (v > 0 || !(merged[k] > 0)) merged[k] = v;

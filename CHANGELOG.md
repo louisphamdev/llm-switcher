@@ -6,9 +6,9 @@
 - **Token counts with separators.** A context overflow message with `131,072`, `131.072`, `131 072` or `131_072` gives the full number to Claude Code. A message without numbers keeps the plain form.
 - **Context overflow over WebSocket.** A Codex turn on WebSocket fails with the code `context_length_exceeded`, the same as on HTTP.
 - **Goal check and images.** The goal-check request to a chat upstream uses the same image retry as other requests.
-- **Output limit cache.** The output limit comes only from the cache entry of the same profile, and only when the entry is less than one hour old. The cache key ignores the case of scheme and host and a trailing slash. A new model list is merged per model, so a list with only output limits keeps the cached windows.
+- **Output limit cache.** The output limit comes only from the cache entry of the same profile, and only when the entry is less than one hour old. The cache key ignores the case of scheme and host and a trailing slash. A new model list is merged per model, so a list with only output limits keeps the cached windows. A cached output limit is kept only while the newest list still states it.
 - **System messages on the direct Anthropic route.** A `system` message inside `messages` is no longer lost. Its text goes into the next user turn, or into the previous one if no user turn follows, with the prefix `[system] `.
-- **Gemini `_placeholder` in tool calls.** If the model fills the `_placeholder` property that the proxy added, the proxy removes it from the arguments. This applies to stream and non-stream answers, and only where the proxy added the property.
+- **Gemini `_placeholder` in tool calls.** If the model fills the `_placeholder` property that the proxy added, the proxy removes it from the arguments. This applies to stream and non-stream answers for every client format, Code Assist (agy) included, and only where the proxy added the property.
 - **Test temp files.** The tests delete all their temp directories, also when a test fails. `npm test` deletes the `node-compile-cache` directory that npm made at the start of the run.
 - **`replayReasoning` documentation.** The README files now say that `reasoning_content` goes out only on a request with thinking on.
 
