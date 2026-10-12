@@ -462,7 +462,7 @@ function anthropicToIR(payload) {
     const text =
       typeof msg.content === 'string'
         ? msg.content
-        : (msg.content || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+        : Array.isArray(msg.content) ? msg.content.filter(p => p && p.type === 'text').map(p => p.text).join('\n') : '';
     if (text.trim()) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
     return true;
   };

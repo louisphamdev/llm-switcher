@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.14 — 2026-10-12
+
+- **System turn with an odd content shape.** On the translated route, a `system` turn whose `content` is not text and not a list is dropped. Before, the request failed with a `TypeError`.
+
 ## Release 1.6.13 — 2026-10-12
 
 - **`switch on` with no profile.** `switch on` gives each tool the profile that it had before `switch off`. A tool that was off stays off. A tool that is on keeps its profile.
