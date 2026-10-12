@@ -541,19 +541,22 @@ async function agyListener(kind) {
 async function runAgyWindowsShim(port) {
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyshim-'));
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyfake-'));
-  fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), `@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\nnode "${AGY_REQUEST}"\r\n`);
-  for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
-  fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
-  fs.writeFileSync(path.join(STATE, 'env-agy.cmd'), `SET "CLOUD_CODE_URL=http://127.0.0.1:${port}"\r\n`);
-  const shim = path.join(shimDir, 'agy.cmd');
-  fs.writeFileSync(shim, renderShim('agy', 'win32'), 'utf8');
-  const started = Date.now();
-  const child = await runAsync('cmd.exe', ['/d', '/c', shim], {
-    env: { ...process.env, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [fakeDir, shimDir, path.join(process.env.SystemRoot, 'System32'), path.dirname(process.execPath)].join(path.delimiter) }
-  });
-  fs.rmSync(shimDir, { recursive: true, force: true });
-  fs.rmSync(fakeDir, { recursive: true, force: true });
-  return { out: child.stdout || '', err: child.stderr || '', ms: Date.now() - started };
+  try {
+    fs.writeFileSync(path.join(fakeDir, 'agy.cmd'), `@echo off\r\necho CCU=[%CLOUD_CODE_URL%]\r\nnode "${AGY_REQUEST}"\r\n`);
+    for (const f of fs.readdirSync(STATE)) if (fs.statSync(path.join(STATE, f)).isFile()) fs.rmSync(path.join(STATE, f), { force: true });
+    fs.writeFileSync(path.join(STATE, 'active.flag'), 'active');
+    fs.writeFileSync(path.join(STATE, 'env-agy.cmd'), `SET "CLOUD_CODE_URL=http://127.0.0.1:${port}"\r\n`);
+    const shim = path.join(shimDir, 'agy.cmd');
+    fs.writeFileSync(shim, renderShim('agy', 'win32'), 'utf8');
+    const started = Date.now();
+    const child = await runAsync('cmd.exe', ['/d', '/c', shim], {
+      env: { ...process.env, LLM_SWITCHER_CONFIG: AGY_CONFIG, PATH: [fakeDir, shimDir, path.join(process.env.SystemRoot, 'System32'), path.dirname(process.execPath)].join(path.delimiter) }
+    });
+    return { out: child.stdout || '', err: child.stderr || '', ms: Date.now() - started };
+  } finally {
+    fs.rmSync(shimDir, { recursive: true, force: true });
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
 }
 
 for (const [kind, routed] of [['forged', false], ['silent', false], ['real', true]]) {

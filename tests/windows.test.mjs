@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,10 +7,17 @@ import http from 'node:http';
 import {
   parseModelWindows, parseModelList, fetchProfileWindows,
   resolveProfileWindows, readWindowsCache, readLocalCodexWindows,
-  windowsCacheKey, cachedProfileWindows
+  windowsCacheKey, cachedProfileWindows, createWindowsRefresher
 } from '../windows.mjs';
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-windows-'));
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+const tmpDir = () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-windows-'));
+  made.push(d);
+  return d;
+};
 
 // A Codex model publishes both windows; intact names the threshold itself. Neither is guessed.
 test('a list entry gives the whole window and the window to compress at', () => {
@@ -211,6 +218,81 @@ test('a refresh merges each model into the cached windows, but never carries an 
     assert.deepEqual(third.m, { context: 300000, compact: 150000, output: 8192 }, 'an output-only list keeps the windows');
   } finally {
     sink.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A clock that moved back, or a hand-edited file, must not make an entry fresh forever.
+test('a cache entry stamped in the future is stale', async () => {
+  const dir = tmpDir();
+  let hits = 0;
+  const sink = http.createServer((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'm', context_length: 200000, max_output_tokens: 2048 }] }));
+  });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${sink.address().port}/v1`;
+  try {
+    const models = { m: { context: 200000, compact: 0, output: 8192 } };
+    fs.writeFileSync(path.join(dir, 'model-windows.json'), JSON.stringify({ p: { at: 10_000_000, baseURL: base, models } }));
+    assert.deepEqual(cachedProfileWindows(dir, 'p', { now: 1_000 }), {});
+    const listed = await resolveProfileWindows(dir, 'p', base, 'k', { now: 1_000 });
+    assert.equal(hits, 1, 'the list is read again');
+    assert.equal(listed.m.output, 2048);
+    assert.equal(readWindowsCache(dir).p.at, 1_000);
+  } finally {
+    sink.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A converted request with no fresh entry asks for one read in the background; it never waits for it.
+test('the background refresh reads a list once per profile, keeps each profile apart, and logs a failure', async () => {
+  const dir = tmpDir();
+  const reads = [];
+  const sink = http.createServer((req, res) => {
+    reads.push(req.headers.authorization);
+    const output = req.headers.authorization === 'Bearer kb' ? 2048 : 8192;
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'm', context_length: 200000, max_output_tokens: output }] }));
+    }, req.headers.authorization === 'Bearer ka' ? 150 : 20);
+  });
+  await new Promise(r => sink.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${sink.address().port}/v1`;
+  const logged = [];
+  const refresh = createWindowsRefresher(dir, { debug: (...a) => logged.push(a.join(' ')) });
+  try {
+    const a = windowsCacheKey('a', base);
+    const b = windowsCacheKey('b', base);
+    const first = refresh(a, base, 'ka');
+    assert.equal(refresh(a, base, 'ka'), first, 'a second request joins the read in flight');
+    await Promise.all([first, refresh(b, base, 'kb')]);
+    assert.deepEqual(reads, ['Bearer ka', 'Bearer kb']);
+    assert.equal(cachedProfileWindows(dir, a).m.output, 8192);
+    assert.equal(cachedProfileWindows(dir, b).m.output, 2048, 'two profiles on one baseURL keep their own limits');
+    assert.equal(refresh(a, base, 'ka'), null, 'no second read soon after the first');
+
+    const dead = windowsCacheKey('dead', 'http://127.0.0.1:9/v1');
+    await refresh(dead, 'http://127.0.0.1:9/v1', 'k');
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /dead@http:\/\/127\.0\.0\.1:9\/v1/);
+    assert.equal(refresh(dead, 'http://127.0.0.1:9/v1', 'k'), null, 'a failed read is not retried at once');
+  } finally {
+    sink.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The gateway calls refresh() without awaiting it, so a rejection would be an unhandled rejection there.
+test('the background refresh never rejects, even when its logger throws', async () => {
+  const dir = tmpDir();
+  const dead = 'http://127.0.0.1:9/v1';
+  const refresh = createWindowsRefresher(dir, { debug: () => { throw new Error('logger down'); } });
+  try {
+    await assert.doesNotReject(refresh(windowsCacheKey('dead', dead), dead, 'k'));
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

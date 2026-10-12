@@ -519,7 +519,8 @@ switch status                  # Display status for all active CLI targets
 switch version                 # Show the version and tell you when npm has a newer one
 switch doctor                  # Audit environment, settings & routing
 switch update                  # Install the newest release and restart the gateway on it
-switch on [profile]            # Start the gateway and activate a profile
+switch on                      # Start the gateway; each tool gets back the profile it had before `switch off`
+switch on <profile>            # Start the gateway and activate a profile
 switch <profile>               # Activate a profile for both tools
 switch claude <profile>        # Set the active profile for Claude Code only
 switch codex <profile>         # Set the active profile for Codex only

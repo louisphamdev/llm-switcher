@@ -18,8 +18,12 @@ import os from 'node:os';
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_TTL_MS = ONE_HOUR_MS;
 const FETCH_TIMEOUT_MS = 15000;
+const REFRESH_RETRY_MS = 5 * 60 * 1000;
 
 const n = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+
+// An entry stamped after `now` came from a clock that moved back or a hand edit: stale, not fresh forever.
+const isFresh = (entry, now, ttlMs) => Number.isFinite(entry?.at) && entry.at > 0 && entry.at <= now && now - entry.at < ttlMs;
 
 // One entry of a provider's list -> the two windows, plus `output` (the most the model writes)
 // when the list names it; null when it names none.
@@ -82,8 +86,7 @@ export async function fetchProfileWindows(baseURL, apiKey, { timeoutMs = FETCH_T
 export async function resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
   const cache = readWindowsCache(stateDir);
   const entry = cache[cacheKey] || {};
-  const fresh = entry.at && now - entry.at < ttlMs;
-  if (fresh) return entry.models || {};
+  if (isFresh(entry, now, ttlMs)) return entry.models || {};
   const listed = await fetchProfileWindows(baseURL, apiKey);
   if (Object.keys(listed).length) {
     // Merged per model and per number: a list that names only an output limit keeps the cached windows.
@@ -98,11 +101,38 @@ export async function resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey,
       for (const [k, v] of Object.entries(w)) if (v > 0 || !(merged[k] > 0)) merged[k] = v;
       models[id] = merged;
     }
-    cache[cacheKey] = { at: now, baseURL, models };
-    writeWindowsCache(stateDir, cache);
+    // Read again just before the write: another profile's refresh may have written while this list loaded.
+    const latest = readWindowsCache(stateDir);
+    latest[cacheKey] = { at: now, baseURL, models };
+    writeWindowsCache(stateDir, latest);
     return models;
   }
   return entry.models || {};
+}
+
+/**
+ * Reads a profile's list in the background, so a request that found no fresh entry is clamped from
+ * the next request on. One read per cache key at a time, and none again within retryMs of the last,
+ * so a provider with no usable list costs one read per interval. Returns the read, which never rejects, or null.
+ */
+export function createWindowsRefresher(stateDir, { retryMs = REFRESH_RETRY_MS, debug = () => {} } = {}) {
+  const running = new Map();
+  const lastTry = new Map();
+  // The caller does not await the read, so a logger that throws must not turn it into a rejection.
+  const log = (msg) => { try { debug(msg); } catch {} };
+  return function refresh(cacheKey, baseURL, apiKey) {
+    if (running.has(cacheKey)) return running.get(cacheKey);
+    if (Date.now() - (lastTry.get(cacheKey) ?? -Infinity) < retryMs) return null;
+    lastTry.set(cacheKey, Date.now());
+    const read = resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey)
+      .then(() => {
+        if (!Object.keys(cachedProfileWindows(stateDir, cacheKey)).length) log(`model list refresh for ${cacheKey}: no limits read`);
+      })
+      .catch(err => log(`model list refresh for ${cacheKey} failed: ${err?.message}`))
+      .finally(() => running.delete(cacheKey));
+    running.set(cacheKey, read);
+    return read;
+  };
 }
 
 // One address however it is spelled: scheme and host are case-blind, and a trailing slash adds nothing.
@@ -117,7 +147,7 @@ export function windowsCacheKey(profileKey, baseURL) {
 // The cached windows of one profile while they are fresh, without reading the list again.
 export function cachedProfileWindows(stateDir, cacheKey, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
   const entry = readWindowsCache(stateDir)[cacheKey];
-  return entry?.at && now - entry.at < ttlMs ? entry.models || {} : {};
+  return isFresh(entry, now, ttlMs) ? entry.models || {} : {};
 }
 
 export function windowsCachePath(stateDir) {

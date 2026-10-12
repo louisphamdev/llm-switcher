@@ -70,7 +70,7 @@ test('the tool version is read from the User-Agent, and a bad one is dropped', (
 
 // ---------------------------------------------------------------- unit: config block
 
-test('contractLab is absent by default, and a saved block survives a rewrite', () => {
+test('contractLab is absent by default, and a saved block survives a rewrite', (t) => {
   assert.deepEqual(contractLabSettings({}), { url: '', apiKey: '', enabled: false });
   assert.deepEqual(contractLabSettings(null), { url: '', apiKey: '', enabled: false });
   // Enabled needs a real http(s) URL and a key: a half-filled block stays off.
@@ -80,6 +80,7 @@ test('contractLab is absent by default, and a saved block survives a rewrite', (
   assert.equal(contractLabSettings({ contractLab: { url: 'http://127.0.0.1:9/', apiKey: 'k', enabled: true } }).url, 'http://127.0.0.1:9');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-switcher-lab-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const cfgPath = path.join(dir, 'config.json');
   const cfg = { port: 3456, profiles: {}, contractLab: { url: 'http://127.0.0.1:20142', apiKey: 'sk-lab', enabled: true } };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg));
@@ -94,7 +95,6 @@ test('contractLab is absent by default, and a saved block survives a rewrite', (
   // The dashboard must never read the intact key back out of /api/config.
   assert.equal(out.masked.apiKey, MASKED_KEY);
   assert.equal(out.masked.hasApiKey, true);
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // state.mjs reads its config path once per process, so a config test runs in its own process.

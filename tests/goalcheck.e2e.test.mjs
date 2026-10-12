@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,9 +6,14 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { pidsNaming, reapDir } from './helpers.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 async function until(check, timeoutMs = 6000) {
   const deadline = Date.now() + timeoutMs;
@@ -21,12 +26,14 @@ async function until(check, timeoutMs = 6000) {
 
 async function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-goalcheck-'));
+  made.push(dir);
   const adminToken = 'admin-secret-token-123';
   fs.writeFileSync(path.join(dir, 'admin.token'), adminToken, { mode: 0o600 });
 
   let nativeVerdict = { ok: true, reason: 'looks complete' };
   let jevScores = { complete: 0.14, evidence: 0.84, unfinished: 0.63 };
   let jevStatus = 200;
+  let nativeDrops = false;
   const chatRequests = [];
 
   // Mock native upstream (Anthropic format)
@@ -38,6 +45,7 @@ async function fixture(t) {
         res.setHeader('content-type', 'application/json');
         return res.end('{"data":[]}');
       }
+      if (nativeDrops) return req.socket.destroy();
       const body = JSON.parse(raw);
       const isStream = Boolean(body.stream);
       const respText = JSON.stringify(nativeVerdict);
@@ -102,14 +110,21 @@ async function fixture(t) {
   });
   await listen(jevUp);
 
-  const reserve = http.createServer();
-  await listen(reserve);
-  const port = reserve.address().port;
-  await new Promise(r => reserve.close(r));
+  const freePort = async () => {
+    const reserve = http.createServer();
+    await listen(reserve);
+    const p = reserve.address().port;
+    await new Promise(r => reserve.close(r));
+    return p;
+  };
+  const port = await freePort();
+  // Without its own port the interceptor the proxy starts takes the default 3457.
+  const blindfoldPort = await freePort();
 
   const configPath = path.join(dir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({
     port,
+    blindfold: { port: blindfoldPort },
     activeProfile: 'p1',
     activeProfiles: { claude: 'p1' },
     profiles: {
@@ -171,7 +186,7 @@ async function fixture(t) {
       new Promise(r => nativeUp.close(r)),
       new Promise(r => jevUp.close(r))
     ]);
-    fs.rmSync(dir, { recursive: true, force: true });
+    await reapDir(dir);
   });
 
   await until(async () => (await fetch(`http://127.0.0.1:${port}/health`).catch(() => null))?.ok);
@@ -204,6 +219,7 @@ async function fixture(t) {
     setNativeVerdict: v => { nativeVerdict = v; },
     setJevScores: s => { jevScores = s; },
     setJevStatus: st => { jevStatus = st; },
+    setNativeDrops: v => { nativeDrops = v; },
     jevRequests,
     chatRequests,
     logs: () => logs
@@ -357,4 +373,26 @@ test('goalcheck e2e: an openai-chat evaluator call that a text-only model refuse
   assert.deepEqual(verdict, { ok: true, reason: 'screenshot shows green tests' });
   assert.equal(f.chatRequests.length, 2, 'one refusal, one retry');
   assert.ok(JSON.stringify(f.chatRequests[1]).includes('[image omitted'), 'the retry carries text in place of the image');
+});
+
+// The gate fails closed: an evaluator call that throws never lets the goal through, whatever Jev says.
+test('goalcheck e2e: a native evaluator call that throws fails closed on both upstream routes', async t => {
+  const f = await fixture(t);
+  await f.sendAdmin('/api/goal-check', 'POST', { enabled: true });
+  f.setJevScores({ complete: 0.95, evidence: 0.90, unfinished: 0.05 });
+  f.setNativeVerdict({ ok: true, reason: 'claimed done' });
+  f.setNativeDrops(true);
+  for (const profile of ['p1', 'chat']) {
+    const res = await f.sendClaude(evaluatorRequest, false, { 'x-llm-profile': profile });
+    assert.equal(res.status, 200, profile);
+    const verdict = JSON.parse((await res.json()).content[0].text);
+    assert.equal(verdict.ok, false, profile);
+    assert.match(verdict.reason, /Native evaluator unavailable/, profile);
+  }
+  const logs = (await (await f.sendAdmin('/api/goal-check/logs')).json()).logs;
+  assert.deepEqual(logs.slice(0, 2).map(l => l.verdictType), ['Unavailable', 'Unavailable']);
+});
+
+test('goalcheck e2e: the fixtures leave no process behind', () => {
+  assert.deepEqual(made.flatMap(pidsNaming), []);
 });

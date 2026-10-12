@@ -516,7 +516,8 @@ switch status                  # Xem trạng thái kích hoạt của tất cả
 switch version                 # Xem version đang chạy và báo khi npm có bản mới
 switch doctor                  # Quét & thanh tra toàn bộ môi trường, settings và định tuyến
 switch update                  # Cài bản mới nhất và khởi động lại gateway trên bản đó
-switch on [profile]            # Khởi động gateway và kích hoạt một profile
+switch on                      # Khởi động gateway; mỗi công cụ lấy lại profile nó có trước `switch off`
+switch on <profile>            # Khởi động gateway và kích hoạt một profile
 switch <profile>               # Kích hoạt một profile cho cả hai công cụ
 switch claude <profile>        # Đặt profile kích hoạt riêng cho Claude Code
 switch codex <profile>         # Đặt profile kích hoạt riêng cho Codex

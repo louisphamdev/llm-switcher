@@ -14,10 +14,11 @@ import {
   createCodeAssistStream,
   budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage,
   refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT,
-  stripGeminiPlaceholders, geminiPaddedTools, withGeminiPlaceholderStrip
+  stripGeminiPlaceholders, geminiPaddedTools, withGeminiPlaceholderStrip, toolVocabForIR, recordGeminiPadding
 } from '../formats.mjs';
 import { NULL_TOOL_VOCAB, createToolVocab } from '../toolvocab.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
+import { encodeCompaction } from '../compaction.mjs';
 
 test('anthropicToIR: stream defaults to false and thinking budget_tokens is preserved', () => {
   const ir = anthropicToIR({ model: 'claude-opus-4-6', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 31999 } });
@@ -1438,13 +1439,15 @@ test('healAnthropicPayload folds a mid-conversation system message into a user t
   const msgs = r.payload.messages;
   assert.ok(!msgs.some(m => m.role === 'system'), 'no system role remains');
   assert.ok(alternates(msgs), `roles alternate: ${roles(msgs)}`);
-  assert.deepEqual(roles(msgs), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(roles(msgs), ['user', 'assistant', 'user', 'assistant', 'user']);
   assert.deepEqual(msgs[2].content, [
     { type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' },
-    { type: 'text', text: '[system] Use British spelling from now on.' },
-    { type: 'text', text: '[system] Be brief.' }
-  ], 'a tool_result stays first; with no user turn after it, the last text joins the previous user turn');
+    { type: 'text', text: '[system] Use British spelling from now on.' }
+  ], 'a tool_result stays first');
   assert.ok(!texts(msgs[3]).includes('[system]'));
+  assert.deepEqual(msgs[4], { role: 'user', content: [{ type: 'text', text: '[system] Be brief.' }] }, 'a system message after the last assistant turn stays after it');
+  assert.ok(r.notes.includes('folded system messages into user turns'));
+  assert.ok(!r.notes.includes('dropped system content with no text'));
 
   const only = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
     { role: 'system', content: 'Answer in French.' },
@@ -1521,4 +1524,167 @@ test('the placeholder strip reaches a padded object inside an anyOf branch', () 
   assert.ok(Array.isArray(schema?.properties?.env?.anyOf), 'fixture: env is an anyOf with a padded branch');
   assert.deepEqual(stripGeminiPlaceholders({ env: { A: '1', _placeholder: true } }, schema), { env: { A: '1' } });
   assert.deepEqual(stripGeminiPlaceholders({ env: 'plain' }, schema), { env: 'plain' });
+});
+
+// One anyOf branch padded, another declaring a real _placeholder: the key may be the client's own.
+test('the placeholder strip keeps _placeholder when another anyOf branch declares it', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'run', input_schema: {
+    type: 'object', properties: { env: { oneOf: [{ type: 'object' }, { type: 'object', properties: { _placeholder: { type: 'string' }, x: { type: 'string' } } }] } }
+  } }] });
+  const schema = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro')))).get('run');
+  assert.equal(schema?.properties?.env?.anyOf?.length, 2, 'fixture: a padded branch and a declaring branch');
+  assert.deepEqual(stripGeminiPlaceholders({ env: { _placeholder: 'keep', x: '1' } }, schema), { env: { _placeholder: 'keep', x: '1' } });
+  const lone = { anyOf: [schema.properties.env.anyOf[0], { type: 'STRING' }] };
+  assert.deepEqual(stripGeminiPlaceholders({ A: '1', _placeholder: true }, lone), { A: '1' }, 'with no declaring branch the padded branch still strips');
+});
+
+// The fold keeps each system text between the same turns it sat between, and says what it did.
+test('healAnthropicPayload keeps a folded system text in place and reports dropped system content', () => {
+  const heal = (messages) => healAnthropicPayload({ model: 'x', max_tokens: 10, messages });
+  const before = heal([
+    { role: 'user', content: 'first' },
+    { role: 'system', content: 'Be brief.' },
+    { role: 'assistant', content: 'ok' },
+    { role: 'user', content: 'second' }
+  ]).payload.messages;
+  assert.deepEqual(before, [
+    { role: 'user', content: [{ type: 'text', text: 'first' }, { type: 'text', text: '[system] Be brief.' }] },
+    { role: 'assistant', content: 'ok' },
+    { role: 'user', content: 'second' }
+  ], 'a system message before an assistant turn stays before it');
+
+  const next = heal([
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'ok' },
+    { role: 'system', content: 'Be brief.' },
+    { role: 'user', content: 'second' }
+  ]).payload.messages;
+  assert.deepEqual(next[2], { role: 'user', content: [{ type: 'text', text: '[system] Be brief.' }, { type: 'text', text: 'second' }] }, 'it precedes the user text that followed it');
+
+  const blank = heal([
+    { role: 'user', content: 'first' },
+    { role: 'system', content: '   ' },
+    { role: 'system', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }] },
+    { role: 'assistant', content: 'ok' }
+  ]);
+  assert.equal(blank.changed, true);
+  assert.deepEqual(blank.payload.messages, [{ role: 'user', content: 'first' }, { role: 'assistant', content: 'ok' }]);
+  assert.deepEqual(blank.notes, ['dropped system content with no text'], 'nothing was folded, so the note does not say so');
+});
+
+// Only the blank or non-text blocks of a system message go; its text blocks stay, joined by a newline.
+test('healAnthropicPayload keeps the text of a partly blank system message and joins its blocks with a newline', () => {
+  const heal = (system) => healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'ok' },
+    { role: 'system', content: system },
+    { role: 'user', content: 'second' }
+  ] });
+  const joined = heal([{ type: 'text', text: 'Be brief.' }, { type: 'text', text: 'Use British spelling.' }]);
+  assert.deepEqual(joined.payload.messages[2], { role: 'user', content: [{ type: 'text', text: '[system] Be brief.\nUse British spelling.' }, { type: 'text', text: 'second' }] });
+  assert.deepEqual(joined.notes, ['folded system messages into user turns'], 'nothing was dropped');
+
+  const partial = heal([
+    { type: 'text', text: 'Be brief.' },
+    { type: 'text', text: '   ' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } },
+    { type: 'text', text: 'Use British spelling.' }
+  ]);
+  assert.equal(partial.changed, true);
+  assert.deepEqual(partial.payload.messages[2], { role: 'user', content: [{ type: 'text', text: '[system] Be brief.\nUse British spelling.' }, { type: 'text', text: 'second' }] }, 'the text is kept, the blank and image blocks are not');
+  assert.deepEqual(partial.notes, ['folded system messages into user turns', 'dropped system content with no text'], 'the note reports the dropped part');
+});
+
+// A compaction item replaces the turns before it, so reasoning still pending there belongs to none after it.
+test('responsesToIR drops pending reasoning at a compaction item', () => {
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    { type: 'compaction', encrypted_content: encodeCompaction('earlier work') },
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] });
+  const reply = ir.messages.find(m => m.role === 'assistant');
+  assert.equal(reply.content, 'done');
+  assert.equal(reply.reasoning, undefined);
+
+  const opaque = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    { type: 'compaction', encrypted_content: 'opaque-blob' },
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] }, { allowOpaqueCompaction: true });
+  assert.equal(opaque.opaqueCompaction, true, 'fixture: the opaque path');
+  assert.equal(opaque.messages.find(m => m.role === 'assistant').reasoning, undefined);
+
+  // compaction_trigger must be the last item, so nothing after it can take the reasoning.
+  const trigger = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    { type: 'compaction_trigger' }
+  ] });
+  assert.equal(trigger.compaction, true);
+  assert.ok(!trigger.messages.some(m => m.reasoning), 'no turn carries the pending reasoning');
+});
+
+test('responsesToIR joins a second reasoning item onto an assistant turn that already has reasoning', () => {
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'first' }] },
+    { type: 'message', role: 'assistant', content: 'looking' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'second' }] },
+    { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{}' }
+  ] });
+  const turns = ir.messages.filter(m => m.role === 'assistant');
+  assert.equal(turns.length, 1, 'fixture: the call joins the assistant turn');
+  assert.equal(turns[0].reasoning, 'first\nsecond');
+  assert.equal(turns[0].toolCalls.length, 1);
+});
+
+// A retry or fallback can emit the same IR again for another upstream; each emit gets its own strip.
+test('a rebuild for another upstream format does not reuse the tool vocabulary of the first', () => {
+  const schema = { type: 'object', properties: { env: { type: 'object' } } };
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'my-tool', input_schema: schema }, { name: 'run', input_schema: schema }] });
+  const filled = '{"env":{"A":"1","_placeholder":true}}';
+
+  recordGeminiPadding(ir, irToChatBody(ir, 'gpt-5'), false);
+  assert.equal(toolVocabForIR(ir, 'openai-chat').args('my-tool', filled), filled, 'a chat body padded nothing');
+  recordGeminiPadding(ir, JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))), true);
+  const vertex = toolVocabForIR(ir, 'vertex');
+  assert.equal(vertex.name('my_tool'), 'my-tool', 'the Vertex name maps back');
+  assert.deepEqual(JSON.parse(vertex.args('my_tool', filled)), { env: { A: '1' } }, 'the Vertex body padded env');
+
+  assert.deepEqual(JSON.parse(vertex.args('run', filled)), { env: { A: '1' } });
+
+  recordGeminiPadding(ir, irToChatBody(ir, 'gpt-5'), false);
+  assert.equal(toolVocabForIR(ir, 'openai-chat').args('run', filled), filled, 'the padding of the Vertex emit is gone');
+});
+
+// Two padded upstream tools that one client name maps back to: neither schema may strip for that name.
+test('the placeholder strip refuses a client name that two padded tools share', () => {
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [
+    { name: 'a_b', input_schema: { type: 'object', properties: { env: { type: 'object' }, opts: { type: 'string' } } } },
+    { name: 'a_c', input_schema: { type: 'object', properties: { opts: { type: 'object' }, env: { type: 'string' } } } }
+  ] }), 'gemini-3-pro'))));
+  assert.deepEqual([...padded.keys()], ['a_b', 'a_c'], 'fixture: both tools are padded, on different keys');
+  const strip = withGeminiPlaceholderStrip({ ...NULL_TOOL_VOCAB, name: n => (n === 'a_b' || n === 'a_c' ? 'a.b' : n) }, padded);
+  const args = '{"env":{"_placeholder":true},"opts":{"_placeholder":true}}';
+  assert.equal(strip.args('a.b', args), args, 'the client name is ambiguous: nothing is stripped');
+  assert.deepEqual(JSON.parse(strip.args('a_b', args)), { env: {}, opts: { _placeholder: true } }, 'an upstream name keeps its own schema');
+  assert.deepEqual(JSON.parse(strip.args('a_c', args)), { env: { _placeholder: true }, opts: {} });
+
+  // A real collision: `a.b` and `a_b` sanitize alike for Vertex, so `a.b` goes up under an alias with its own schema.
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [
+    { name: 'a.b', input_schema: { type: 'object', properties: { env: { type: 'object' } } } },
+    { name: 'a_b', input_schema: { type: 'object', properties: { env: { type: 'object', properties: { _placeholder: { type: 'boolean' } } } } } }
+  ] });
+  const body = JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro')));
+  recordGeminiPadding(ir, body, true);
+  const alias = [...ir._geminiPadded.keys()];
+  assert.equal(alias.length, 1, 'fixture: only a.b is padded');
+  assert.notEqual(alias[0], 'a_b');
+  const vocab = toolVocabForIR(ir, 'vertex');
+  const filled = '{"env":{"_placeholder":true}}';
+  assert.equal(vocab.name(alias[0]), 'a.b');
+  assert.deepEqual(JSON.parse(vocab.args(alias[0], filled)), { env: {} });
+  assert.equal(vocab.args('a_b', filled), filled, 'a_b declared its own _placeholder');
 });

@@ -21,9 +21,14 @@ const freePort = () => new Promise(r => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); });
 });
 
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
 // A free interceptor port too: the default 3457 belongs to a switcher that may run on this machine.
 async function workspace(t, port, profiles) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-cli-'));
+  made.push(dir);
   const cfgPath = path.join(dir, 'config.json');
   fs.writeFileSync(cfgPath, JSON.stringify({
     port, blindfold: { port: await freePort() }, activeProfiles: { anthropic: null, responses: null, 'openai-chat': null, vertex: null },
@@ -660,4 +665,45 @@ test('switch port leaves the installed service of another port unchanged', { ski
   assert.equal(fs.readFileSync(unit, 'utf8'), original, 'the unit of port 3456 was rewritten');
   const log = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '';
   assert.doesNotMatch(log, /\b(stop|restart|start|enable)\b/, `systemctl was told to act on the other instance:\n${log}`);
+});
+
+// Bare `switch on` brings back what `switch off` turned off; it never turns on a target the user had
+// switched off, and never moves a target to another profile.
+const twoProfiles = () => ({
+  c1: { name: 'One', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } },
+  c2: { name: 'Two', mode: 'convert', tool: 'claude', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { opus: 'o' } },
+  x1: { name: 'Codex', mode: 'convert', tool: 'codex', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'k', defaultModels: { default: 'o' } }
+});
+const setActive = (ws, map) => {
+  const cfg = readCfg(ws);
+  cfg.activeProfiles = map;
+  fs.writeFileSync(ws.cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+};
+const pointers = (ws) => { const a = readCfg(ws).activeProfiles; return { claude: a.claude ?? null, codex: a.codex ?? null, agy: a.agy ?? null }; };
+
+test('switch on after switch off brings back each target as it was', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = await workspace(t, await freePort(), twoProfiles());
+  setActive(ws, { claude: null, codex: 'x1', agy: null });
+  assert.equal((await run(ws, ['off'])).status, 0);
+  const r = await run(ws, ['on']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(pointers(ws), { claude: null, codex: 'x1', agy: null });
+});
+
+test('switch on keeps every target off when all were off before switch off', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = await workspace(t, await freePort(), twoProfiles());
+  setActive(ws, { claude: null, codex: null, agy: null });
+  assert.equal((await run(ws, ['off'])).status, 0);
+  const r = await run(ws, ['on']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(pointers(ws), { claude: null, codex: null, agy: null });
+  assert.match(r.stdout, /switch <profile>/);
+});
+
+test('switch on keeps a target on the profile it already uses', { skip: !POSIX && 'posix' }, async (t) => {
+  const ws = await workspace(t, await freePort(), twoProfiles());
+  setActive(ws, { claude: 'c2', codex: null, agy: null });
+  const r = await run(ws, ['on']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(pointers(ws), { claude: 'c2', codex: null, agy: null });
 });

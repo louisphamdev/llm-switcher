@@ -357,10 +357,23 @@ function printTargets(activeMap) {
 // Applies the switch to a copy of `base`. Exits on an error; nothing is written here.
 function planSwitch(base, key, cliTarget) {
   const planned = structuredClone(base);
+  delete planned.resumeProfiles;
   const err = cliTarget ? setTargetProfile(planned, cliTarget, key) : activateProfile(planned, key);
   if (err) {
     console.error(`[Error] ${show(err)}`);
     process.exit(1);
+  }
+  return planned;
+}
+
+// Bare `switch on`: the targets `switch off` turned off come back as they were. A target the user
+// switched off stays off, and a target that is on keeps its profile.
+function planResume(base) {
+  const planned = structuredClone(base);
+  const saved = planned.resumeProfiles;
+  delete planned.resumeProfiles;
+  if (saved && typeof saved === 'object' && !Object.values(getActiveMap(planned)).some(Boolean)) {
+    for (const t of TOOLS) if (saved[t]) setTargetProfile(planned, t, saved[t]);
   }
   return planned;
 }
@@ -386,21 +399,26 @@ async function turnOn(profileName, cliTarget) {
   }
 
   const port = getTargetPort();
-  const wanted = profileName || config.activeProfile || Object.keys(config.profiles)[0];
-  const key = findProfileKey(config, wanted);
-  if (!key) {
-    console.error(`[Error] Profile "${show(wanted)}" not found in config.json!`);
+  const resume = !profileName && !cliTarget;
+  const key = resume ? null : findProfileKey(config, profileName);
+  if (!resume && !key) {
+    console.error(`[Error] Profile "${show(profileName)}" not found in config.json!`);
     console.error(`Available profiles: ${show(Object.keys(config.profiles).join(', ')) || '(none)'}`);
     process.exit(1);
   }
 
   // Plan on a copy. Nothing is written until every check below passes.
-  let planned = planSwitch(config, key, cliTarget);
+  const plan = (base) => (resume ? planResume(base) : planSwitch(base, key, cliTarget));
+  let planned = plan(config);
   // The example config routes to YOUR-ROUTER-HOST; activating it silently makes every request fail.
-  if (hasPlaceholder(planned.profiles[key])) {
-    console.warn(`[WARN] Profile "${show(key)}" still has a placeholder baseURL/apiKey. Edit ${configPath} first, or requests will fail.`);
+  for (const k of new Set(resume ? Object.values(getActiveMap(planned)).filter(Boolean) : [key])) {
+    if (hasPlaceholder(planned.profiles[k])) {
+      console.warn(`[WARN] Profile "${show(k)}" still has a placeholder baseURL/apiKey. Edit ${configPath} first, or requests will fail.`);
+    }
   }
-  console.log(`Activating profile: [${show(planned.profiles[key].name || key)}] (${show(key)})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
+  console.log(resume
+    ? `Starting the gateway on port ${port} with the targets as they were...`
+    : `Activating profile: [${show(planned.profiles[key].name || key)}] (${show(key)})${cliTarget ? ` for ${cliTarget}` : ''} on port ${port}...`);
 
   const gatewayState = await probeGateway(port);
   if (isHeld(gatewayState)) refuseForeignPort(port, 'this switcher', gatewayState);
@@ -417,9 +435,8 @@ async function turnOn(profileName, cliTarget) {
     console.error(`[Error] config.json does not parse any more: ${getLastLoadError()?.message}. Nothing was changed.`);
     process.exit(1);
   }
-  planned = planSwitch(current, key, cliTarget);
+  planned = plan(current);
   refuseBlindfoldProblem(planned, port);
-  const profile = planned.profiles[key];
 
   const previousBytes = fs.readFileSync(configPath);
   try {
@@ -471,8 +488,14 @@ async function turnOn(profileName, cliTarget) {
     console.warn(`[Shim] ${err.message}`);
   }
 
-  console.log(`\n[SUCCESS] Switched to profile "${show(profile.name || key)}".`);
-  printProfile(profile);
+  if (resume) {
+    console.log('\n[SUCCESS] Gateway is on.');
+    if (!Object.values(getActiveMap(planned)).some(Boolean)) console.log('No target is on. Turn one on with: switch <profile>');
+  } else {
+    const profile = planned.profiles[key];
+    console.log(`\n[SUCCESS] Switched to profile "${show(profile.name || key)}".`);
+    printProfile(profile);
+  }
   console.log('\nActive targets:');
   printTargets(getActiveMap(planned));
   const codexKey = getActiveMap(planned).codex;
@@ -578,6 +601,7 @@ async function turnOff(targetArg) {
     console.log('\n[SUCCESS] Switched back to Claude Official Subscription. Run `switch on` to re-enable.');
     return;
   }
+  config.resumeProfiles = getActiveMap(config);
   deactivateAll(config);
   saveConfig(config);
   reportSettings(clearLaunchState(port));
@@ -1337,7 +1361,8 @@ if (cmd === 'off' || cmd === 'stop') {
   console.log('  switch version                 # Show the version and check for a newer one');
   console.log('  switch doctor                  # Audit environment, settings & routing');
   console.log('  switch update                  # Install the newest release and restart the gateway');
-  console.log('  switch on [profile]            # Start gateway & activate profile for all compatible targets');
+  console.log('  switch on                      # Start gateway; each target gets back what it had before `switch off`');
+  console.log('  switch on <profile>            # Start gateway & activate profile for all compatible targets');
   console.log('  switch <profile>               # Activate profile for all compatible targets');
   console.log('  switch claude <profile>        # Set active profile for Claude Code');
   console.log('  switch codex <profile>         # Set active profile for Codex');

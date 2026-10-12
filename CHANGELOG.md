@@ -1,5 +1,20 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.13 — 2026-10-12
+
+- **`switch on` with no profile.** `switch on` gives each tool the profile that it had before `switch off`. A tool that was off stays off. A tool that is on keeps its profile.
+- **System turns on the translated route.** A `system` turn inside the `messages` of an Anthropic request now goes into the system prompt when the proxy translates the request.
+- **System messages on the direct Anthropic route.** A folded `[system] ` text keeps its place between the turns around it. It never moves past an assistant turn. A system message with no text is dropped, and the healer note now says so. A system message after a final assistant prefill becomes the last user turn, so the request no longer ends on the prefill.
+- **Gemini `_placeholder` in `anyOf`.** If one branch of an `anyOf` declares a real `_placeholder` property, the proxy keeps the key in the arguments.
+- **Gemini `_placeholder` and tool names.** If two padded tools map back to one client tool name, the proxy removes nothing for that name.
+- **Retry to another upstream format.** A request that the proxy builds again for another upstream format gets a new tool vocabulary and a new placeholder rule.
+- **Reasoning before a compaction item.** In a Codex request, reasoning that waits for an assistant turn is dropped at a `compaction` item.
+- **Model list cache time.** A cache entry with a time in the future is stale. It no longer stays fresh forever.
+- **More token count forms.** A context overflow message with `128k`, `1m`, `131 072` (no-break space), `131'072` or `1,31,072` gives the full number to Claude Code. A decimal number after `limit` is not read as a token count. A plain `limit N` counts as the maximum only when `tokens` follows the number. A count of zero, or a count too large to be exact, is not read as a token count.
+- **Output limit for every profile.** If a converted request finds no fresh model list for its profile, the proxy reads the list in the background. The request does not wait. The next request gets the limit. Each profile keeps its own limit, also on a shared base URL. The proxy reads `<baseURL>/models` with the API key of the profile, except for a profile with an `endpoints` override. That profile gets no output limit. The `/v1/models` list also does not send the key of that profile to `<baseURL>/models`.
+- **Goal check when the evaluator call fails.** If the native evaluator call fails, the goal check does not let the goal through. A test now holds this behavior.
+- **Test cleanup.** Every test file that makes a temp directory deletes it, also when a test fails. `npm test` deletes `node-compile-cache` only when npm made it for this run. A failed delete no longer changes the exit status of the tests.
+
 ## Release 1.6.12 — 2026-10-11
 
 - **Reasoning from an aborted turn.** In a Codex request, reasoning that waits for an assistant turn is dropped at the next user message. Separate reasoning items are joined with a newline.

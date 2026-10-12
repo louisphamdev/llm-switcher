@@ -207,7 +207,7 @@ test('make-certs.sh writes private files and refuses a directory it does not own
     }
     // A failed rebuild (here: no openssl on PATH) must leave the working set untouched.
     const caBefore = fs.readFileSync(path.join(out, 'ca.pem'));
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-bin-'));
+    const bin = fs.mkdtempSync(path.join(base, 'bin-'));
     for (const tool of ['mkdir', 'stat', 'id', 'chmod', 'rm', 'cat', 'dirname', 'mv', 'mktemp']) {
       const real = execFileSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim();
       fs.symlinkSync(real, path.join(bin, tool));

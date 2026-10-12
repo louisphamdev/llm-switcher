@@ -4,7 +4,7 @@
 // gateway port, `switch on` saved config.json before it refused, and only the CLI ever started the
 // interceptor, so the dashboard, `switch port` and a service start left HTTPS_PROXY pointing at nothing.
 
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -42,8 +42,12 @@ const freePort = () => new Promise(r => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => r(port)); });
 });
 
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 function makeWorkspace({ certs = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-life-'));
+  made.push(dir);
   const certDir = path.join(dir, 'certs');
   if (certs) execFileSync('bash', [path.join(ROOT, 'blindfold', 'make-certs.sh'), 'chatgpt.com', certDir], { stdio: 'ignore' });
   return { dir, certDir, cfgPath: path.join(dir, 'config.json'), claudeDir: path.join(dir, 'claude') };

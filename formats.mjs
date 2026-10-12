@@ -24,7 +24,7 @@
 // }
 // ============================================================
 
-import { sanitizeToolName, toolNameMapForIR, rewriteToolNameMentions, rewriteToolSearchArgs } from './toolvocab.mjs';
+import { sanitizeToolName, toolNameMapForIR, rewriteToolNameMentions, rewriteToolSearchArgs, createToolVocab, NULL_TOOL_VOCAB } from './toolvocab.mjs';
 import { decodeCompaction, COMPACTION_INSTRUCTION } from './compaction.mjs';
 
 export const OUT_FORMATS = ['openai-chat', 'anthropic', 'vertex'];
@@ -706,8 +706,8 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     if (text) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
   };
 
-  // A reasoning item precedes the assistant output it belongs to. A user message ends that turn,
-  // so reasoning still pending there came from an aborted turn and is dropped.
+  // A reasoning item precedes the assistant output it belongs to. A user message or a compaction item
+  // ends that turn, so reasoning still pending there came from an aborted turn and is dropped.
   let reasoning = '';
   const joinLines = (a, b) => (a ? `${a}\n${b}` : b);
   const takeReasoning = (m) => {
@@ -776,6 +776,7 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
       } else if (item.type === 'additional_tools' && Array.isArray(item.tools)) {
         toolList.push(...item.tools);
       } else if (item.type === 'compaction') {
+        reasoning = '';
         if (allowOpaqueCompaction && !item.encrypted_content?.startsWith('llm-gateway-compact-v1:')) { ir.opaqueCompaction = true; continue; }
         pushText('user', `Conversation summary from an earlier turn:\n${decodeCompaction(item.encrypted_content)}`);
       } else if (item.type === 'compaction_trigger') {
@@ -1605,7 +1606,10 @@ export function stripGeminiPlaceholders(value, schema) {
     const next = stripGeminiPlaceholders(v, props[k]);
     if (next !== v) out = { ...out, [k]: next };
   }
-  for (const branch of Array.isArray(schema.anyOf) ? schema.anyOf : []) out = stripGeminiPlaceholders(out, branch);
+  // A branch that declares a real `_placeholder` makes the key the client's own, so no padded branch strips it.
+  const branches = Array.isArray(schema.anyOf) ? schema.anyOf : [];
+  const declared = branches.some(b => !isGeminiPadded(b) && b?.properties && Object.hasOwn(b.properties, '_placeholder'));
+  for (const branch of branches) if (!(declared && isGeminiPadded(branch))) out = stripGeminiPlaceholders(out, branch);
   return out;
 }
 
@@ -1631,8 +1635,14 @@ export function geminiPaddedTools(upBody) {
 // whose needsArgsRewrite is true until the JSON is whole, so the strip also works on a stream.
 export function withGeminiPlaceholderStrip(vocab, padded) {
   if (!padded?.size) return vocab;
-  const schemaOf = (name) => padded.get(name) || padded.get(vocab.name(name))
-    || [...padded].find(([upstream]) => vocab.name(upstream) === name)?.[1];
+  // By client name too. Two padded tools that one client name maps back to make that name
+  // ambiguous, so it gets no strip, as the vocabulary refuses a tie.
+  const byClient = new Map();
+  for (const [upstream, schema] of padded) {
+    const client = vocab.name(upstream);
+    byClient.set(client, byClient.has(client) ? null : schema);
+  }
+  const schemaOf = (name) => padded.get(name) || byClient.get(vocab.name(name)) || byClient.get(name);
   const args = (name, argsJson) => {
     const out = vocab.args(name, argsJson);
     const schema = schemaOf(name);
@@ -1651,6 +1661,26 @@ export function withGeminiPlaceholderStrip(vocab, padded) {
       return { name: fixedName, args: args(upstream, argsJson), renamed: fixedName !== upstream };
     }
   };
+}
+
+// The tool vocabulary the caller declared, so a model that answers with a name from its own
+// training is written back in the caller's words instead of ending the turn with "No such tool
+// available". Built once per request from the tools the caller actually sent, so a request that
+// declared none pays nothing and a turn where the model agreed with the list changes nothing.
+export function toolVocabForIR(ir, outFormat) {
+  if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
+  if (ir._vocab?.outFormat !== outFormat) {
+    const vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
+    ir._vocab = { outFormat, vocab: withGeminiPlaceholderStrip(vocab, ir._geminiPadded) };
+  }
+  return ir._vocab.vocab;
+}
+
+// Read by toolVocabForIR when the answer is rendered: the arguments lose the keys padding added.
+// Called on every emit, so a rebuild of the same IR never keeps the strip of an earlier body.
+export function recordGeminiPadding(ir, upBody, gemini) {
+  ir._geminiPadded = gemini && Array.isArray(upBody?.tools) ? geminiPaddedTools(upBody) : null;
+  ir._vocab = null;
 }
 
 function toGeminiSchema(schema, root, seen) {
@@ -1837,29 +1867,28 @@ function endsInUnsignedToolLoop(messages) {
 function healAnthropicPayload(payload) {
   const notes = [];
   if (!payload || !Array.isArray(payload.messages)) return { payload, changed: false, notes };
-  // Anthropic has no system role inside messages. Its text joins the next user turn (else the previous
-  // one) after the other blocks, because a tool_result must stay first in its turn.
+  // Anthropic has no system role inside messages. Its text becomes a user turn in the same place, so it
+  // never moves past an assistant turn; Step 0 merges it into a user turn beside it, Steps 1-3 keep a tool_result first.
   const src = [];
-  let pendingSystem = [];
-  const withSystem = (m) => ({ ...m, content: [...toAnthropicBlocks(m.content), ...pendingSystem] });
+  let folded = false;
+  let droppedSystem = false;
   for (const m of payload.messages) {
     if (m?.role === 'system') {
-      const text = toAnthropicBlocks(m.content).filter(b => b.type === 'text' && !isBlankText(b)).map(b => b.text).join('\n');
-      if (text) pendingSystem.push({ type: 'text', text: `[system] ${text}` });
+      const blocks = toAnthropicBlocks(m.content);
+      const kept = blocks.filter(b => b.type === 'text' && !isBlankText(b));
+      if (!kept.length || kept.length !== blocks.length) droppedSystem = true;
+      if (kept.length) {
+        src.push({ role: 'user', content: [{ type: 'text', text: `[system] ${kept.map(b => b.text).join('\n')}` }] });
+        folded = true;
+      }
       continue;
     }
     if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
-    if (m.role === 'user' && pendingSystem.length) { src.push(withSystem(m)); pendingSystem = []; continue; }
     src.push(m);
   }
-  if (pendingSystem.length) {
-    const i = src.findLastIndex(m => m.role === 'user');
-    if (i >= 0) src[i] = withSystem(src[i]);
-    else src.unshift({ role: 'user', content: pendingSystem });
-  }
-  const hadSystem = payload.messages.some(m => m?.role === 'system');
-  if (hadSystem) notes.push('folded system messages into user turns');
-  let changed = hadSystem || src.length !== payload.messages.length;
+  if (folded) notes.push('folded system messages into user turns');
+  if (droppedSystem) notes.push('dropped system content with no text');
+  let changed = folded || droppedSystem || src.length !== payload.messages.length;
 
   let system = payload.system;
   if (Array.isArray(system) && system.some(isBlankText)) {

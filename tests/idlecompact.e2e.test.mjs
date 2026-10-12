@@ -1,5 +1,5 @@
 // Actual proxy -> HTTP mock upstream; no external provider or official account is used.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,8 +28,13 @@ function history() {
   return messages;
 }
 
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
 async function fixture(t, { model = '', codex = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-idle-e2e-'));
+  made.push(dir);
   const received = []; const pendingSummaries = [];
   const upstream = http.createServer((req, res) => {
     let raw = '';

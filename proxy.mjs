@@ -11,7 +11,7 @@ import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES, VALID_EFFORTS,
-  geminiPaddedTools, withGeminiPlaceholderStrip,
+  toolVocabForIR, recordGeminiPadding,
   toGeminiSchema, isAntigravityModel, refusesImageInput, omitChatImages,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
@@ -27,8 +27,7 @@ import {
   codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
-import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, windowsCacheKey, cachedProfileWindows } from './windows.mjs';
-import { createToolVocab, NULL_TOOL_VOCAB, toolNameMapForIR } from './toolvocab.mjs';
+import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, windowsCacheKey, cachedProfileWindows, createWindowsRefresher } from './windows.mjs';
 import { readUpstreamPayloads } from './upstream-stream.mjs';
 import { compactionResponse, emitCompaction, expandGatewayCompactions, collectCompaction } from './compaction.mjs';
 import { classifyCodexRole, classifyClaudeTier, syncLocalCatalog, refreshCatalog, checkVersionAndRefresh } from './catalog.mjs';
@@ -387,15 +386,26 @@ function isContextOverflow(status, message) {
 }
 
 // Claude Code compacts on "prompt is too long: N tokens > M maximum", so the numbers lead when the upstream names them.
-// A count may group its digits ("131,072", "131.072", "131 072", "131_072"); the group form is tried first.
-const TOKEN_COUNT = String.raw`(\d{1,3}(?:[,. _]\d{3})+(?!\d)|\d+)`;
-const MAX_TOKENS_RE = new RegExp(String.raw`(?:maximum context length|context window|limit) (?:is |of )?` + TOKEN_COUNT, 'i');
+// A count may group its digits (131,072 / 131.072 / 131 072 / 131'072 / 1,31,072, also with U+00A0 or U+202F) or
+// carry a k or m suffix. A dot before exactly three digits reads as a group, so 3.141 reads as 3141: the cost of
+// reading 131.072. Any other decimal part (0.125, 3.14) with no k or m after it is no token count.
+const TOKEN_COUNT = String.raw`(\d+(?:\.\d+)?[km](?![a-z])|[1-9]\d?(?:,\d\d)+,\d{3}(?![.,]?\d)|[1-9]\d{0,2}(?:[,. _'\u00a0\u202f]\d{3})+(?![.,]?\d)|\d+(?![.,]?\d))`;
+// A bare "limit" may be a rate or a time, so it counts only when "tokens" follows the number.
+const MAX_TOKENS_RE = new RegExp(String.raw`(?:maximum context length|context window|tokens? limit) (?:is |of )?${TOKEN_COUNT}|limit (?:is |of )?${TOKEN_COUNT}(?= ?tokens?\b)`, 'i');
 const ASKED_TOKENS_RE = new RegExp(String.raw`(?:requested|resulted in|prompt (?:is|has|contains)|input (?:is|has)) (?:about )?` + TOKEN_COUNT, 'i');
+
+function tokenCount(text) {
+  if (!text) return '';
+  const short = text.match(/^(\d+(?:\.\d+)?)([km])$/i);
+  const n = short ? Math.round(Number(short[1]) * (short[2].toLowerCase() === 'k' ? 1e3 : 1e6)) : Number(text.replace(/\D/g, ''));
+  return Number.isSafeInteger(n) && n > 0 ? String(n) : '';
+}
 
 function promptTooLongMessage(message) {
   if (/^prompt is too long/i.test(message)) return message;
-  const max = message.match(MAX_TOKENS_RE)?.[1]?.replace(/\D/g, '');
-  const asked = message.match(ASKED_TOKENS_RE)?.[1]?.replace(/\D/g, '');
+  const m = message.match(MAX_TOKENS_RE);
+  const max = tokenCount(m?.[1] ?? m?.[2]);
+  const asked = tokenCount(message.match(ASKED_TOKENS_RE)?.[1]);
   return max && asked ? `prompt is too long: ${asked} tokens > ${max} maximum (${message})` : `prompt is too long: ${message}`;
 }
 
@@ -492,19 +502,6 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
     return { url: stream && !/[?&]alt=sse/.test(url) ? `${url}${url.includes('?') ? '&' : '?'}alt=sse` : url, headers };
   }
   return { url: ov['openai-chat'] || `${base}/chat/completions`, headers };
-}
-
-// The tool vocabulary the caller declared, so a model that answers with a name from its own
-// training is written back in the caller's words instead of ending the turn with "No such tool
-// available". Built once per request from the tools the caller actually sent, so a request that
-// declared none pays nothing and a turn where the model agreed with the list changes nothing.
-function toolVocabFor(ir, outFormat) {
-  if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
-  if (!ir._vocab) {
-    const vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
-    ir._vocab = withGeminiPlaceholderStrip(vocab, ir._geminiPadded);
-  }
-  return ir._vocab;
 }
 
 function clientRenderer(clientFormat, res, model, opts = {}) {
@@ -837,11 +834,20 @@ function resolveThinkingEffort(profile, slot, mappedModel) {
   return profile?.thinkingEffort || 'auto';
 }
 
+const refreshProfileWindows = createWindowsRefresher(STATE_DIR, { debug: (...a) => debugLog(...a) });
+
+// A profile with an endpoints override sends its requests past baseURL, so its key must not go to baseURL/models.
+const routesThroughOverride = (profile) => Object.values(profile?.endpoints || {}).some(Boolean);
+
 // The output limit this profile's own model list names for this model, or 0 when no fresh cached
-// list names one. The cache is filled by /v1/models; this only reads it.
+// list names one. With no fresh entry the list is read in the background; this request never waits.
 function modelOutputLimit(profileKey, profile, mappedModel) {
   if (!profile?.baseURL || !mappedModel) return 0;
-  const output = Number(cachedProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL))[mappedModel]?.output);
+  if (routesThroughOverride(profile)) return 0;
+  const key = windowsCacheKey(profileKey, profile.baseURL);
+  const models = cachedProfileWindows(STATE_DIR, key);
+  if (!Object.keys(models).length) refreshProfileWindows(key, profile.baseURL, profile.apiKey);
+  const output = Number(models[mappedModel]?.output);
   return output > 0 ? output : 0;
 }
 
@@ -858,9 +864,8 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
     if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
       upBody.tools = geminiSafeTools(upBody.tools);
     }
-    // Read by toolVocabFor when the answer is rendered: the arguments lose the keys padding added.
-    if (outFormat === 'vertex' || (outFormat === 'openai-chat' && isAntigravityModel(mappedModel))) ir._geminiPadded = geminiPaddedTools(upBody);
   }
+  recordGeminiPadding(ir, upBody, outFormat === 'vertex' || (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)));
   const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
   return { url, headers, upBody };
 }
@@ -1382,7 +1387,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       const out = clientMessage(clientFormat, {
         model: requestedModel || mappedModel, think, text: [split.text], tools, toolMeta: ir.toolMeta,
         finish: col.finish, prompt: col.prompt, completion, cached: col.cached,
-        reasoning: col.reasoning, sig: col.sig, vocab: toolVocabFor(ir, outFormat)
+        reasoning: col.reasoning, sig: col.sig, vocab: toolVocabForIR(ir, outFormat)
       });
       sendJson(res, 200, out);
       answered = true;
@@ -1399,7 +1404,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir, outFormat) });
+    const renderer = clientRenderer(clientFormat, res, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabForIR(ir, outFormat) });
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));
     const streamError = await pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal: ac.signal, sink: res, tag: profileKey });
@@ -1972,6 +1977,7 @@ async function servedModels(req) {
 // still gets the cached numbers, because an entry with the template window is better than none.
 async function modelWindowsFor(profileKey, profile) {
   if (!profile?.baseURL) return {};
+  if (routesThroughOverride(profile)) return readLocalCodexWindows();
   const listed = await resolveProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL), profile.baseURL, profile.apiKey);
   if (Object.keys(listed).length) return listed;
   return readLocalCodexWindows();
@@ -2629,7 +2635,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
       if (socket.writable) {
         socket.write(encodeWsFrame(JSON.stringify(d)));
       }
-    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabFor(ir, outFormat) });
+    }, requestedModel || mappedModel, { toolMeta: ir.toolMeta, vocab: toolVocabForIR(ir, outFormat) });
 
     renderer.start();
     const splitter = createThinkTagSplitter(t => renderer.think(t), t => renderer.text(t));

@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,9 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { openResponsesWs } from './ws-client.mjs';
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 async function until(check) { const deadline = Date.now() + 6000; while (Date.now() < deadline) { if (await check()) return; await new Promise(r => setTimeout(r, 20)); } throw new Error('timeout'); }
 async function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-compaction-'));
+  made.push(dir);
   const received = []; let finish = 'stop', truncate = false;
   const up = http.createServer((req, res) => {
     let raw = ''; req.on('data', b => raw += b); req.on('end', () => {

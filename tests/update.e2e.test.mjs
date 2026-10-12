@@ -1,7 +1,7 @@
 // A real gateway, run from a copy of this checkout that tracks a local bare repository. A release
 // pushed there must reach the running gateway through POST /api/update, and through --autoupdate at
 // start. Nothing here reaches the network or the real home directory.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -44,8 +44,13 @@ async function registry(t, version) {
   return `http://127.0.0.1:${srv.address().port}/`;
 }
 
+// Every temp directory goes once more after the file, so a setup that fails early leaves none behind.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
 async function fixture(t, { registryUrl = 'http://127.0.0.1:9/' } = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'llmsw-update-e2e-'));
+  made.push(base);
   const upstream = path.join(base, 'upstream.git');
   const install = path.join(base, 'install');
   const publisher = path.join(base, 'publisher');

@@ -20,6 +20,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let upstream, upstreamPort, proxy, proxyPort, tmpDir, fakeInterceptor, blindfoldPort, certsDir, cancelExitReap;
 const received = []; // { url, headers, body }
+// A model list read, kept apart so a background read never shows up as the last request a test made.
+const modelReads = [];
 const hangState = { closed: false, slowAborted: false };
 const bigState = { finishedAt: 0 };
 
@@ -70,6 +72,23 @@ const MOCK_ERRORS = {
   underscore: [400, 'maximum context length is 131_072 tokens, you requested 140_000 tokens'],
   prefixed: [400, 'prompt is too long: 200000 tokens > 199999 maximum'],
   nonumber: [400, 'The input exceeds the context window of this model.'],
+  ksuffix: [400, 'maximum context length is 128k tokens, you requested 140k tokens'],
+  msuffix: [400, "This model's maximum context length is 1m tokens. However, your messages resulted in 1.2M tokens."],
+  narrownbsp: [400, 'maximum context length is 131\u202f072 tokens, you requested 140\u202f000 tokens'],
+  nbsp: [400, 'maximum context length is 131\u00a0072 tokens, you requested 140\u00a0000 tokens'],
+  apostrophe: [400, "maximum context length is 131'072 tokens, you requested 140'000 tokens"],
+  indian: [400, 'maximum context length is 1,31,072 tokens, you requested 1,40,000 tokens'],
+  tokenlimit: [400, 'context_length_exceeded: input is 140000 tokens, over the token limit of 131072'],
+  decimal: [400, 'context_length_exceeded: limit of 3.141 seconds per call; input is 140000 tokens'],
+  fraction: [400, 'context_length_exceeded: limit 0.125 of the window; input is 140000 tokens'],
+  limitof: [400, 'context_length_exceeded: limit of 131072 tokens, input is 140000 tokens'],
+  limitbare: [400, 'context_length_exceeded: limit 131072 tokens, input is 140000 tokens'],
+  limitnotokens: [400, 'context_length_exceeded: limit of 131072. input is 140000 tokens'],
+  hugek: [400, 'maximum context length is 100000000000000000000k tokens, you requested 200000000000000000000k tokens'],
+  hugedigits: [400, 'maximum context length is 123456789012345678901 tokens, you requested 223456789012345678901 tokens'],
+  zero: [400, 'maximum context length is 0 tokens, you requested 140000 tokens'],
+  zerok: [400, 'maximum context length is 0k tokens, you requested 140k tokens'],
+  zeroasked: [400, 'maximum context length is 131072 tokens, you requested 0 tokens'],
   rate: [429, 'Rate limit reached on context tokens per minute: maximum context length is 131,072'],
   server: [500, "Internal error: this model's maximum context length is 131,072 tokens"]
 };
@@ -80,7 +99,8 @@ function startUpstream() {
     req.on('data', c => { body += c; });
     req.on('end', () => {
       const json = body ? JSON.parse(body) : {};
-      received.push({ url: req.url, headers: req.headers, body: json, raw: body });
+      if (req.method === 'GET' && req.url.split('?')[0].endsWith('/models')) modelReads.push({ url: req.url, headers: req.headers });
+      else received.push({ url: req.url, headers: req.headers, body: json, raw: body });
       const lastUser = JSON.stringify(json.messages?.at(-1) ?? json.contents?.at(-1) ?? '');
 
       // A stand-in intact: claude/* is a Claude Code account, the rest is not.
@@ -91,6 +111,14 @@ function startUpstream() {
       }
       // A provider list with real windows: a 1M model that also names the point to compress at,
       // and a smaller one. A model the list says nothing of keeps the catalog template.
+      // Two accounts on one baseURL whose lists name different output limits, read a little slowly.
+      if (req.method === 'GET' && req.url.startsWith('/chat/v1/models') && /^Bearer sk-cap-[ab]$/.test(req.headers.authorization || '')) {
+        const output = req.headers.authorization === 'Bearer sk-cap-a' ? 8192 : 2048;
+        return setTimeout(() => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [{ id: 'up-capped', context_length: 200000, max_output_tokens: output }] }));
+        }, 100);
+      }
       if (req.method === 'GET' && req.url.startsWith('/chat/v1/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ data: [
@@ -294,7 +322,11 @@ before(async () => {
       capped: { name: 'Mock Capped Output', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       agyph: { name: 'Mock agy to AG via chat', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-agy', defaultModels: { main: 'ag/mock-flash' } },
       cappedtwin: { name: 'Mock Capped Twin', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      capa: { name: 'Mock Capped A', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-cap-a', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      capb: { name: 'Mock Capped B', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-cap-b', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       cappedold: { name: 'Mock Capped Old', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-capped', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      ovr: { name: 'Mock Override', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/elsewhere/v1`, endpoints: { 'openai-chat': `${base}/chat/v1/chat/completions` }, apiKey: 'sk-secret-ovr', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
+      ovrplain: { name: 'Mock No Override', mode: 'convert', inFormat: 'auto', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-secret-ovrplain', defaultModels: { opus: 'up-capped', sonnet: 'up-sonnet', haiku: 'up-haiku', fable: 'up-fable' } },
       ant: { name: 'Mock Anthropic', mode: 'direct', inFormat: 'auto', outFormat: 'anthropic', baseURL: `${base}/ant`, apiKey: 'sk-secret-ant', defaultModels: models }
     }
   };
@@ -682,6 +714,57 @@ test('max_tokens is clamped only from a fresh cache entry of the same profile', 
   assert.equal(await ask('capped'), 8192);
 });
 
+// No /v1/models call for these profiles: the first request reads the list in the background, the next is clamped.
+test('a profile with no fresh model list is clamped from the request after a background read', async () => {
+  const ask = async (profile, tag) => {
+    const res = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 64000, messages: [{ role: 'user', content: tag }] }, { 'x-llm-profile': profile });
+    assert.equal(res.status, 200, tag);
+    await res.text();
+    const sent = received.findLast(r => JSON.stringify(r.body.messages || '').includes(tag));
+    assert.equal(sent.body.model, 'up-capped', tag);
+    return sent.body.max_tokens;
+  };
+  const reads = (key) => modelReads.filter(r => r.headers.authorization === `Bearer ${key}`).length;
+  const cached = (profile) => {
+    try { return JSON.parse(fs.readFileSync(path.join(tmpDir, 'model-windows.json'), 'utf8'))[`${profile}@http://127.0.0.1:${upstreamPort}/chat/v1`]; } catch { return null; }
+  };
+
+  assert.deepEqual(await Promise.all([ask('capa', 'cap-a-1'), ask('capa', 'cap-a-2')]), [64000, 64000], 'the first requests do not wait for the list');
+  assert.ok(await until(() => cached('capa')), 'the list of capa was read in the background');
+  assert.equal(await ask('capa', 'cap-a-3'), 8192);
+  assert.equal(reads('sk-cap-a'), 1, 'one read for the profile, however many requests found no entry');
+
+  assert.equal(await ask('capb', 'cap-b-1'), 64000, 'capa\'s entry on the same baseURL is not capb\'s');
+  assert.ok(await until(() => cached('capb')), 'the list of capb was read in the background');
+  assert.equal(await ask('capb', 'cap-b-2'), 2048);
+  assert.equal(await ask('capa', 'cap-a-4'), 8192, 'each profile keeps its own limit');
+});
+
+// The requests of an override profile never reach its baseURL, so neither may its key.
+test('a profile that routes through an endpoint override reads no model list; a plain profile still does', async () => {
+  const ask = async (profile, tag) => {
+    const res = await post('/v1/messages', { model: 'claude-opus-4-6', max_tokens: 64000, messages: [{ role: 'user', content: tag }] }, { 'x-llm-profile': profile });
+    assert.equal(res.status, 200, tag);
+    await res.text();
+    return received.findLast(r => JSON.stringify(r.body.messages || '').includes(tag));
+  };
+  const reads = (key) => modelReads.filter(r => r.headers.authorization === `Bearer ${key}` || r.headers['x-api-key'] === key);
+
+  const sent = await ask('ovr', 'ovr-1');
+  assert.equal(sent.url, '/chat/v1/chat/completions', 'the request went to the override');
+  assert.equal(sent.body.max_tokens, 64000);
+  await ask('ovrplain', 'ovrplain-1');
+  assert.ok(await until(() => reads('sk-secret-ovrplain').length === 1), 'the plain profile reads its list in the background');
+  await ask('ovr', 'ovr-2');
+  await new Promise(r => setTimeout(r, 200));
+  assert.deepEqual(reads('sk-secret-ovr'), [], 'the override profile sent its key to no /models');
+  assert.equal((await ask('ovr', 'ovr-3')).body.max_tokens, 64000, 'nothing clamps an override profile');
+  const listed = await fetch(url('/v1/models'), { headers: { 'x-llm-profile': 'ovr' } });
+  assert.equal(listed.status, 200);
+  await listed.text();
+  assert.deepEqual(reads('sk-secret-ovr'), [], 'the /v1/models catalog sent the override key to no /models');
+});
+
 // Gemini gets `_placeholder` on an empty nested object; the client never declared it, so it must not come back.
 test('A _placeholder the gateway added for Gemini is stripped from tool-call arguments, stream and non-stream', async () => {
   const tools = [{ type: 'function', name: 'run', parameters: { type: 'object', properties: {
@@ -795,6 +878,19 @@ test('Context overflow numbers with thousands separators reach Claude Code whole
     assert.equal(error.type, 'invalid_request_error', key);
     assert.equal(error.message, `prompt is too long: 140000 tokens > 131072 maximum (${MOCK_ERRORS[key][1]})`, key);
   }
+  const whole = async (key, asked, max) => assert.equal((await ask(key)).error.message, `prompt is too long: ${asked} tokens > ${max} maximum (${MOCK_ERRORS[key][1]})`, key);
+  await whole('ksuffix', 140000, 128000);
+  await whole('msuffix', 1200000, 1000000);
+  for (const key of ['narrownbsp', 'nbsp', 'apostrophe', 'indian', 'tokenlimit', 'limitof', 'limitbare']) await whole(key, 140000, 131072);
+  for (const key of ['decimal', 'fraction', 'limitnotokens']) {
+    assert.equal((await ask(key)).error.message, `prompt is too long: ${MOCK_ERRORS[key][1]}`, `${key}: a number after 'limit' that is no token count is ignored`);
+  }
+  for (const key of ['hugek', 'hugedigits']) {
+    assert.equal((await ask(key)).error.message, `prompt is too long: ${MOCK_ERRORS[key][1]}`, `${key}: a count past the safe integer range is no token count`);
+  }
+  for (const key of ['zero', 'zerok', 'zeroasked']) {
+    assert.equal((await ask(key)).error.message, `prompt is too long: ${MOCK_ERRORS[key][1]}`, `${key}: a count of zero is no token count`);
+  }
   assert.deepEqual(await ask('prefixed'), { status: 400, error: { type: 'invalid_request_error', message: MOCK_ERRORS.prefixed[1] } });
   assert.deepEqual(await ask('nonumber'), { status: 400, error: { type: 'invalid_request_error', message: `prompt is too long: ${MOCK_ERRORS.nonumber[1]}` } });
   assert.deepEqual(await ask('rate'), { status: 429, error: { type: 'rate_limit_error', message: MOCK_ERRORS.rate[1] } });
@@ -811,6 +907,11 @@ test('Codex WS: an upstream context overflow fails the turn with context_length_
   ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MOCK_ERR:rate over ws' })));
   assert.ok(await until(() => ws.messages.filter(m => m.type === 'response.failed').length === 2), 'no second response.failed');
   assert.equal(ws.messages.filter(m => m.type === 'response.failed')[1].response.error.code, 'rate_limit_exceeded');
+  ws.socket.write(clientFrame(1, JSON.stringify({ type: 'response.create', model: 'main', input: 'MOCK_ERR:server over ws' })));
+  assert.ok(await until(() => ws.messages.filter(m => m.type === 'response.failed').length === 3), 'no third response.failed');
+  const server = ws.messages.filter(m => m.type === 'response.failed')[2].response.error;
+  assert.equal(server.code, 'server_error', 'a 500 that names the context length is a server error, not an overflow');
+  assert.equal(server.message, MOCK_ERRORS.server[1]);
   ws.socket.destroy();
 });
 
