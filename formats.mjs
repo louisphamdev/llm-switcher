@@ -455,9 +455,22 @@ function anthropicToIR(payload) {
     }
   }
 
+  // Messages has no system role. Left in place, the emitters send such a turn as user text, so fold
+  // it into the system prompt, as responsesToIR and the Chat reader already do.
+  const foldSystemTurn = (msg) => {
+    if (msg.role !== 'system' && msg.role !== 'developer') return false;
+    const text =
+      typeof msg.content === 'string'
+        ? msg.content
+        : (msg.content || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
+    if (text.trim()) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
+    return true;
+  };
+
   if (Array.isArray(payload.messages)) {
     for (const msg of payload.messages) {
       if (!msg) continue;
+      if (foldSystemTurn(msg)) continue;
       if (typeof msg.content === 'string') {
         ir.messages.push({ role: msg.role, content: msg.content });
         continue;

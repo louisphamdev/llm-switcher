@@ -111,6 +111,15 @@ test('healAnthropicPayload: native Anthropic passthrough keeps the billing heade
   assert.equal(payload.system[0].text, header);
 });
 
+test('anthropicToIR: a system turn folds into the IR system prompt', () => {
+  const ir = anthropicToIR({
+    model: 'claude-opus-4-6', max_tokens: 10,
+    messages: [{ role: 'system', content: 'You are Rem.' }, { role: 'user', content: 'hi' }]
+  });
+  assert.equal(ir.system, 'You are Rem.');
+  assert.deepEqual(ir.messages.map(m => m.role), ['user']);
+});
+
 test('healToolPairs: orphan result -> user text, missing result -> placeholder, adjacency kept', () => {
   const healed = healToolPairs([
     { role: 'user', content: 'start' },
