@@ -27,6 +27,7 @@ async function fixture(t) {
   let nativeVerdict = { ok: true, reason: 'looks complete' };
   let jevScores = { complete: 0.14, evidence: 0.84, unfinished: 0.63 };
   let jevStatus = 200;
+  const chatRequests = [];
 
   // Mock native upstream (Anthropic format)
   const nativeUp = http.createServer((req, res) => {
@@ -40,6 +41,16 @@ async function fixture(t) {
       const body = JSON.parse(raw);
       const isStream = Boolean(body.stream);
       const respText = JSON.stringify(nativeVerdict);
+      // A text-only chat model: it refuses any image part.
+      if (req.url.endsWith('/chat/completions')) {
+        chatRequests.push(body);
+        res.setHeader('content-type', 'application/json');
+        if (body.messages.some(m => Array.isArray(m.content) && m.content.some(c => c?.type === 'image_url'))) {
+          res.statusCode = 400;
+          return res.end(JSON.stringify({ error: { message: 'Failed to deserialize the JSON body: messages[1]: unknown variant `image_url`, expected `text`' } }));
+        }
+        return res.end(JSON.stringify({ id: 'c1', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: respText }, finish_reason: 'stop' }] }));
+      }
 
       if (isStream) {
         res.setHeader('content-type', 'text/event-stream');
@@ -110,6 +121,16 @@ async function fixture(t) {
         outFormat: 'anthropic',
         baseURL: `http://127.0.0.1:${nativeUp.address().port}`,
         apiKey: 'sk-native-key'
+      },
+      chat: {
+        name: 'ChatMock',
+        mode: 'convert',
+        tool: 'claude',
+        inFormat: 'auto',
+        outFormat: 'openai-chat',
+        baseURL: `http://127.0.0.1:${nativeUp.address().port}/v1`,
+        apiKey: 'sk-chat-key',
+        defaultModels: { opus: 'up-textonly', sonnet: 'up-textonly', haiku: 'up-textonly', fable: 'up-textonly' }
       }
     },
     goalCheck: {
@@ -166,11 +187,12 @@ async function fixture(t) {
     body: body ? JSON.stringify(body) : undefined
   });
 
-  const sendClaude = (body, stream = false) => fetch(`http://127.0.0.1:${port}/v1/messages`, {
+  const sendClaude = (body, stream = false, headers = {}) => fetch(`http://127.0.0.1:${port}/v1/messages`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'user-agent': 'claude-cli/2.1.295'
+      'user-agent': 'claude-cli/2.1.295',
+      ...headers
     },
     body: JSON.stringify({ ...body, stream })
   });
@@ -183,6 +205,7 @@ async function fixture(t) {
     setJevScores: s => { jevScores = s; },
     setJevStatus: st => { jevStatus = st; },
     jevRequests,
+    chatRequests,
     logs: () => logs
   };
 }
@@ -313,4 +336,25 @@ test('goalcheck e2e: live interception, veto, and allow behaviors', async t => {
   const logsData = await logsRes.json();
   assert.ok(logsData.logs.length >= 4);
   assert.equal(logsData.logs[0].verdictType, 'Unavailable');
+});
+
+test('goalcheck e2e: an openai-chat evaluator call that a text-only model refuses for an image is retried as text', async t => {
+  const f = await fixture(t);
+  await f.sendAdmin('/api/goal-check', 'POST', { enabled: true });
+  f.setJevScores({ complete: 0.95, evidence: 0.90, unfinished: 0.05 });
+  f.setNativeVerdict({ ok: true, reason: 'screenshot shows green tests' });
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+  const request = {
+    ...evaluatorRequest,
+    messages: [
+      { role: 'user', content: [image, { type: 'text', text: 'Please fix the failing tests in repo.' }] },
+      ...evaluatorRequest.messages.slice(1)
+    ]
+  };
+  const res = await f.sendClaude(request, false, { 'x-llm-profile': 'chat' });
+  assert.equal(res.status, 200);
+  const verdict = JSON.parse((await res.json()).content[0].text);
+  assert.deepEqual(verdict, { ok: true, reason: 'screenshot shows green tests' });
+  assert.equal(f.chatRequests.length, 2, 'one refusal, one retry');
+  assert.ok(JSON.stringify(f.chatRequests[1]).includes('[image omitted'), 'the retry carries text in place of the image');
 });

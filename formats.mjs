@@ -39,6 +39,8 @@ function canonFinish(raw) {
   if (['length', 'max_tokens', 'max_output_tokens'].includes(r)) return 'length';
   if (['tool_calls', 'tool_call', 'function_call', 'function_calls', 'tool_use'].includes(r)) return 'tool_calls';
   if (['content_filter', 'safety', 'recitation', 'language', 'blocklist', 'prohibited_content', 'spii'].includes(r)) return 'content_filter';
+  // Gemini gave up on a tool call: as 'stop' the client would see a silent, empty turn.
+  if (r === 'malformed_function_call') return 'error';
   return 'stop';
 }
 
@@ -254,13 +256,18 @@ function smartDelta(choice) {
 }
 
 const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
+// Instance data, not schema: null is a real value here, and nothing inside may be rewritten.
+const SCHEMA_VALUES = new Set(['default', 'const', 'enum', 'examples', 'example']);
+// Lookahead and lookbehind; RE2 upstreams refuse the whole request ("invalid regex").
+const LOOKAROUND_RE = /\(\?<?[=!]/;
 
 function sanitizeJsonSchema(schema) {
   if (schema === null || schema === undefined) return { type: 'object', properties: {} };
   return sanitizeSchemaNode(schema);
 }
 
-// Inside a schema 0, false, "" and null are values (minimum: 0, additionalProperties: false), not a missing schema.
+// Inside a schema 0, false and "" are values (minimum: 0, additionalProperties: false), not a missing schema.
+// A null keyword is dropped (strict upstreams answer "null is not of type array"), except as instance data.
 function sanitizeSchemaNode(schema) {
   if (schema === null || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeSchemaNode);
@@ -268,6 +275,9 @@ function sanitizeSchemaNode(schema) {
   for (const [k, v] of Object.entries(schema)) {
     if (k === '$schema' || k === 'cache_control' || k === 'encrypted') continue;
     if (k === 'format' && ['uri', 'uri-reference'].includes(v)) continue;
+    if (SCHEMA_VALUES.has(k)) { clean[k] = v; continue; }
+    if (v === null) continue;
+    if (k === 'pattern' && typeof v === 'string' && LOOKAROUND_RE.test(v)) continue;
     // A name map: each value is a schema, the map itself is not. A parameter may be named "properties".
     if (SCHEMA_MAPS.has(k) && v && typeof v === 'object' && !Array.isArray(v)) {
       clean[k] = Object.fromEntries(Object.entries(v).map(([name, sub]) => [name, sanitizeSchemaNode(sub)]));
@@ -394,6 +404,7 @@ function parseArgs(v) {
   if (v === undefined || v === null) return {};
   if (typeof v === 'object') return v;
   if (typeof v === 'string') {
+    if (!v.trim()) return {};
     try { return JSON.parse(v); } catch { return { raw: v }; }
   }
   return {};
@@ -444,11 +455,8 @@ function anthropicToIR(payload) {
     }
   }
 
-  // Claude Code sends its output style and similar instructions as a turn with
-  // role "system" inside messages. The Messages shape has no such role, so the
-  // emitters below rebuild messages from user and assistant turns only and the
-  // turn is lost with them. Fold it into the system prompt, in order, the way
-  // the Responses and Chat readers already treat their own system turns.
+  // Messages has no system role. Left in place, the emitters send such a turn as user text, so fold
+  // it into the system prompt, as responsesToIR and the Chat reader already do.
   const foldSystemTurn = (msg) => {
     if (msg.role !== 'system' && msg.role !== 'developer') return false;
     const text =
@@ -470,10 +478,13 @@ function anthropicToIR(payload) {
       if (Array.isArray(msg.content)) {
         const parts = [];
         const toolCalls = [];
+        let reasoning = '';
         for (const part of msg.content) {
           if (!part) continue;
           if (part.type === 'text') {
             if (part.text) parts.push({ type: 'text', text: part.text });
+          } else if (part.type === 'thinking' && typeof part.thinking === 'string') {
+            reasoning += part.thinking;
           } else if (part.type === 'image' && part.source?.type === 'base64') {
             const mimeType = part.source.media_type || 'image/jpeg';
             parts.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${part.source.data}` } });
@@ -514,6 +525,7 @@ function anthropicToIR(payload) {
           out.content = parts.every(p => p.type === 'text') ? parts.map(p => p.text).join('\n') : parts;
         }
         if (toolCalls.length) out.toolCalls = toolCalls;
+        if (reasoning && msg.role === 'assistant') out.reasoning = reasoning;
         if (out.content !== undefined || out.toolCalls) ir.messages.push(out);
       } else if (msg.content) {
         // Fallback for payloads that preprocessing/compression tools mangled into an object
@@ -644,9 +656,10 @@ const LOCAL_SHELL_PARAMS = {
   required: ['command']
 };
 
+// A plain cut at 64 would give two long namespaced tools one name; the hashed form keeps them apart.
 function responsesToolName(namespace, name) {
   const raw = namespace ? `${namespace}__${name}` : String(name || '');
-  return raw.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+  return raw ? sanitizeToolName(raw) : '';
 }
 
 function customToolDescription(t) {
@@ -693,12 +706,21 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     if (text) ir.system = ir.system ? `${ir.system}\n\n${text}` : text;
   };
 
+  // A reasoning item precedes the assistant output it belongs to. A user message ends that turn,
+  // so reasoning still pending there came from an aborted turn and is dropped.
+  let reasoning = '';
+  const joinLines = (a, b) => (a ? `${a}\n${b}` : b);
+  const takeReasoning = (m) => {
+    if (reasoning && m?.role === 'assistant') { m.reasoning = joinLines(m.reasoning || '', reasoning); reasoning = ''; }
+  };
+
   // Parallel tool calls arrive as consecutive items -> merge into 1 assistant turn,
   // otherwise OpenAI Chat/Anthropic will error that tool_calls aren't answered adjacently.
   const pushCall = (call) => {
     const last = ir.messages[ir.messages.length - 1];
     if (last && last.role === 'assistant') last.toolCalls = [...(last.toolCalls || []), call];
     else ir.messages.push({ role: 'assistant', toolCalls: [call] });
+    takeReasoning(ir.messages[ir.messages.length - 1]);
   };
 
   // Responses Lite sends the tools as an input item, not in payload.tools.
@@ -708,7 +730,7 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     ir.messages.push({ role: 'user', content: input });
   } else if (Array.isArray(input)) {
     for (const item of input) {
-      if (typeof item === 'string') { pushText('user', item); continue; }
+      if (typeof item === 'string') { reasoning = ''; pushText('user', item); continue; }
       if (!item || typeof item !== 'object') continue;
       // EasyInputMessage ({role, content}) doesn't require `type`.
       if (item.type === 'message' || (!item.type && item.role)) {
@@ -732,11 +754,16 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
           continue;
         }
         const role = item.role === 'assistant' ? 'assistant' : 'user';
+        if (role === 'user') reasoning = '';
         if (parts.every(p => p.type === 'text')) {
           pushText(role, parts.map(p => p.text).join('\n'));
         } else {
           ir.messages.push({ role, content: parts });
         }
+        if (role === 'assistant') takeReasoning(ir.messages[ir.messages.length - 1]);
+      } else if (item.type === 'reasoning') {
+        const texts = (Array.isArray(item.summary) ? item.summary : []).map(x => x?.text).filter(t => typeof t === 'string' && t);
+        if (texts.length) reasoning = joinLines(reasoning, texts.join('\n'));
       } else if (item.type === 'function_call') {
         pushCall({ id: item.call_id || item.id || null, name: responsesToolName(item.namespace, item.name), args: parseArgs(item.arguments) });
       } else if (item.type === 'custom_tool_call') {
@@ -804,7 +831,9 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
     ir.thinking = thinkingFromReasoningParam(payload.reasoning);
   }
   ir.responseFormat = responseFormatIR(payload.text?.format);
-  if (ir.compaction) { ir.tools = []; ir.toolChoice = 'none'; ir.responseFormat = null; }
+  // Tools stay declared: Anthropic refuses tool_use history without them, and OpenAI refuses
+  // tool_choice without tools. 'none' alone keeps the summary turn free of calls.
+  if (ir.compaction) { ir.toolChoice = ir.tools.length ? 'none' : null; ir.responseFormat = null; }
   return ir;
 }
 
@@ -1088,6 +1117,7 @@ function normThinkingEffort(effort) {
 //  - 'native' (genuine OpenAI / strict OpenAI-compatible servers): only send `reasoning_effort` when
 //             the client requests thinking, don't touch the system prompt, use `max_completion_tokens`.
 //  - 'off'    : never send reasoning params, never inject prompts.
+// opts.replayReasoning: profile opt-in; native mode sends reasoning_content on tool-call turns only when it is true.
 function irToChatBody(ir, model, opts = {}) {
   const names = toolNameMapForIR(ir);
   const toolName = names.name;
@@ -1101,6 +1131,8 @@ function irToChatBody(ir, model, opts = {}) {
   const wantsThinking = mode === 'off' ? false
     : mode === 'native' ? clientWantsThinking
     : Boolean(clientWantsThinking || (modelIsThinking && (!ir.thinking || ir.thinking.type !== 'disabled')));
+  // Strict OpenAI-compatible servers may refuse an unknown message key, so native mode needs the profile flag.
+  const replayReasoning = wantsThinking && (mode === 'auto' || opts.replayReasoning === true);
 
   let systemText = ir.system || '';
   if (mode === 'auto' && wantsThinking && !modelIsThinking && !String(model).toLowerCase().includes('gemini')) {
@@ -1136,6 +1168,8 @@ function irToChatBody(ir, model, opts = {}) {
         return call;
       });
       if (out.content === undefined || out.content === '') out.content = null;
+      // DeepSeek/Kimi thinking mode refuse the next tool step without it; an empty string is accepted.
+      if (replayReasoning) out.reasoning_content = m.reasoning ?? '';
     }
     if (out.content === undefined) out.content = '';
     messages.push(out);
@@ -1248,7 +1282,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (m.role === 'tool') {
       messages.push({
         role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: m.toolCallId,
+        content: [{ type: 'tool_result', tool_use_id: safeToolId(m.toolCallId),
           content: m.images?.length ? [...contentToAnthropicBlocks(m.content), ...contentToAnthropicBlocks(m.images)] : m.content ?? '' }]
       });
       continue;
@@ -1256,7 +1290,7 @@ function irToAnthropicBody(ir, model, opts = {}) {
     if (m.role === 'assistant') {
       const blocks = contentToAnthropicBlocks(m.content).filter(b => b.type === 'text');
       for (const tc of (m.toolCalls || [])) {
-        blocks.push({ type: 'tool_use', id: tc.id, name: toolName(tc.name), input: parseArgs(tc.args) });
+        blocks.push({ type: 'tool_use', id: safeToolId(tc.id), name: toolName(tc.name), input: parseArgs(tc.args) });
       }
       if (blocks.length) messages.push({ role: 'assistant', content: blocks });
       continue;
@@ -1343,6 +1377,8 @@ function irToAnthropicBody(ir, model, opts = {}) {
       body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, body.max_tokens - 1) };
     }
   }
+  // This route never emits signed thinking blocks, so an open tool loop cannot keep thinking on.
+  if (body.thinking && endsInUnsignedToolLoop(body.messages)) delete body.thinking;
   if (body.thinking) {
     // When thinking is on, Anthropic rejects temperature != 1, top_k, or top_p < 0.95.
     if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
@@ -1360,6 +1396,12 @@ function dataUrlToInlineData(url) {
   const m = String(url || '').match(/^data:([^;]+);base64,(.+)$/s);
   if (!m) return null;
   return { inlineData: { mimeType: m[1], data: m[2] } };
+}
+
+function hasDollarKey(v) {
+  if (Array.isArray(v)) return v.some(hasDollarKey);
+  if (!v || typeof v !== 'object') return false;
+  return Object.entries(v).some(([k, x]) => k.startsWith('$') || hasDollarKey(x));
 }
 
 // IR -> Vertex generateContent body.
@@ -1411,6 +1453,8 @@ function irToVertexBody(ir, model, opts = {}) {
         const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
         // functionResponse.response must be an object (Struct), not an array/primitive.
         resp = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed ?? '' };
+        // Gemini refuses a Struct key that starts with `$` (`$ref` in a schema file), so send the text.
+        if (hasDollarKey(resp)) resp = { result: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
       } catch { resp = { result: m.content ?? '' }; }
       // Gemini API & Vertex only accept roles 'user' | 'model' (functionResponse lives in the 'user' role).
       push('user', [{ functionResponse: { name: toolName(m.name || 'tool'), response: resp } }]);
@@ -1434,6 +1478,9 @@ function irToVertexBody(ir, model, opts = {}) {
     push('user', textPartsOf(m.content));
   }
   flushImages();
+  // Gemini refuses a request that ends on a model turn (an assistant prefill). A user turn is
+  // appended rather than the prefill dropped, so no text the client sent is lost.
+  if (contents[contents.length - 1]?.role === 'model') contents.push({ role: 'user', parts: [{ text: 'Continue.' }] });
 
   const body = { contents };
   if (ir.system && ir.system.trim()) {
@@ -1525,15 +1572,98 @@ function collapseNullableUnion(branches) {
   return { schema: rest[0], nullable: rest.length !== branches.length };
 }
 
+// Gemini refuses a nested OBJECT with no properties (a free-form map such as `env`). One optional
+// key keeps the type an object; the root of a tool with no arguments may stay empty.
+const GEMINI_PLACEHOLDER_PROPERTIES = { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } };
+
+// A node the padding produced: its only property is the placeholder. Matched by shape, not by
+// reference, because the schema is deep-copied again before it is sent.
+function isGeminiPadded(schema) {
+  const props = schema?.properties;
+  const p = props?._placeholder;
+  return Boolean(p && Object.keys(props).length === 1 && p.type === GEMINI_PLACEHOLDER_PROPERTIES._placeholder.type
+    && p.description === GEMINI_PLACEHOLDER_PROPERTIES._placeholder.description);
+}
+
+// Removes `_placeholder` from the arguments wherever the schema sent upstream was padded, and only there.
+export function stripGeminiPlaceholders(value, schema) {
+  if (!value || typeof value !== 'object' || !schema || typeof schema !== 'object') return value;
+  if (Array.isArray(value)) {
+    if (!schema.items) return value;
+    const out = value.map(v => stripGeminiPlaceholders(v, schema.items));
+    return out.some((v, i) => v !== value[i]) ? out : value;
+  }
+  if (isGeminiPadded(schema)) {
+    if (!Object.hasOwn(value, '_placeholder')) return value;
+    const { _placeholder, ...rest } = value;
+    return rest;
+  }
+  let out = value;
+  const props = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  for (const [k, v] of Object.entries(value)) {
+    if (!Object.hasOwn(props, k)) continue;
+    const next = stripGeminiPlaceholders(v, props[k]);
+    if (next !== v) out = { ...out, [k]: next };
+  }
+  for (const branch of Array.isArray(schema.anyOf) ? schema.anyOf : []) out = stripGeminiPlaceholders(out, branch);
+  return out;
+}
+
+function hasGeminiPadding(schema) {
+  if (!schema || typeof schema !== 'object') return false;
+  if (isGeminiPadded(schema)) return true;
+  return Object.values(schema.properties || {}).some(hasGeminiPadding) || hasGeminiPadding(schema.items)
+    || (Array.isArray(schema.anyOf) && schema.anyOf.some(hasGeminiPadding));
+}
+
+// The upstream tool name -> the schema sent, for each tool whose schema was padded. Reads both the
+// Vertex and the chat body shape; an empty map means no argument needs the strip.
+export function geminiPaddedTools(upBody) {
+  const padded = new Map();
+  for (const t of Array.isArray(upBody?.tools) ? upBody.tools : []) {
+    const decls = Array.isArray(t?.functionDeclarations) ? t.functionDeclarations : t?.function ? [t.function] : [];
+    for (const d of decls) if (d?.name && hasGeminiPadding(d.parameters)) padded.set(d.name, d.parameters);
+  }
+  return padded;
+}
+
+// The tool vocabulary, plus the strip for padded tools. A renderer holds the arguments of a tool
+// whose needsArgsRewrite is true until the JSON is whole, so the strip also works on a stream.
+export function withGeminiPlaceholderStrip(vocab, padded) {
+  if (!padded?.size) return vocab;
+  const schemaOf = (name) => padded.get(name) || padded.get(vocab.name(name))
+    || [...padded].find(([upstream]) => vocab.name(upstream) === name)?.[1];
+  const args = (name, argsJson) => {
+    const out = vocab.args(name, argsJson);
+    const schema = schemaOf(name);
+    if (!schema) return out;
+    let parsed;
+    try { parsed = JSON.parse(out || '{}'); } catch { return out; }
+    const stripped = stripGeminiPlaceholders(parsed, schema);
+    return stripped === parsed ? out : JSON.stringify(stripped);
+  };
+  return {
+    ...vocab,
+    args,
+    needsArgsRewrite: (name) => Boolean(schemaOf(name)) || Boolean(vocab.needsArgsRewrite?.(name)),
+    repair(upstream, argsJson) {
+      const fixedName = vocab.name(upstream);
+      return { name: fixedName, args: args(upstream, argsJson), renamed: fixedName !== upstream };
+    }
+  };
+}
+
 function toGeminiSchema(schema, root, seen) {
+  const nested = Boolean(root);
+  const emptyProperties = () => (nested ? { ...GEMINI_PLACEHOLDER_PROPERTIES } : {});
   // Shorthand left by some MCP servers: a bare "object"/"string" where a Schema belongs.
   // Vertex rejects the raw string with INVALID_ARGUMENT, so expand it.
   if (typeof schema === 'string') {
-    return schema === 'object' ? { type: 'object', properties: {} } : { type: schema };
+    return schema === 'object' ? { type: 'object', properties: emptyProperties() } : { type: schema };
   }
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
   // The same hole as the string shorthand above: an empty schema has no type Vertex can read.
-  if (Object.keys(schema).length === 0) return { type: 'object', properties: {} };
+  if (Object.keys(schema).length === 0) return { type: 'object', properties: emptyProperties() };
   root = root || schema;
   seen = seen || new Set();
   if (seen.has(schema)) return {};
@@ -1584,8 +1714,13 @@ function toGeminiSchema(schema, root, seen) {
     }
   }
   if (!out.type && out.properties) out.type = 'object';
-  if (out.type === 'object' && !out.properties) out.properties = {};
-  if (out.enum && !out.type) out.type = 'string';
+  if (out.type === 'object' && !(out.properties && Object.keys(out.properties).length)) out.properties = emptyProperties();
+  if (out.enum && !out.type) {
+    // Gemini enum values are strings only; an untyped `const: true` would otherwise stay boolean.
+    out.type = 'string';
+    out.enum = out.enum.filter(x => x !== null).map(String);
+    if (!out.enum.length) delete out.enum;
+  }
   if (out.enum && out.type !== 'string') {
     // Gemini supports enum for strings only. Keep the constraint as text for the model.
     const values = (schema.enum || (Object.hasOwn(schema, 'const') ? [schema.const] : [])).filter(x => x !== null);
@@ -1612,12 +1747,44 @@ function emitUpstreamBody(outFormat, ir, model, opts = {}) {
   // thinkingMode 'off' applies to all upstreams: drop the client's thinking entirely.
   let src = normThinkingMode(opts.thinkingMode) === 'off' ? { ...ir, thinking: { type: 'disabled' } } : ir;
   if (isAntigravityModel(model) && src.system) src = { ...src, system: src.system.replace(BILLING_HEADER_RE, '') };
+  // An upstream refuses a max tokens above the model's output limit. The Anthropic body always
+  // carries one (4096 when the client sent none), so that default is clamped too.
+  const limit = opts.maxOutputTokens;
+  if (Number.isFinite(limit) && limit > 0) {
+    const asked = typeof src.params?.maxTokens === 'number' ? src.params.maxTokens : (outFormat === 'anthropic' ? 4096 : null);
+    if (asked != null && asked > limit) src = { ...src, params: { ...src.params, maxTokens: limit } };
+  }
   switch (outFormat) {
     case 'anthropic': return irToAnthropicBody(src, model, opts);
     case 'vertex': return irToVertexBody(src, model, opts);
     case 'openai-chat':
     default: return irToChatBody(src, model, opts);
   }
+}
+
+// A text-only chat model refuses an image part with a 400. These are the refusals seen so far;
+// a looser match would turn an unrelated 400 into a silent retry without the image.
+export const IMAGE_OMITTED_TEXT = '[image omitted: this model does not accept images]';
+
+export function refusesImageInput(text) {
+  const t = String(text || '').toLowerCase();
+  return t.includes('unknown variant `image_url`') || t.includes('image_url is only supported by certain models')
+    || t.includes('does not support image') || t.includes('image input is not supported')
+    || (t.includes('vision') && t.includes('not supported'));
+}
+
+// Replaces every image part of a chat body with IMAGE_OMITTED_TEXT, in place. Returns how many it replaced.
+export function omitChatImages(body) {
+  let replaced = 0;
+  for (const m of Array.isArray(body?.messages) ? body.messages : []) {
+    if (!Array.isArray(m?.content)) continue;
+    m.content = m.content.map(p => {
+      if (p?.type !== 'image_url') return p;
+      replaced++;
+      return { type: 'text', text: IMAGE_OMITTED_TEXT };
+    });
+  }
+  return replaced;
 }
 
 // ---------------- native Anthropic healer (direct passthrough) ----------------
@@ -1645,6 +1812,11 @@ function toAnthropicBlocks(content) {
   return Array.isArray(content) ? content.filter(Boolean) : [];
 }
 
+// Anthropic refuses a text block with no visible text ("text content blocks must be non-empty").
+function isBlankText(b) {
+  return b?.type === 'text' && !(typeof b.text === 'string' && b.text.trim());
+}
+
 function toolResultText(block) {
   const c = block.content;
   const text = typeof c === 'string' ? c
@@ -1653,41 +1825,56 @@ function toolResultText(block) {
   return `[Tool Result${block.tool_use_id ? ` (${block.tool_use_id})` : ''}]: ${text}`;
 }
 
+// Anthropic: "a final assistant message must start with a thinking block" when thinking is on mid tool loop.
+function endsInUnsignedToolLoop(messages) {
+  const lastUser = messages[messages.length - 1];
+  const lastAssistant = messages[messages.length - 2];
+  const inToolLoop = lastUser?.role === 'user' && toAnthropicBlocks(lastUser.content).some(b => b.type === 'tool_result');
+  const first = lastAssistant?.role === 'assistant' ? toAnthropicBlocks(lastAssistant.content)[0] : null;
+  return Boolean(inToolLoop && first && first.type !== 'thinking' && first.type !== 'redacted_thinking');
+}
+
 function healAnthropicPayload(payload) {
   const notes = [];
   if (!payload || !Array.isArray(payload.messages)) return { payload, changed: false, notes };
-
-  // Claude Code sends its output style and similar instructions as a turn with role "system"
-  // inside messages. The filter below keeps user and assistant turns only, so that turn would be
-  // dropped with them. Fold it into the top-level system prompt first, in order.
-  const kept = [];
-  const folded = [];
+  // Anthropic has no system role inside messages. Its text joins the next user turn (else the previous
+  // one) after the other blocks, because a tool_result must stay first in its turn.
+  const src = [];
+  let pendingSystem = [];
+  const withSystem = (m) => ({ ...m, content: [...toAnthropicBlocks(m.content), ...pendingSystem] });
   for (const m of payload.messages) {
-    if (m && (m.role === 'system' || m.role === 'developer')) {
-      const text = typeof m.content === 'string'
-        ? m.content
-        : (m.content || []).filter(p => p && p.type === 'text').map(p => p.text).join('\n');
-      if (text.trim()) folded.push(text);
+    if (m?.role === 'system') {
+      const text = toAnthropicBlocks(m.content).filter(b => b.type === 'text' && !isBlankText(b)).map(b => b.text).join('\n');
+      if (text) pendingSystem.push({ type: 'text', text: `[system] ${text}` });
       continue;
     }
-    kept.push(m);
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+    if (m.role === 'user' && pendingSystem.length) { src.push(withSystem(m)); pendingSystem = []; continue; }
+    src.push(m);
   }
-  if (folded.length) {
-    const add = folded.join('\n\n');
-    const cur = typeof payload.system === 'string' ? payload.system
-      : Array.isArray(payload.system)
-        ? payload.system.map(s => (typeof s === 'string' ? s : s.text || s.content || '')).filter(Boolean).join('\n\n')
-        : '';
-    payload = { ...payload, system: cur ? `${cur}\n\n${add}` : add };
-    notes.push('folded system turns into the system prompt');
+  if (pendingSystem.length) {
+    const i = src.findLastIndex(m => m.role === 'user');
+    if (i >= 0) src[i] = withSystem(src[i]);
+    else src.unshift({ role: 'user', content: pendingSystem });
   }
+  const hadSystem = payload.messages.some(m => m?.role === 'system');
+  if (hadSystem) notes.push('folded system messages into user turns');
+  let changed = hadSystem || src.length !== payload.messages.length;
 
-  const src = kept.filter(m => m && (m.role === 'user' || m.role === 'assistant'));
-  let changed = src.length !== payload.messages.length;
+  let system = payload.system;
+  if (Array.isArray(system) && system.some(isBlankText)) {
+    system = system.filter(b => !isBlankText(b));
+    changed = true;
+    notes.push('dropped empty text blocks');
+  }
+  const dropSystem = Array.isArray(system) ? !system.length : typeof system === 'string' && !system.trim();
+  if (dropSystem) changed = true;
 
-  // Step 0: drop thinking blocks with fake signatures; merge adjacent user turns (so a tool_result split
-  // into a later turn can still be matched with its tool_use).
+  // Step 0: drop thinking blocks with fake signatures and empty text blocks; rewrite foreign tool ids;
+  // merge adjacent user turns (so a tool_result split into a later turn can still be matched with its tool_use).
   const msgs = [];
+  const emptyTurn = () => ({ role: 'user', content: [{ type: 'text', text: '(empty)' }] });
+  let emptyUser = false;
   for (const m of src) {
     let content = m.content;
     if (m.role === 'assistant' && Array.isArray(content)) {
@@ -1697,11 +1884,31 @@ function healAnthropicPayload(payload) {
         notes.push('stripped placeholder-signed thinking blocks');
         content = kept;
       }
-      if (!content.length) {
+    }
+    if (Array.isArray(content)) {
+      const kept = [];
+      let renamed = false;
+      for (const b of content) {
+        if (isBlankText(b)) continue;
+        if (b?.type === 'tool_use' && b.id && safeToolId(b.id) !== b.id) { kept.push({ ...b, id: safeToolId(b.id) }); renamed = true; }
+        else if (b?.type === 'tool_result' && b.tool_use_id && safeToolId(b.tool_use_id) !== b.tool_use_id) { kept.push({ ...b, tool_use_id: safeToolId(b.tool_use_id) }); renamed = true; }
+        else kept.push(b);
+      }
+      if (kept.length !== content.length) notes.push('dropped empty text blocks');
+      if (renamed) notes.push('sanitized foreign tool ids');
+      if (renamed || kept.length !== content.length) {
         changed = true;
-        continue;
+        content = kept;
       }
     }
+    if (!toAnthropicBlocks(typeof content === 'string' ? content.trim() : content).length) {
+      // An emptied user turn still holds its place between two assistant turns, or at the end.
+      changed = true;
+      if (m.role === 'user') emptyUser = true;
+      continue;
+    }
+    if (emptyUser && m.role === 'assistant' && msgs[msgs.length - 1]?.role !== 'user') msgs.push(emptyTurn());
+    emptyUser = false;
     const last = msgs[msgs.length - 1];
     if (m.role === 'user' && last && last.role === 'user') {
       last.content = [...toAnthropicBlocks(last.content), ...toAnthropicBlocks(content)];
@@ -1709,6 +1916,42 @@ function healAnthropicPayload(payload) {
       continue;
     }
     msgs.push({ ...m, content });
+  }
+  if (emptyUser && msgs[msgs.length - 1]?.role !== 'user') msgs.push(emptyTurn());
+
+  // Step 0b: an upstream that reuses an id (Kimi `functions.Bash:0`) leaves one id on two tool_use
+  // blocks, which Anthropic refuses. A later use gets a suffix, and so does its result in the next turn.
+  const allIds = new Set(msgs.flatMap(m => toAnthropicBlocks(m.content).filter(b => b.type === 'tool_use' && b.id).map(b => b.id)));
+  const usedIds = new Set();
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i].role !== 'assistant' || !Array.isArray(msgs[i].content)) continue;
+    const resultIds = new Map();
+    let renamed = false;
+    const content = msgs[i].content.map(b => {
+      if (b?.type !== 'tool_use' || !b.id) return b;
+      let id = b.id;
+      if (usedIds.has(id)) {
+        let n = 2;
+        while (allIds.has(`${b.id}_${n}`)) n++;
+        id = `${b.id}_${n}`;
+        allIds.add(id);
+        renamed = true;
+      }
+      usedIds.add(id);
+      resultIds.set(b.id, [...(resultIds.get(b.id) || []), id]);
+      return id === b.id ? b : { ...b, id };
+    });
+    if (!renamed) continue;
+    msgs[i] = { ...msgs[i], content };
+    const next = msgs[i + 1];
+    if (next?.role === 'user' && Array.isArray(next.content)) {
+      msgs[i + 1] = { ...next, content: next.content.map(b => {
+        const id = b?.type === 'tool_result' ? resultIds.get(b.tool_use_id)?.shift() : undefined;
+        return id && id !== b.tool_use_id ? { ...b, tool_use_id: id } : b;
+      }) };
+    }
+    changed = true;
+    notes.push('deduplicated repeated tool_use ids');
   }
 
   // Steps 1-3: pair up tool_use / tool_result.
@@ -1765,15 +2008,13 @@ function healAnthropicPayload(payload) {
   }
 
   let body = { ...payload, messages: out };
+  if (dropSystem) delete body.system;
+  else if (system !== payload.system) body.system = system;
 
   // Step 5: thinking + an in-progress tool loop whose last assistant turn doesn't open with thinking.
   const thinkingOn = payload.thinking && payload.thinking.type && payload.thinking.type !== 'disabled';
   if (thinkingOn) {
-    const lastUser = out[out.length - 1];
-    const lastAssistant = out[out.length - 2];
-    const inToolLoop = lastUser?.role === 'user' && toAnthropicBlocks(lastUser.content).some(b => b.type === 'tool_result');
-    const first = lastAssistant?.role === 'assistant' ? toAnthropicBlocks(lastAssistant.content)[0] : null;
-    if (inToolLoop && first && first.type !== 'thinking' && first.type !== 'redacted_thinking') {
+    if (endsInUnsignedToolLoop(out)) {
       body = { ...body };
       delete body.thinking;
       changed = true;
@@ -1929,6 +2170,7 @@ function normalizeUpstream(parsed, outFormat) {
   for (const tc of smartToolCalls(node)) ev.tools.push(chunkToolFull(tc));
   const f = smartFinish(parsed, choice);
   if (f) ev.finish = canonFinish(f);
+  if (ev.finish === 'error') { ev.finish = null; ev.error = `Upstream finished with ${f}`; }
   return ev;
 }
 
@@ -2096,6 +2338,17 @@ function rand(n = 6) {
   return s.slice(0, n);
 }
 
+// Anthropic takes tool ids matching ^[a-zA-Z0-9_-]+$ only (Kimi sends "functions.Read:0"). The map must
+// stay pure: a replayed history has to give the same id, and the hash keeps "a.b" and "a:b" apart.
+function safeToolId(id) {
+  const s = String(id ?? '');
+  if (!s) return `toolu_${rand(24)}`;
+  if (/^[a-zA-Z0-9_-]+$/.test(s)) return s;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return `${s.replace(/[^a-zA-Z0-9_-]/g, '_')}_${(h >>> 0).toString(36)}`;
+}
+
 function anthropicStopReason(canonical, hasTools) {
   if (canonical === 'length') return 'max_tokens';
   if (hasTools) return 'tool_use';
@@ -2189,7 +2442,7 @@ function createAnthropicStream(emit, model, opts = {}) {
         const fixed = vocab ? vocab.name(tc.name) : tc.name;
         const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
         st = {
-          index: nextIndex++, id: tc.id || `toolu_${rand(24)}`, name: fixed || 'tool', closed: false,
+          index: nextIndex++, id: safeToolId(tc.id), name: fixed || 'tool', closed: false,
           // Shortened names keep caller's schema; ToolSearch query aliases still need restoring.
           buffered: '', held: Boolean(vocab && ((fixed && fixed !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name)))
         };
@@ -2254,7 +2507,7 @@ function buildAnthropicMessage({ model, think, text, tools, finish, prompt, comp
     // The name is written in the vocabulary the caller declared. A name it already uses is not
     // touched, so the whole layer costs nothing on a turn where the model agreed with the list.
     const fixed = repairToolCall(tc, vocab);
-    content.push({ type: 'tool_use', id: tc.id || `toolu_${rand(24)}`, name: fixed.name, input: parseArgs(fixed.args) });
+    content.push({ type: 'tool_use', id: safeToolId(tc.id), name: fixed.name, input: parseArgs(fixed.args) });
   }
   if (!content.length) content.push({ type: 'text', text: '' });
   const p = prompt || 0;
@@ -2614,7 +2867,7 @@ function vertexUsage(prompt, completion, cached, reasoning) {
   return u;
 }
 
-function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig, ids = false }) {
+function buildVertexMessage({ model, think, text, tools, finish, prompt, completion, cached, reasoning, sig, ids = false, vocab = null }) {
   const parts = [];
   const thinking = (think || []).join('');
   if (thinking) {
@@ -2625,7 +2878,8 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
   const body = (text || []).join('');
   if (body) parts.push({ text: body });
   for (const tc of (tools || [])) {
-    const part = { functionCall: { ...(ids && tc.id ? { id: tc.id } : {}), name: tc.name || 'tool', args: parseArgs(tc.args) } };
+    const args = vocab && typeof tc.args === 'string' ? vocab.args(tc.name, tc.args) : tc.args;
+    const part = { functionCall: { ...(ids && tc.id ? { id: tc.id } : {}), name: tc.name || 'tool', args: parseArgs(args) } };
     const tsig = tc.sig || lookupToolSignature(tc.id);
     if (tsig) part.thoughtSignature = tsig;
     parts.push(part);
@@ -2639,7 +2893,7 @@ function buildVertexMessage({ model, think, text, tools, finish, prompt, complet
 }
 
 // ids: name each functionCall, as Code Assist does. Plain Vertex has no call id.
-function createVertexStream(emit, model, { ids = false } = {}) {
+function createVertexStream(emit, model, { ids = false, vocab = null } = {}) {
   const cand = (parts) => emit(null, { candidates: [{ content: { role: 'model', parts }, index: 0 }], modelVersion: model });
   // Tool args arrive from OpenAI/Anthropic as deltas; Vertex needs complete functionCalls -> buffer them, emit at the end.
   const tools = new Map();
@@ -2666,7 +2920,8 @@ function createVertexStream(emit, model, { ids = false } = {}) {
       const parts = [...tools.values()]
         .filter(t => t.name)
         .map(t => {
-          const part = { functionCall: { ...(ids && t.id ? { id: t.id } : {}), name: t.name, args: parseArgs(t.args || '{}') } };
+          const args = vocab ? vocab.args(t.name, t.args || '{}') : (t.args || '{}');
+          const part = { functionCall: { ...(ids && t.id ? { id: t.id } : {}), name: t.name, args: parseArgs(args) } };
           const tsig = t.sig || lookupToolSignature(t.id);
           if (tsig) part.thoughtSignature = tsig;
           return part;
@@ -2691,10 +2946,10 @@ function codeAssistTrace() {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 
-function createCodeAssistStream(emit, model) {
+function createCodeAssistStream(emit, model, { vocab = null } = {}) {
   const traceId = codeAssistTrace();
   const responseId = `agy-${traceId}`;
-  return createVertexStream((e, d) => emit(e, d?.error ? d : { response: { ...d, responseId }, traceId }), model, { ids: true });
+  return createVertexStream((e, d) => emit(e, d?.error ? d : { response: { ...d, responseId }, traceId }), model, { ids: true, vocab });
 }
 
 function buildCodeAssistMessage(args) {

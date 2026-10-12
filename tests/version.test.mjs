@@ -1,5 +1,5 @@
 // The running version and the update notice. The registry is a local server, never npm.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +15,10 @@ async function registry(handler) {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   return { url: `http://127.0.0.1:${server.address().port}/llm-switcher/latest`, hits: () => hits, close: () => server.close() };
 }
-const tmpState = () => fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-version-'));
+// Every state dir is removed after the file, also the ones a failed test did not reach.
+const made = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
+const tmpState = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-version-')); made.push(d); return d; };
 
 test('the current version is the one in package.json', () => {
   assert.equal(CURRENT_VERSION, pkg.version);

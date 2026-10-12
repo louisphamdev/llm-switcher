@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stopChild, reapDir, reapDirSync, onAbnormalExit } from './helpers.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -39,6 +40,11 @@ export function baselineConfig(port, blindfoldPort, upstreamBase) {
 export async function startDashboardFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsw-dashboard-'));
   const cfgPath = path.join(dir, 'config.json');
+  let interceptor = null;
+  let proxy = null;
+  // A run that ends before stop() (a signal, a failed start) still stops the children and an
+  // interceptor the gateway started detached, and removes the dir.
+  const cancelExitReap = onAbnormalExit(() => reapDirSync(dir, [proxy?.pid, interceptor?.pid]));
   const received = [];
   // 'ok' answers like a healthy provider; 'deny' answers 401; 'down' answers 503.
   const upstream = { mode: 'ok', received, models: ['up-alpha', 'up-beta', 'up-gamma'], latest: '99.0.0' };
@@ -62,6 +68,23 @@ export async function startDashboardFixture() {
     });
   });
   await new Promise(r => upstreamServer.listen(0, '127.0.0.1', r));
+
+  async function stop() {
+    cancelExitReap();
+    // The gateway first: once it is gone it can start no interceptor.
+    await stopChild(proxy);
+    await stopChild(interceptor);
+    upstreamServer.close();
+    upstreamServer.closeAllConnections?.();
+    // A tool set change can start a detached interceptor of its own; stop the one the gateway recorded.
+    try {
+      const { pid } = JSON.parse(fs.readFileSync(path.join(dir, 'blindfold.json'), 'utf8'));
+      if (Number.isInteger(pid) && pid !== interceptor?.pid) process.kill(pid);
+    } catch { /* none was started */ }
+    // One it had not recorded yet still names the dir on its command line.
+    await reapDir(dir);
+  }
+
   const upstreamBase = `http://127.0.0.1:${upstreamServer.address().port}`;
 
   const port = await freePort();
@@ -96,7 +119,7 @@ export async function startDashboardFixture() {
   // The gateway starts an interceptor of its own when it finds none on the port. This one is up
   // first and answers the identity proof with this gateway's port and tool set, so nothing real
   // is spawned.
-  const interceptor = spawn(process.execPath, ['--input-type=module', '-e', `
+  interceptor = spawn(process.execPath, ['--input-type=module', '-e', `
     const s = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'state.mjs')).href)});
     const http = await import('node:http');
     s.ensureAdminToken();
@@ -112,11 +135,11 @@ export async function startDashboardFixture() {
   for (;;) {
     const probe = await fetch(`http://127.0.0.1:${blindfoldPort}/?challenge=probe`).catch(() => null);
     if (probe?.ok) break;
-    if (Date.now() > deadline) { interceptor.kill(); throw new Error('the stand-in interceptor never came up'); }
+    if (Date.now() > deadline) { await stop(); throw new Error('the stand-in interceptor never came up'); }
     await new Promise(r => setTimeout(r, 100));
   }
 
-  const proxy = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(port)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  proxy = spawn(process.execPath, [path.join(ROOT, 'proxy.mjs'), '--port', String(port)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proxy.stdout.on('data', d => { log += d; });
   proxy.stderr.on('data', d => { log += d; });
@@ -125,7 +148,7 @@ export async function startDashboardFixture() {
     try { started = (await fetch(`http://127.0.0.1:${port}/health`)).ok; } catch { /* not listening yet */ }
     if (!started) await new Promise(r => setTimeout(r, 100));
   }
-  if (!started) { proxy.kill(); interceptor.kill(); throw new Error(`gateway did not start:\n${log}`); }
+  if (!started) { await stop(); throw new Error(`gateway did not start:\n${log}`); }
 
   const adminToken = () => fs.readFileSync(path.join(dir, 'admin.token'), 'utf8').trim();
   return {
@@ -153,17 +176,6 @@ export async function startDashboardFixture() {
       headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 64, messages: [{ role: 'user', content: 'hello from the test' }] })
     }).then(async r => ({ status: r.status, text: await r.text() })),
-    async stop() {
-      interceptor.kill();
-      proxy.kill();
-      upstreamServer.close();
-      upstreamServer.closeAllConnections?.();
-      // A tool set change can start a detached interceptor of its own; stop the one the gateway recorded.
-      try {
-        const { pid } = JSON.parse(fs.readFileSync(path.join(dir, 'blindfold.json'), 'utf8'));
-        if (Number.isInteger(pid) && pid !== interceptor.pid) process.kill(pid);
-      } catch { /* none was started */ }
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    stop
   };
 }

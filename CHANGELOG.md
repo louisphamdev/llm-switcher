@@ -1,5 +1,42 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.12 — 2026-10-11
+
+- **Reasoning from an aborted turn.** In a Codex request, reasoning that waits for an assistant turn is dropped at the next user message. Separate reasoning items are joined with a newline.
+- **Token counts with separators.** A context overflow message with `131,072`, `131.072`, `131 072` or `131_072` gives the full number to Claude Code. A message without numbers keeps the plain form.
+- **Context overflow over WebSocket.** A Codex turn on WebSocket fails with the code `context_length_exceeded`, the same as on HTTP.
+- **Goal check and images.** The goal-check request to a chat upstream uses the same image retry as other requests.
+- **Output limit cache.** The output limit comes only from the cache entry of the same profile, and only when the entry is less than one hour old. The cache key ignores the case of scheme and host and a trailing slash. A new model list is merged per model, so a list with only output limits keeps the cached windows. A cached output limit is kept only while the newest list still states it.
+- **System messages on the direct Anthropic route.** A `system` message inside `messages` is no longer lost. Its text goes into the next user turn, or into the previous one if no user turn follows, with the prefix `[system] `.
+- **Gemini `_placeholder` in tool calls.** If the model fills the `_placeholder` property that the proxy added, the proxy removes it from the arguments. This applies to stream and non-stream answers for every client format, Code Assist (agy) included, and only where the proxy added the property.
+- **Test temp files.** The tests delete all their temp directories, also when a test fails. `npm test` deletes the `node-compile-cache` directory that npm made at the start of the run.
+- **`replayReasoning` documentation.** The README files now say that `reasoning_content` goes out only on a request with thinking on.
+
+## Release 1.6.11 — 2026-10-11
+
+- **Output limit.** The proxy keeps the output limit of each model from the `/models` list of the profile (`max_output_tokens` or `top_provider.max_completion_tokens`) in `model-windows.json`. If the client asks for more tokens than this limit, the proxy sends the limit. This applies to `max_tokens`, `max_completion_tokens` and `maxOutputTokens`. If the limit is not known, the value does not change. The limit does not apply to the anthropic-to-anthropic passthrough (direct mode, outFormat `anthropic`, and the native goal-check request). These requests go to the upstream unchanged.
+- **Images to a text-only chat model.** If a chat upstream refuses an image with HTTP 400, the proxy sends the request one more time. In that request, each image is the text `[image omitted: this model does not accept images]`. The retry happens in each request. The proxy remembers nothing between requests.
+- **Test cleanup.** The browser tests and the gateway tests stop the gateway, the stand-in interceptor, an interceptor that the gateway started, and Chromium. They also delete their temp directories. This occurs also when a test fails or the test process gets `SIGTERM`, `SIGINT` or `SIGHUP`.
+
+## Release 1.6.10 — 2026-10-11
+
+- **`reasoning_content` replay.** On assistant tool-call turns, `auto` mode sends the earlier thinking as `reasoning_content`. `native` mode sends it only when the profile sets `replayReasoning: true`, because a strict OpenAI-compatible server can refuse the field. `off` mode never sends it.
+- **Codex to Anthropic with thinking.** If an open tool loop has no signed thinking, the request drops `thinking`. Anthropic refused this request with HTTP 400.
+- **Gemini schema and turn shape.** A nested object with no properties gets an optional `_placeholder` property. An untyped `const` becomes a string. Tool output with keys that start with `$` is wrapped as `{result: ...}`. A request never ends on a model turn: the proxy adds a user turn `Continue.`.
+- **Schema sanitizer.** Keywords with a `null` value and `pattern` values with lookaround are removed.
+- **Long tool names from Codex.** Names longer than 64 characters use the hashed shortener, so two long names do not collide.
+- **Repeated tool ids.** On the direct Anthropic route, a repeated `tool_use` id gets a suffix (`_2`, `_3`), and the matching `tool_result` changes with it.
+- **Context overflow errors.** Anthropic clients receive `invalid_request_error` with a message that starts with `prompt is too long`. Responses clients receive the code `context_length_exceeded`.
+
+## Release 1.6.9 — 2026-10-11
+
+- **Compaction keeps the tools.** A Codex compaction turn with tool history now keeps the `tools` list and sets `tool_choice` to `none`. Before, Anthropic and OpenAI chat upstreams refused this turn with HTTP 400.
+- **Foreign tool ids.** Tool ids that do not match `^[a-zA-Z0-9_-]+$` (for example `functions.Read:0`) are rewritten before they go to Anthropic. The rewrite is deterministic, so a replayed history gives the same id.
+- **Empty text blocks.** The direct Anthropic route removes empty `system` blocks and empty text blocks. Anthropic refused them with HTTP 400.
+- **Cut streams.** If an upstream stream closes without a finish reason and without `[DONE]`, the client receives an error. Before, the client received a completed turn with a partial tool call.
+- **Gemini `MALFORMED_FUNCTION_CALL`.** This finish reason is now an error, not an empty turn.
+- **Empty tool arguments.** An empty arguments string becomes `{}`, not `{"raw":""}`.
+
 ## Release 1.6.8 — 2026-10-09
 
 - **Reorganized Sidebar Navigation by Frequency of Use:** Reordered sidebar navigation to align strictly with developer operational workflows: 1. `Routes & Profiles` (daily configuration & profile switching), 2. `Request Inspector` (live request monitoring & debugging), 3. `Model Catalog` (model discovery & testing), 4. `System Doctor` (health checks, port conflicts & shims), 5. `Goal Check` (agent task completion verification & veto), 6. `Idle Compaction` (idle prefix compaction & cache metrics), and 7. `Docs & Guide` (reference manual & technical guides at the bottom of navigation).

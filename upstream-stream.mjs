@@ -1,11 +1,13 @@
 // SSE dispatches one event at a blank line; data fields are joined with newlines.
 // Vertex also sends bare JSON lines. Keep both framings without parsing data fields separately.
-export async function* readUpstreamPayloads(upstreamRes) {
+// `state.done` turns true on an OpenAI [DONE] line, which ends a stream cleanly even without a finish reason.
+export async function* readUpstreamPayloads(upstreamRes, state = {}) {
   const reader = upstreamRes.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '', data = [], finished = false;
   const parse = value => {
     const text = value.trim();
+    if (text === '[DONE]') state.done = true;
     if (!text || text === '[DONE]') return null;
     return JSON.parse(text);
   };

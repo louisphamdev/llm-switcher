@@ -11,7 +11,8 @@ import { createFrameReader } from './blindfold/wsframe.mjs';
 import {
   OUT_FORMATS, parseToIR, emitUpstreamBody, irToAnthropicBody, createUpstreamNormalizer, createCollector,
   createThinkTagSplitter, splitThinkTags, healAnthropicPayload, estimateTokens, THINKING_MODES, VALID_EFFORTS,
-  toGeminiSchema, isAntigravityModel,
+  geminiPaddedTools, withGeminiPlaceholderStrip,
+  toGeminiSchema, isAntigravityModel, refusesImageInput, omitChatImages,
   createAnthropicStream, createChatStream, createResponsesStream, createVertexStream,
   buildAnthropicMessage, buildChatMessage, buildResponsesMessage, buildVertexMessage,
   createCodeAssistStream, buildCodeAssistMessage
@@ -26,7 +27,7 @@ import {
   codexModelEntry,
   contractLabSettings, STATE_DIR, stopRecordedBlindfold
 } from './state.mjs';
-import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows } from './windows.mjs';
+import { parseModelWindows, resolveProfileWindows, readLocalCodexWindows, windowsCacheKey, cachedProfileWindows } from './windows.mjs';
 import { createToolVocab, NULL_TOOL_VOCAB, toolNameMapForIR } from './toolvocab.mjs';
 import { readUpstreamPayloads } from './upstream-stream.mjs';
 import { compactionResponse, emitCompaction, expandGatewayCompactions, collectCompaction } from './compaction.mjs';
@@ -378,15 +379,38 @@ function vertexStatus(status) {
   }
 }
 
+// A chat upstream names an overflow its own way; a 429 about tokens per minute is a rate limit, not this.
+const CONTEXT_OVERFLOW_RE = /maximum context length|context[_ ]length[_ ]exceeded|prompt is too long|exceeds? the (?:model'?s? )?context window/i;
+
+function isContextOverflow(status, message) {
+  return status !== 429 && status < 500 && CONTEXT_OVERFLOW_RE.test(String(message || ''));
+}
+
+// Claude Code compacts on "prompt is too long: N tokens > M maximum", so the numbers lead when the upstream names them.
+// A count may group its digits ("131,072", "131.072", "131 072", "131_072"); the group form is tried first.
+const TOKEN_COUNT = String.raw`(\d{1,3}(?:[,. _]\d{3})+(?!\d)|\d+)`;
+const MAX_TOKENS_RE = new RegExp(String.raw`(?:maximum context length|context window|limit) (?:is |of )?` + TOKEN_COUNT, 'i');
+const ASKED_TOKENS_RE = new RegExp(String.raw`(?:requested|resulted in|prompt (?:is|has|contains)|input (?:is|has)) (?:about )?` + TOKEN_COUNT, 'i');
+
+function promptTooLongMessage(message) {
+  if (/^prompt is too long/i.test(message)) return message;
+  const max = message.match(MAX_TOKENS_RE)?.[1]?.replace(/\D/g, '');
+  const asked = message.match(ASKED_TOKENS_RE)?.[1]?.replace(/\D/g, '');
+  return max && asked ? `prompt is too long: ${asked} tokens > ${max} maximum (${message})` : `prompt is too long: ${message}`;
+}
+
 // Each SDK parses errors in its own shape; Claude Code relies on error.type + retry-after to decide retries.
 function sendClientError(res, clientFormat, status, message, headers = {}) {
   let body;
+  const overflow = isContextOverflow(status, message);
   if (clientFormat === 'anthropic') {
-    body = { type: 'error', error: { type: anthropicErrorType(status), message } };
+    body = overflow
+      ? { type: 'error', error: { type: 'invalid_request_error', message: promptTooLongMessage(String(message)) } }
+      : { type: 'error', error: { type: anthropicErrorType(status), message } };
   } else if (clientFormat === 'vertex' || clientFormat === 'codeassist') {
     body = { error: { code: status, message, status: vertexStatus(status) } };
   } else {
-    body = { error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', code: String(status) } };
+    body = { error: { message, type: status >= 500 ? 'server_error' : 'invalid_request_error', code: overflow ? 'context_length_exceeded' : String(status) } };
   }
   sendJson(res, status, body, headers);
 }
@@ -476,15 +500,18 @@ function upstreamEndpoint(profile, outFormat, model, stream, req) {
 // declared none pays nothing and a turn where the model agreed with the list changes nothing.
 function toolVocabFor(ir, outFormat) {
   if (!ir || typeof ir !== 'object') return NULL_TOOL_VOCAB;
-  if (!ir._vocab) ir._vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
+  if (!ir._vocab) {
+    const vocab = createToolVocab(ir.tools, { allowHyphens: outFormat !== 'vertex', names: [...toolNameMapForIR(ir).forward.keys()] });
+    ir._vocab = withGeminiPlaceholderStrip(vocab, ir._geminiPadded);
+  }
   return ir._vocab;
 }
 
 function clientRenderer(clientFormat, res, model, opts = {}) {
   if (clientFormat === 'anthropic') return createAnthropicStream((e, d) => sendSSE(res, e, d), model, opts);
   if (clientFormat === 'responses') return createResponsesStream((e, d) => sendSSE(res, e, d), model, opts);
-  if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model);
-  if (clientFormat === 'codeassist') return createCodeAssistStream((e, d) => sendSSE(res, null, d), model);
+  if (clientFormat === 'vertex') return createVertexStream((e, d) => sendSSE(res, null, d), model, opts);
+  if (clientFormat === 'codeassist') return createCodeAssistStream((e, d) => sendSSE(res, null, d), model, opts);
   return createChatStream((e, d) => sendSSE(res, null, d), model, opts);
 }
 
@@ -763,7 +790,7 @@ async function maybeCompactIdle(req, clientFormat, payload, ir, profile, profile
     const summaryModel = mapModel(policy.model, profile, clientFormat);
     const summaryFormat = resolveOutFormat(profile, summaryModel);
     askSummary({ ir: prefixIR, policy, profile, model: summaryModel,
-      build: (prof, model, summaryIR) => buildUpstreamRequest(prof, summaryFormat, summaryIR, model, req),
+      build: (prof, model, summaryIR) => buildUpstreamRequest(prof, summaryFormat, summaryIR, model, req, null, profileKey),
       onDiagnostic: ({ code, status }) => console.warn(`[llm-switcher] idle compact ${key.slice(0, 12)}: ${code}${status ? ` (${status})` : ''}`),
     }).then(summary => {
       if (!summary) return;
@@ -810,20 +837,46 @@ function resolveThinkingEffort(profile, slot, mappedModel) {
   return profile?.thinkingEffort || 'auto';
 }
 
-function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null) {
+// The output limit this profile's own model list names for this model, or 0 when no fresh cached
+// list names one. The cache is filled by /v1/models; this only reads it.
+function modelOutputLimit(profileKey, profile, mappedModel) {
+  if (!profile?.baseURL || !mappedModel) return 0;
+  const output = Number(cachedProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL))[mappedModel]?.output);
+  return output > 0 ? output : 0;
+}
+
+function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = null, profileKey = null) {
   const effort = resolveThinkingEffort(profile, slot, mappedModel);
   const upBody = emitUpstreamBody(outFormat, ir, mappedModel, {
     thinkingMode: profile.thinkingMode,
     thinkingEffort: effort,
+    replayReasoning: profile.replayReasoning === true,
+    maxOutputTokens: modelOutputLimit(profileKey, profile, mappedModel),
   });
   if (upBody?.tools && Array.isArray(upBody.tools)) {
     upBody.tools = cleanSchemaDeep(upBody.tools);
     if (outFormat === 'openai-chat' && isAntigravityModel(mappedModel)) {
       upBody.tools = geminiSafeTools(upBody.tools);
     }
+    // Read by toolVocabFor when the answer is rendered: the arguments lose the keys padding added.
+    if (outFormat === 'vertex' || (outFormat === 'openai-chat' && isAntigravityModel(mappedModel))) ir._geminiPadded = geminiPaddedTools(upBody);
   }
   const { url, headers } = upstreamEndpoint(profile, outFormat, mappedModel, ir.stream, req);
   return { url, headers, upBody };
+}
+
+// Sends the upstream request. A chat 400 that says the model takes no images is retried once with
+// every image replaced by text. The status arrives before any byte goes to the client, so the client
+// sees only the retry's answer. Nothing is remembered: a false refusal costs one request, not the model.
+async function fetchUpstream(url, headers, upBody, signal, outFormat, profileKey, mappedModel) {
+  const send = () => fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal });
+  const res = await send();
+  const hasImage = outFormat === 'openai-chat' && upBody.messages?.some(m => Array.isArray(m?.content) && m.content.some(p => p?.type === 'image_url'));
+  if (res.status !== 400 || !hasImage) return res;
+  const errText = await res.text().catch(() => '');
+  if (!refusesImageInput(errText)) return new Response(errText, { status: res.status, statusText: res.statusText, headers: res.headers });
+  console.warn(`[${profileKey}] ${mappedModel} refused ${omitChatImages(upBody)} image(s); retrying this request as text`);
+  return send();
 }
 
 // Feeds upstream stream events to a client renderer until the stream ends, fails or is aborted.
@@ -831,8 +884,9 @@ function buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot = n
 async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, signal, sink, tag }) {
   let streamError = null;
   let events = 0;
+  const framing = {};
   try {
-    for await (const parsed of readUpstreamPayloads(upstreamRes)) {
+    for await (const parsed of readUpstreamPayloads(upstreamRes, framing)) {
       events++;
       const ev = normalize(parsed);
       col.add(ev);
@@ -850,6 +904,8 @@ async function pumpStream(upstreamRes, { normalize, col, renderer, splitter, sig
       await drained(sink, signal);
     }
     if (!streamError && events === 0) streamError = 'Upstream returned an empty stream';
+    // A clean close with no finish reason is a cut: rendered as done, it hands the client half a tool call.
+    else if (!streamError && col.finish == null && !framing.done) streamError = 'Upstream stream ended before a finish reason';
   } catch (streamErr) {
     if (!signal.aborted) {
       console.error(`[${tag}] Stream error:`, streamErr.message);
@@ -953,7 +1009,7 @@ async function executeGoalCheckGate({ req, res, clientFormat, payload, ir, profi
   try {
     const nativePromise = (async () => {
       try {
-        let url, headers, body;
+        let url, headers, body, upBody = null;
         if (bifrost) {
           url = bifrostURL(profile, clientFormat, req, opts);
           headers = bifrostHeaders(req, profile);
@@ -971,16 +1027,18 @@ async function executeGoalCheckGate({ req, res, clientFormat, payload, ir, profi
           body = Buffer.from(JSON.stringify(json), 'utf8');
         } else {
           const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-          const reqData = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+          const reqData = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
           url = reqData.url;
           headers = reqData.headers;
-          body = JSON.stringify(reqData.upBody);
+          upBody = reqData.upBody;
         }
 
         const traceId = clientFormat === 'codeassist' ? null : (probeTraceId(req) || contractLab.traceFor(mappedModel));
         if (traceId) headers['x-intact-trace'] = traceId;
 
-        const upRes = await fetch(url, { method: 'POST', headers, body, signal: gateAC.signal });
+        const upRes = upBody
+          ? await fetchUpstream(url, headers, upBody, gateAC.signal, outFormat, profileKey, mappedModel)
+          : await fetch(url, { method: 'POST', headers, body, signal: gateAC.signal });
         if (!upRes.ok) {
           const errText = await upRes.text().catch(() => '');
           return { malformed: true, error: `Upstream HTTP ${upRes.status}: ${errText.slice(0, 150)}` };
@@ -1254,13 +1312,13 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       return log({ status: 400, error: 'unsupported compaction state' });
     }
     const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
 
     let upstreamRes;
     try {
-      upstreamRes = await fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal: ac.signal });
+      upstreamRes = await fetchUpstream(url, headers, upBody, ac.signal, outFormat, profileKey, mappedModel);
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}] Network error:`, fetchErr.message);
@@ -1914,7 +1972,7 @@ async function servedModels(req) {
 // still gets the cached numbers, because an entry with the template window is better than none.
 async function modelWindowsFor(profileKey, profile) {
   if (!profile?.baseURL) return {};
-  const listed = await resolveProfileWindows(STATE_DIR, `${profileKey || 'profile'}@${profile.baseURL}`, profile.baseURL, profile.apiKey);
+  const listed = await resolveProfileWindows(STATE_DIR, windowsCacheKey(profileKey, profile.baseURL), profile.baseURL, profile.apiKey);
   if (Object.keys(listed).length) return listed;
   return readLocalCodexWindows();
 }
@@ -2337,7 +2395,7 @@ function sendWsFailed(socket, model, message, status = 500, tap = null, code = n
     if (socket.writable) socket.write(encodeWsFrame(JSON.stringify(d)));
   }, model || 'main');
   renderer.start();
-  renderer.error(message, code || responsesErrorCode(status));
+  renderer.error(message, code || (isContextOverflow(status, message) ? 'context_length_exceeded' : responsesErrorCode(status)));
 }
 
 // Codex on WebSocket sends only the new items of a turn and names the turn before in
@@ -2525,13 +2583,13 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
   let answered = false; // set only after a complete answer; the half upload depends on it
   try {
     const slot = resolveSlot(requestedModel, mappedModel, profile, clientFormat);
-    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot);
+    const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
 
     let upstreamRes;
     try {
-      upstreamRes = await fetch(url, { method: 'POST', headers, body: JSON.stringify(upBody), signal: ac.signal });
+      upstreamRes = await fetchUpstream(url, headers, upBody, ac.signal, outFormat, profileKey, mappedModel);
     } catch (fetchErr) {
       if (ac.signal.aborted) return log({ status: 499, error: 'client disconnected' });
       console.error(`[${profileKey}:ws] Network error:`, fetchErr.message);

@@ -12,8 +12,11 @@ import {
   createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
-  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS
+  budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage,
+  refusesImageInput, omitChatImages, IMAGE_OMITTED_TEXT,
+  stripGeminiPlaceholders, geminiPaddedTools, withGeminiPlaceholderStrip
 } from '../formats.mjs';
+import { NULL_TOOL_VOCAB, createToolVocab } from '../toolvocab.mjs';
 import { assertValidAnthropicEvents } from './helpers.mjs';
 
 test('anthropicToIR: stream defaults to false and thinking budget_tokens is preserved', () => {
@@ -39,6 +42,50 @@ test('Chat emitter restores thinking for versioned Claude Opus model IDs', () =>
   }
 });
 
+// Only an answer that says the model takes no images may turn into a text-only retry.
+test('refusesImageInput matches the known no-image errors and nothing else', () => {
+  for (const t of [
+    '{"error":{"message":"Invalid content type. image_url is only supported by certain models."}}',
+    'Failed to deserialize the JSON body into the target type: messages[0]: unknown variant `image_url`, expected `text`',
+    'This model does not support image input',
+    'Image input is not supported for this model',
+    'Vision is not supported by deepseek-chat'
+  ]) assert.equal(refusesImageInput(t), true, t);
+  for (const t of ['', 'temperature must be between 0 and 2', 'maximum context length exceeded', 'vision model overloaded', 'not supported: tool_choice',
+    'Invalid image_url: could not decode base64', "Invalid 'messages[0].content[1].image_url.url'. Expected a base64-encoded data URL"])
+    assert.equal(refusesImageInput(t), false, t);
+});
+
+test('omitChatImages replaces every image part with text and counts them', () => {
+  const body = { messages: [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }, { type: 'text', text: 'what?' }] },
+    { role: 'assistant', content: 'a cat' },
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://x/y.png' } }] }
+  ] };
+  assert.equal(omitChatImages(body), 2);
+  assert.deepEqual(body.messages[1].content, [{ type: 'text', text: IMAGE_OMITTED_TEXT }, { type: 'text', text: 'what?' }]);
+  assert.deepEqual(body.messages[3].content, [{ type: 'text', text: IMAGE_OMITTED_TEXT }]);
+  assert.equal(IMAGE_OMITTED_TEXT, '[image omitted: this model does not accept images]');
+  assert.equal(omitChatImages(body), 0, 'nothing left to replace');
+  assert.equal(omitChatImages({}), 0);
+});
+
+// A max_tokens above the model's own output limit is refused upstream, so it is clamped when the limit is known.
+test('emitUpstreamBody clamps max tokens to a known output limit, and leaves it when the limit is unknown', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 64000, messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { maxOutputTokens: 8192 }).max_tokens, 8192);
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { thinkingMode: 'native', maxOutputTokens: 8192 }).max_completion_tokens, 8192);
+  assert.equal(emitUpstreamBody('anthropic', ir, 'm', { maxOutputTokens: 8192 }).max_tokens, 8192);
+  assert.equal(emitUpstreamBody('vertex', ir, 'm', { maxOutputTokens: 8192 }).generationConfig.maxOutputTokens, 8192);
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm').max_tokens, 64000, 'unknown limit: unchanged');
+  assert.equal(emitUpstreamBody('openai-chat', ir, 'm', { maxOutputTokens: 128000 }).max_tokens, 64000, 'under the limit: unchanged');
+  assert.equal(ir.params.maxTokens, 64000, 'the client IR is not changed');
+  const bare = anthropicToIR({ model: 'x', messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal('max_tokens' in emitUpstreamBody('openai-chat', bare, 'm', { maxOutputTokens: 8192 }), false, 'no max tokens sent: none invented');
+  assert.equal(emitUpstreamBody('anthropic', bare, 'm', { maxOutputTokens: 2048 }).max_tokens, 2048, 'the Anthropic default of 4096 is clamped too');
+});
+
 test('emitUpstreamBody: billing header stripped only for antigravity (ag/) models', () => {
   const header = 'x-anthropic-billing-header: cc_version=2.1.275.f15; cc_entrypoint=cli;';
   const fromArray = anthropicToIR({
@@ -62,39 +109,6 @@ test('healAnthropicPayload: native Anthropic passthrough keeps the billing heade
     system: [{ type: 'text', text: header }, { type: 'text', text: 'You are Claude Code.' }]
   });
   assert.equal(payload.system[0].text, header);
-});
-
-test('healAnthropicPayload: a system turn reaches the system prompt, not dropped with the other turns', () => {
-  const { payload, changed, notes } = healAnthropicPayload({
-    model: 'claude-opus-4-6',
-    messages: [{ role: 'system', content: 'You are Rem.' }, { role: 'user', content: 'hi' }]
-  });
-  assert.equal(changed, true);
-  assert.deepEqual(payload.messages.map(m => m.role), ['user']);
-  assert.equal(payload.system, 'You are Rem.');
-  assert.ok(notes.some(n => n.includes('system turns')));
-});
-
-test('healAnthropicPayload: a folded system turn keeps the system field it arrived with, in order', () => {
-  const { payload } = healAnthropicPayload({
-    model: 'claude-opus-4-6',
-    system: [{ type: 'text', text: 'Base instructions.' }],
-    messages: [
-      { role: 'system', content: [{ type: 'text', text: 'Output style: concise.' }] },
-      { role: 'user', content: 'hi' }
-    ]
-  });
-  assert.match(payload.system, /^Base instructions\./);
-  assert.match(payload.system, /Output style: concise\.$/);
-});
-
-test('healAnthropicPayload: a system turn with no text leaves the prompt alone', () => {
-  const { payload } = healAnthropicPayload({
-    model: 'claude-opus-4-6',
-    messages: [{ role: 'system', content: [] }, { role: 'user', content: 'hi' }]
-  });
-  assert.equal(payload.system, undefined);
-  assert.deepEqual(payload.messages.map(m => m.role), ['user']);
 });
 
 test('anthropicToIR: a system turn folds into the IR system prompt', () => {
@@ -462,7 +476,7 @@ test('toGeminiSchema: bare string shorthands become Schema objects (Vertex 400 f
   assert.deepEqual(toGeminiSchema('string'), { type: 'string' });
   assert.deepEqual(
     toGeminiSchema({ type: 'object', properties: { tags: { type: 'array', items: 'object' }, n: 'string' } }),
-    { type: 'object', properties: { tags: { type: 'array', items: { type: 'object', properties: {} } }, n: { type: 'string' } } }
+    { type: 'object', properties: { tags: { type: 'array', items: { type: 'object', properties: { _placeholder: { type: 'boolean', description: 'Unused. Leave unset.' } } } }, n: { type: 'string' } } }
   );
 });
 
@@ -1094,4 +1108,417 @@ test('thinkingEffort profile option overrides client effort across all upstreams
   // 5. 'auto' inherits client's original effort ('low')
   const autoChat = emitUpstreamBody('openai-chat', clientIR, 'gpt-5', { thinkingEffort: 'auto' });
   assert.equal(autoChat.reasoning_effort, 'low');
+});
+
+test('compaction_trigger with tool history keeps tools and forces tool_choice none', () => {
+  const ir = responsesToIR({
+    model: 'm', tools: [fn('Read')], text: { format: { type: 'json_object' } }, input: [
+      { role: 'user', content: 'read it' },
+      { type: 'function_call', call_id: 'c1', name: 'Read', arguments: '{"p":"a"}' },
+      { type: 'function_call_output', call_id: 'c1', output: 'data' },
+      { type: 'compaction_trigger' }
+    ]
+  });
+  assert.equal(ir.toolChoice, 'none');
+  assert.equal(ir.responseFormat, null);
+  const chat = irToChatBody(ir, 'gpt-x');
+  assert.equal(chat.tools?.length, 1);
+  assert.equal(chat.tool_choice, 'none');
+  assert.equal(chat.response_format, undefined);
+  const anthropic = irToAnthropicBody(ir, 'claude-x');
+  assert.equal(anthropic.tools?.length, 1);
+  assert.deepEqual(anthropic.tool_choice, { type: 'none' });
+  assert.ok(anthropic.messages.some(m => m.content.some(b => b.type === 'tool_use')));
+  const vertex = irToVertexBody(ir, 'gemini-x');
+  assert.equal(vertex.tools?.[0].functionDeclarations.length, 1);
+  assert.equal(vertex.toolConfig.functionCallingConfig.mode, 'NONE');
+  // With no tools at all there is nothing to switch off: tool_choice without tools is refused.
+  const bare = responsesToIR({ model: 'm', input: [{ role: 'user', content: 'hi' }, { type: 'compaction_trigger' }] });
+  assert.equal(irToChatBody(bare, 'gpt-x').tool_choice, undefined);
+  assert.equal(irToAnthropicBody(bare, 'claude-x').tool_choice, undefined);
+});
+
+test('anthropic emitters sanitize foreign tool ids consistently', () => {
+  const foreign = 'functions.Read:0';
+  const valid = /^[a-zA-Z0-9_-]+$/;
+  const history = [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: foreign, name: 'Read', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: foreign, content: 'ok' }] }
+  ];
+  const ir = anthropicToIR({ model: 'x', tools: [{ name: 'Read', input_schema: { type: 'object', properties: {} } }], messages: history });
+  const body = irToAnthropicBody(ir, 'claude-x');
+  const use = body.messages[1].content.find(b => b.type === 'tool_use');
+  assert.match(use.id, valid);
+  assert.equal(body.messages[2].content[0].tool_use_id, use.id);
+  assert.equal(irToAnthropicBody(ir, 'claude-x').messages[1].content[0].id, use.id, 'a replayed history maps identically');
+
+  const message = buildAnthropicMessage({ model: 'x', tools: [{ id: foreign, name: 'Read', args: '{}' }], finish: 'tool_calls' });
+  assert.equal(message.content[0].id, use.id);
+  const events = [];
+  const stream = createAnthropicStream((e, d) => events.push(d), 'x');
+  stream.start();
+  stream.tool({ index: 0, id: foreign, name: 'Read', args: '{}' });
+  stream.finish('tool_calls');
+  assert.equal(events.find(e => e.type === 'content_block_start').content_block.id, use.id);
+
+  const healed = healAnthropicPayload({ model: 'claude', messages: history });
+  assert.equal(healed.changed, true);
+  assert.equal(healed.payload.messages[1].content[0].id, use.id);
+  assert.equal(healed.payload.messages[2].content[0].tool_use_id, use.id);
+
+  // Two ids that differ only in an invalid character must not collide, and a valid id is kept.
+  const ids = ['a.b', 'a:b', 'a_b'].map(id => buildAnthropicMessage({ model: 'x', tools: [{ id, name: 'f', args: '{}' }] }).content[0].id);
+  assert.equal(new Set(ids).size, 3);
+  assert.equal(ids[2], 'a_b');
+  assert.match(buildAnthropicMessage({ model: 'x', tools: [{ id: '', name: 'f', args: '{}' }] }).content[0].id, valid);
+});
+
+test('healAnthropicPayload drops empty system and empty text blocks', () => {
+  const nonEmpty = msgs => msgs.every(m => typeof m.content === 'string' ? m.content.trim()
+    : m.content.length && m.content.every(b => b.type !== 'text' || b.text.trim()));
+  const alternates = msgs => msgs[0].role === 'user' && msgs.every((m, i) => !i || m.role !== msgs[i - 1].role);
+  const r = healAnthropicPayload({
+    model: 'claude', system: [{ type: 'text', text: '' }], messages: [
+      { role: 'user', content: [{ type: 'text', text: '' }, { type: 'text', text: 'hi' }] },
+      { role: 'assistant', content: [{ type: 'text', text: ' ' }, { type: 'tool_use', id: 't1', name: 'f', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'text', text: '' }] },
+      { role: 'user', content: [{ type: 'text', text: 'next' }] }
+    ]
+  });
+  assert.equal(r.changed, true);
+  assert.equal('system' in r.payload, false);
+  assert.ok(nonEmpty(r.payload.messages), JSON.stringify(r.payload.messages));
+  assert.ok(alternates(r.payload.messages), JSON.stringify(r.payload.messages));
+  assert.deepEqual(r.payload.messages.at(-1).content.map(b => b.type), ['tool_result', 'text']);
+
+  // A user turn that empties out between two assistant turns, or at the end, keeps its place.
+  const r2 = healAnthropicPayload({
+    model: 'claude', system: [{ type: 'text', text: 'sys' }, { type: 'text', text: '' }], messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: [{ type: 'text', text: '' }] },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: '' }
+    ]
+  });
+  assert.deepEqual(r2.payload.system, [{ type: 'text', text: 'sys' }]);
+  assert.ok(nonEmpty(r2.payload.messages), JSON.stringify(r2.payload.messages));
+  assert.ok(alternates(r2.payload.messages), JSON.stringify(r2.payload.messages));
+  assert.equal(r2.payload.messages.length, 5);
+  assert.equal(r2.payload.messages.at(-1).role, 'user');
+});
+
+test("parseArgs('') returns {}", () => {
+  assert.deepEqual(parseArgs(''), {});
+  assert.deepEqual(parseArgs('  \n'), {});
+  assert.deepEqual(parseArgs('{"a":1}'), { a: 1 });
+});
+
+test('Gemini MALFORMED_FUNCTION_CALL finish is an error, not stop', () => {
+  const ev = normalizeUpstream({ candidates: [{ content: { parts: [] }, finishReason: 'MALFORMED_FUNCTION_CALL' }] }, 'vertex');
+  assert.equal(ev.finish, null);
+  assert.match(String(ev.error), /MALFORMED_FUNCTION_CALL/);
+  const chat = normalizeUpstream({ choices: [{ delta: {}, finish_reason: 'malformed_function_call' }] }, 'openai-chat');
+  assert.match(String(chat.error), /malformed_function_call/i);
+});
+
+// DeepSeek/Kimi thinking mode refuse a tool step whose earlier tool-call turn lost its reasoning_content.
+test('irToChatBody replays thinking as reasoning_content on tool-call turns', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 8000, thinking: { type: 'enabled', budget_tokens: 4000 }, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: 'I should run ls', signature: 'sig' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'pwd' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: '/' }] }
+  ] });
+  for (const opts of [{ thinkingMode: 'auto' }, { thinkingMode: 'native', replayReasoning: true }]) {
+    const calls = irToChatBody(ir, 'deepseek-reasoner', opts).messages.filter(m => m.tool_calls);
+    assert.equal(calls[0].reasoning_content, 'I should run ls', opts.thinkingMode);
+    assert.equal(calls[1].reasoning_content, '', opts.thinkingMode);
+  }
+  const off = emitUpstreamBody('openai-chat', ir, 'deepseek-reasoner', { thinkingMode: 'off' });
+  assert.ok(off.messages.every(m => !('reasoning_content' in m)));
+
+  const rir = responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Plan: run ls' }], encrypted_content: 'opaque' },
+    { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'ok' }
+  ] });
+  const rb = irToChatBody(rir, 'kimi-k2-thinking', { thinkingMode: 'native', replayReasoning: true });
+  assert.equal(rb.messages.find(m => m.tool_calls).reasoning_content, 'Plan: run ls');
+});
+
+// Strict OpenAI-compatible servers may refuse the extra key, so native mode sends it only on the profile opt-in.
+test('irToChatBody native mode sends no reasoning_content without the profile opt-in', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 8000, thinking: { type: 'enabled', budget_tokens: 4000 }, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: 'I should run ls', signature: 'sig' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'pwd' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: '/' }] }
+  ] });
+  const cases = [
+    ['gpt-5', ir, { thinkingMode: 'native' }],
+    ['deepseek-reasoner', ir, { thinkingMode: 'native' }],
+    ['gpt-5', ir, { thinkingMode: 'native', replayReasoning: 'yes' }],
+    ['gpt-5', { ...ir, replayReasoning: true }, { thinkingMode: 'native' }]
+  ];
+  for (const [model, input, opts] of cases) {
+    const body = irToChatBody(input, model, opts);
+    assert.ok(body.messages.some(m => m.tool_calls), 'fixture has tool-call turns');
+    assert.ok(body.messages.every(m => !('reasoning_content' in m)), `${model} ${JSON.stringify(opts)}`);
+  }
+});
+
+test('irToAnthropicBody drops thinking for an unsigned tool loop', () => {
+  const ir = responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: [
+    { type: 'message', role: 'user', content: 'run ls' },
+    { type: 'function_call', call_id: 'c1', name: 'shell', arguments: '{"command":["ls"]}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'a.txt' }
+  ] });
+  const body = irToAnthropicBody(ir, 'claude-opus-4-6');
+  assert.equal(body.thinking, undefined);
+  assert.equal(body.messages.at(-1).content[0].type, 'tool_result');
+  const forced = irToAnthropicBody(ir, 'claude-opus-4-6', { thinkingEffort: 'high' });
+  assert.equal(forced.thinking, undefined);
+  const fresh = irToAnthropicBody(responsesToIR({ model: 'x', reasoning: { effort: 'high' }, input: 'hi' }), 'claude-opus-4-6');
+  assert.equal(fresh.thinking?.type, 'enabled');
+});
+
+test('toGeminiSchema never emits an empty nested OBJECT', () => {
+  const out = toGeminiSchema({ type: 'object', properties: {
+    env: { type: 'object', additionalProperties: { type: 'string' } },
+    list: { type: 'array', items: { type: 'object' } },
+    either: { anyOf: [{ type: 'object' }, { type: 'string' }] },
+    short: 'object'
+  } });
+  const walk = (s, nested) => {
+    if (!s || typeof s !== 'object') return;
+    if (nested && s.type === 'object') assert.ok(Object.keys(s.properties || {}).length, JSON.stringify(s));
+    for (const p of Object.values(s.properties || {})) walk(p, true);
+    if (s.items) walk(s.items, true);
+    for (const b of s.anyOf || []) walk(b, true);
+  };
+  walk(out, false);
+  assert.deepEqual(toGeminiSchema({ type: 'object' }), { type: 'object', properties: {} });
+});
+
+test('irToVertexBody wraps tool output with $ keys', () => {
+  const output = JSON.stringify({ $ref: '#/definitions/Pet', definitions: { Pet: { $id: 'p' } } });
+  const nested = JSON.stringify({ a: { b: [{ $schema: 'x' }] } });
+  const ir = { ...anthropicToIR({ model: 'x', messages: [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }, { type: 'tool_use', id: 't2', name: 'Bash', input: {} }, { type: 'tool_use', id: 't3', name: 'Bash', input: {} }] },
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 't1', content: output },
+      { type: 'tool_result', tool_use_id: 't2', content: nested },
+      { type: 'tool_result', tool_use_id: 't3', content: '{"ok":true}' }
+    ] }
+  ] }) };
+  const responses = irToVertexBody(ir, 'gemini-2.5-pro').contents.flatMap(c => c.parts).filter(p => p.functionResponse).map(p => p.functionResponse.response);
+  assert.deepEqual(responses[0], { result: output });
+  assert.deepEqual(responses[1], { result: nested });
+  assert.deepEqual(responses[2], { ok: true });
+});
+
+test('toGeminiSchema stringifies an untyped const', () => {
+  const out = toGeminiSchema({ type: 'object', properties: { flag: { const: true }, n: { const: 3 }, s: { const: 'x' } } });
+  assert.deepEqual(out.properties.flag, { enum: ['true'], type: 'string' });
+  assert.deepEqual(out.properties.n, { enum: ['3'], type: 'string' });
+  assert.deepEqual(out.properties.s, { enum: ['x'], type: 'string' });
+});
+
+test('responsesToIR keeps long colliding tool names distinct', () => {
+  const ns = `mcp__${'server_with_a_long_name_'.repeat(3)}`;
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'function_call', call_id: 'c1', namespace: ns, name: 'list_items_with_filter_b', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'ok' }
+  ], tools: [{ type: 'namespace', name: ns, tools: [
+    { type: 'function', name: 'list_items_with_filter_a', parameters: { type: 'object', properties: {} } },
+    { type: 'function', name: 'list_items_with_filter_b', parameters: { type: 'object', properties: {} } }
+  ] }] });
+  const names = ir.tools.map(t => t.name);
+  assert.equal(names.length, 2);
+  assert.notEqual(names[0], names[1]);
+  assert.ok(names.every(n => n.length <= 64 && /^[A-Za-z0-9_-]+$/.test(n)), names.join());
+  assert.equal(ir.toolMeta[names[1]].name, 'list_items_with_filter_b');
+  assert.equal(ir.messages[1].toolCalls[0].name, names[1]);
+  assert.equal(responsesToIR({ model: 'x', input: 'hi', tools: [{ type: 'function', name: 'read_file', parameters: {} }] }).tools[0].name, 'read_file');
+});
+
+test('sanitizeJsonSchema drops null keywords and lookaround patterns', () => {
+  const out = sanitizeJsonSchema({ type: 'object', required: null, description: null, properties: {
+    slug: { type: 'string', pattern: '^(?!-)[a-z-]+$' },
+    tag: { type: 'string', pattern: '(?<=#)\\w+' },
+    plain: { type: 'string', pattern: '^[a-z]+$', default: null },
+    named: { type: 'string', pattern: '^(?<year>\\d{4})$' },
+    pattern: { type: 'string', enum: ['a', null], const: null }
+  } });
+  assert.equal('required' in out, false);
+  assert.equal('description' in out, false);
+  assert.equal('pattern' in out.properties.slug, false);
+  assert.equal('pattern' in out.properties.tag, false);
+  assert.equal(out.properties.plain.pattern, '^[a-z]+$');
+  assert.equal(out.properties.plain.default, null);
+  assert.equal(out.properties.named.pattern, '^(?<year>\\d{4})$');
+  assert.deepEqual(out.properties.pattern, { type: 'string', enum: ['a', null], const: null });
+  assert.deepEqual(sanitizeJsonSchema({ type: 'object', properties: {}, default: { a: null, b: {} } }).default, { a: null, b: {} });
+});
+
+test('irToVertexBody never ends on a model turn', () => {
+  const ir = anthropicToIR({ model: 'x', messages: [
+    { role: 'user', content: 'Write a haiku' },
+    { role: 'assistant', content: 'Autumn moon' }
+  ] });
+  const body = irToVertexBody(ir, 'gemini-2.5-pro');
+  assert.equal(body.contents.at(-1).role, 'user');
+  assert.ok(body.contents.some(c => c.role === 'model' && c.parts.some(p => p.text === 'Autumn moon')), 'the prefill text is kept');
+});
+
+test('healAnthropicPayload dedupes repeated tool_use ids', () => {
+  const use = (id, cmd) => ({ type: 'tool_use', id, name: 'Bash', input: { command: cmd } });
+  const result = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text });
+  const r = healAnthropicPayload({ model: 'claude', messages: [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: [use('functions_Bash_0', 'ls')] },
+    { role: 'user', content: [result('functions_Bash_0', 'a.txt')] },
+    { role: 'assistant', content: [use('functions_Bash_0', 'pwd'), use('functions_Bash_1', 'id')] },
+    { role: 'user', content: [result('functions_Bash_0', '/'), result('functions_Bash_1', 'uid')] }
+  ] });
+  assert.equal(r.changed, true);
+  const msgs = r.payload.messages;
+  const ids = msgs.filter(m => m.role === 'assistant').flatMap(m => m.content.filter(b => b.type === 'tool_use').map(b => b.id));
+  assert.equal(new Set(ids).size, ids.length, ids.join());
+  assert.ok(ids.every(id => /^[a-zA-Z0-9_-]+$/.test(id)));
+  assert.equal(ids[0], 'functions_Bash_0');
+  // Each result still answers its own call.
+  assert.deepEqual(msgs[2].content.map(b => [b.tool_use_id, b.content]), [[ids[0], 'a.txt']]);
+  assert.deepEqual(msgs[4].content.map(b => [b.tool_use_id, b.content]), [[ids[1], '/'], [ids[2], 'uid']]);
+});
+
+// Reasoning from an aborted turn must not attach to the assistant turn after the next user message.
+test('responsesToIR drops pending reasoning at a user message and joins reasoning pieces with a newline', () => {
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'plan it' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    { type: 'message', role: 'user', content: 'start over' },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'fresh plan' }] },
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'second piece' }] },
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] });
+  const assistant = ir.messages.find(m => m.role === 'assistant');
+  assert.equal(assistant.reasoning, 'fresh plan\nsecond piece');
+  const viaString = responsesToIR({ model: 'x', input: [
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'stale plan' }] },
+    'start over',
+    { type: 'message', role: 'assistant', content: 'done' }
+  ] });
+  assert.equal(viaString.messages.find(m => m.role === 'assistant').reasoning, undefined);
+});
+
+// The direct Anthropic route has no system role inside messages; dropping the message loses its instruction.
+test('healAnthropicPayload folds a mid-conversation system message into a user turn', () => {
+  const roles = (msgs) => msgs.map(m => m.role);
+  const texts = (msgs) => JSON.stringify(msgs);
+  const alternates = (msgs) => msgs.every((m, i) => i === 0 || m.role !== msgs[i - 1].role);
+
+  const r = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'user', content: 'list files' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'system', content: 'Use British spelling from now on.' },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }] },
+    { role: 'assistant', content: 'one file' },
+    { role: 'system', content: [{ type: 'text', text: 'Be brief.' }] }
+  ] });
+  assert.equal(r.changed, true);
+  const msgs = r.payload.messages;
+  assert.ok(!msgs.some(m => m.role === 'system'), 'no system role remains');
+  assert.ok(alternates(msgs), `roles alternate: ${roles(msgs)}`);
+  assert.deepEqual(roles(msgs), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(msgs[2].content, [
+    { type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' },
+    { type: 'text', text: '[system] Use British spelling from now on.' },
+    { type: 'text', text: '[system] Be brief.' }
+  ], 'a tool_result stays first; with no user turn after it, the last text joins the previous user turn');
+  assert.ok(!texts(msgs[3]).includes('[system]'));
+
+  const only = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'system', content: 'Answer in French.' },
+    { role: 'assistant', content: 'Bonjour' }
+  ] }).payload.messages;
+  assert.deepEqual(only, [{ role: 'user', content: [{ type: 'text', text: '[system] Answer in French.' }] }, { role: 'assistant', content: 'Bonjour' }]);
+});
+
+// Vertex path: the schema is deep-copied before it is sent, and an Anthropic client streams the call.
+test('a Vertex tool padded for Gemini loses _placeholder in streamed arguments, and only where padded', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'run', input_schema: {
+    type: 'object', properties: { env: { type: 'object' }, list: { type: 'array', items: { type: 'object' } }, opts: { type: 'object', properties: { _placeholder: { type: 'string' } } } }
+  } }, { name: 'plain', input_schema: { type: 'object', properties: { a: { type: 'string' } } } }] });
+  const body = JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro')));
+  const padded = geminiPaddedTools(body);
+  assert.deepEqual([...padded.keys()], ['run'], 'only the tool with a padded node');
+  const args = { env: { A: '1', _placeholder: true }, list: [{ _placeholder: false, b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 };
+  assert.deepEqual(stripGeminiPlaceholders(args, padded.get('run')), { env: { A: '1' }, list: [{ b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 });
+
+  const events = [];
+  const r = createAnthropicStream((e, d) => events.push(d), 'm', { vocab: withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, padded) });
+  r.start();
+  const json = JSON.stringify(args);
+  r.tool({ index: 0, id: 'c1', name: 'run', args: json.slice(0, 12) });
+  r.tool({ index: 0, args: json.slice(12) });
+  r.finish('tool_calls');
+  const streamed = events.filter(d => d.delta?.type === 'input_json_delta').map(d => d.delta.partial_json).join('');
+  assert.deepEqual(JSON.parse(streamed), { env: { A: '1' }, list: [{ b: 2 }], opts: { _placeholder: 'keep' }, _placeholder: 1 });
+  assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, padded).args('plain', '{"_placeholder":true}'), '{"_placeholder":true}');
+  assert.equal(withGeminiPlaceholderStrip(NULL_TOOL_VOCAB, new Map()), NULL_TOOL_VOCAB, 'no padding, no wrapper');
+});
+
+// A vertex client gets complete functionCalls, so the strip applies when the call is written out.
+test('a vertex client gets tool-call args without the padded _placeholder, stream and non-stream', () => {
+  const declared = [{ name: 'run', parameters: { type: 'object', properties: { env: { type: 'object' }, opts: { type: 'object', properties: { _placeholder: { type: 'string' } } } } } }];
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: declared.map(t => ({ name: t.name, input_schema: t.parameters })) });
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  const vocab = withGeminiPlaceholderStrip(createToolVocab(ir.tools, { allowHyphens: false }), padded);
+  const args = JSON.stringify({ env: { A: '1', _placeholder: true }, opts: { _placeholder: 'keep' } });
+  const want = { env: { A: '1' }, opts: { _placeholder: 'keep' } };
+
+  const chunks = [];
+  const s = createVertexStream((e, d) => chunks.push(d), 'm', { vocab });
+  s.tool({ index: 0, id: 'c1', name: 'run', args: args.slice(0, 9) });
+  s.tool({ index: 0, args: args.slice(9) });
+  s.finish('tool_calls');
+  const streamed = chunks.flatMap(c => c.candidates?.[0]?.content?.parts || []).find(p => p.functionCall);
+  assert.deepEqual(streamed.functionCall.args, want);
+
+  const whole = buildVertexMessage({ model: 'm', tools: [{ index: 0, id: 'c1', name: 'run', args }], finish: 'tool_calls', vocab });
+  assert.deepEqual(whole.candidates[0].content.parts.find(p => p.functionCall).functionCall.args, want);
+});
+
+// The Vertex body names a tool without hyphens, so the strip must find the schema by either name.
+test('the placeholder strip finds a hyphenated tool by its upstream name and by its client name', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'my-tool', input_schema: { type: 'object', properties: { env: { type: 'object' } } } }] });
+  const vocab = createToolVocab(ir.tools, { allowHyphens: false, names: ['my-tool'] });
+  assert.equal(vocab.name('my_tool'), 'my-tool', 'fixture: the upstream name is the sanitized one');
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  assert.deepEqual([...padded.keys()], ['my_tool']);
+  const strip = withGeminiPlaceholderStrip(vocab, padded);
+  const args = '{"env":{"A":"1","_placeholder":true}}';
+  assert.deepEqual(JSON.parse(strip.args('my_tool', args)), { env: { A: '1' } }, 'upstream name');
+  assert.deepEqual(JSON.parse(strip.args('my-tool', args)), { env: { A: '1' } }, 'client name');
+});
+
+// A union with an object branch becomes anyOf for Gemini, and that object branch is padded too.
+test('the placeholder strip reaches a padded object inside an anyOf branch', () => {
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: 'go' }], tools: [{ name: 'run', input_schema: {
+    type: 'object', properties: { env: { oneOf: [{ type: 'object' }, { type: 'string' }] } }
+  } }] });
+  const padded = geminiPaddedTools(JSON.parse(JSON.stringify(irToVertexBody(ir, 'gemini-3-pro'))));
+  const schema = padded.get('run');
+  assert.ok(Array.isArray(schema?.properties?.env?.anyOf), 'fixture: env is an anyOf with a padded branch');
+  assert.deepEqual(stripGeminiPlaceholders({ env: { A: '1', _placeholder: true } }, schema), { env: { A: '1' } });
+  assert.deepEqual(stripGeminiPlaceholders({ env: 'plain' }, schema), { env: 'plain' });
 });

@@ -21,7 +21,8 @@ const FETCH_TIMEOUT_MS = 15000;
 
 const n = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
 
-// One entry of a provider's list -> the two windows, or null when it names none.
+// One entry of a provider's list -> the two windows, plus `output` (the most the model writes)
+// when the list names it; null when it names none.
 export function parseModelWindows(m) {
   if (!m || typeof m !== 'object') return null;
   const top = m.top_provider && typeof m.top_provider === 'object' ? m.top_provider : {};
@@ -30,8 +31,9 @@ export function parseModelWindows(m) {
   // smaller of the two windows it publishes.
   const compact = n(m.compact_window) || n(m.compaction_threshold)
     || (context && n(m.context_window) && n(m.context_window) < context ? n(m.context_window) : 0);
-  if (!context && !compact) return null;
-  return { context, compact };
+  const output = n(m.max_output_tokens) || n(top.max_completion_tokens);
+  if (!context && !compact && !output) return null;
+  return output ? { context, compact, output } : { context, compact };
 }
 
 // The list as it names the models, so a caller can look one up by the id a profile maps.
@@ -82,13 +84,40 @@ export async function resolveProfileWindows(stateDir, cacheKey, baseURL, apiKey,
   const entry = cache[cacheKey] || {};
   const fresh = entry.at && now - entry.at < ttlMs;
   if (fresh) return entry.models || {};
-  const models = await fetchProfileWindows(baseURL, apiKey);
-  if (Object.keys(models).length) {
+  const listed = await fetchProfileWindows(baseURL, apiKey);
+  if (Object.keys(listed).length) {
+    // Merged per model and per number: a list that names only an output limit keeps the cached windows.
+    // An output limit is never carried forward: the entry is stamped now, so it must be one this list states.
+    const models = {};
+    for (const [id, w] of Object.entries(entry.models || {})) {
+      const { output: _output, ...windows } = w && typeof w === 'object' ? w : {};
+      models[id] = windows;
+    }
+    for (const [id, w] of Object.entries(listed)) {
+      const merged = { ...(models[id] || {}) };
+      for (const [k, v] of Object.entries(w)) if (v > 0 || !(merged[k] > 0)) merged[k] = v;
+      models[id] = merged;
+    }
     cache[cacheKey] = { at: now, baseURL, models };
     writeWindowsCache(stateDir, cache);
     return models;
   }
   return entry.models || {};
+}
+
+// One address however it is spelled: scheme and host are case-blind, and a trailing slash adds nothing.
+export function normalizeBaseURL(baseURL) {
+  return String(baseURL || '').trim().replace(/\/+$/, '').replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, m => m.toLowerCase());
+}
+
+export function windowsCacheKey(profileKey, baseURL) {
+  return `${profileKey || 'profile'}@${normalizeBaseURL(baseURL)}`;
+}
+
+// The cached windows of one profile while they are fresh, without reading the list again.
+export function cachedProfileWindows(stateDir, cacheKey, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
+  const entry = readWindowsCache(stateDir)[cacheKey];
+  return entry?.at && now - entry.at < ttlMs ? entry.models || {} : {};
 }
 
 export function windowsCachePath(stateDir) {
