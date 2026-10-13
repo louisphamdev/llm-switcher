@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.16 — 2026-10-13
+
+- **A silent upstream stream.** The proxy now ends an upstream stream that sends no byte for 5 minutes, with an error. Before, only the default limit of the Node HTTP client stopped it. Set `LLM_SWITCHER_UPSTREAM_IDLE_MS` to change the limit.
+- **A test for a stream that ends with no finish reason.** A converted stream that ends cleanly without a finish reason gives an error, not a finished answer. A test now holds this behavior.
+
 ## Release 1.6.15 — 2026-10-13
 
 - **A message inside a tool batch.** Codex can put a notice between two tool outputs of one parallel batch. The proxy now moves the notice after the batch. Before, the next real output was replaced with a placeholder.

@@ -46,6 +46,12 @@ function startUpstream() {
       try { json = raw ? JSON.parse(raw) : null; } catch {}
       received.push({ method: req.method, url: req.url, headers: req.headers, raw, body: json });
 
+      if (req.url.startsWith('/eof/v1/chat/completions')) {
+        // A chunk of text, then a clean end with no finish_reason and no [DONE].
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: {"id":"c","choices":[{"index":0,"delta":{"content":"half an ans"}}]}\n\n');
+        return res.end();
+      }
       if (req.url.startsWith('/fail/v1/')) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: { message: 'upstream exploded' } }));
@@ -188,6 +194,7 @@ before(async () => {
       agyb: { name: 'agy on intact', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/intact/v1`, apiKey: 'sk-intact', defaultModels: { main: 'antigravity/*' } },
       agyc: { name: 'agy converted', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-chat', defaultModels: { main: 'gem/flash' } },
       agye: { name: 'agy empty slot', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/chat/v1`, apiKey: 'sk-chat', defaultModels: {} },
+      agyeof: { name: 'agy clean EOF', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/eof/v1`, apiKey: 'sk-eof', defaultModels: { main: 'gem/flash' } },
       agy500: { name: 'agy failing upstream', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/fail/v1`, apiKey: 'sk-fail', defaultModels: { main: 'gem/flash' } },
       agyf: { name: 'agy flaky lookup', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/flaky/v1`, apiKey: 'sk-flaky', defaultModels: { main: 'antigravity/*' } },
       agynf: { name: 'agy lookup 404', mode: 'convert', tool: 'agy', outFormat: 'openai-chat', baseURL: `${base}/nf/v1`, apiKey: 'sk-nf', defaultModels: { main: 'antigravity/*' } },
@@ -454,6 +461,15 @@ test('an agy profile with no main slot sends the model that agy picked', async (
   assert.equal(r.status, 200);
   await r.text();
   assert.equal(lastTo('/chat/v1/chat/completions').body.model, 'gemini-3.8-flash-high');
+});
+
+test('a converted stream that ends cleanly without a finish reason is an error, not a finished answer', async () => {
+  // router-for-me/CLIProxyAPI#6533: a clean EOF must not become finishReason STOP.
+  const r = await fetch(url('/v1internal:streamGenerateContent?alt=sse'), { method: 'POST', headers: agyHeaders({ 'x-llm-profile': 'agyeof' }), body: JSON.stringify(envelope()) });
+  const text = await r.text();
+  assert.ok(text.includes('half an ans'), text);
+  assert.ok(!/"finishReason":"STOP"/.test(text), `a cut stream ended as STOP:\n${text}`);
+  assert.match(text, /error/i);
 });
 
 test('a converted agy turn whose upstream fails gets the Code Assist error shape', async () => {

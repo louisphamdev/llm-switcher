@@ -1,8 +1,20 @@
 // SSE dispatches one event at a blank line; data fields are joined with newlines.
 // Vertex also sends bare JSON lines. Keep both framings without parsing data fields separately.
 // `state.done` turns true on an OpenAI [DONE] line, which ends a stream cleanly even without a finish reason.
+// A stream that sends no byte for `state.idleMs` ends with an error: a dead HTTP/2 session can hold it open
+// with no bytes, and the default limit of the HTTP client is not this module's to rely on.
+export const UPSTREAM_IDLE_MS = Number(process.env.LLM_SWITCHER_UPSTREAM_IDLE_MS) || 300000;
+
 export async function* readUpstreamPayloads(upstreamRes, state = {}) {
   const reader = upstreamRes.body.getReader();
+  const idleMs = state.idleMs || UPSTREAM_IDLE_MS;
+  const read = () => {
+    let timer;
+    const idle = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`upstream stream sent nothing for ${Math.round(idleMs / 1000)}s`)), idleMs);
+    });
+    return Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer));
+  };
   const decoder = new TextDecoder();
   let buffer = '', data = [], finished = false;
   const parse = value => {
@@ -20,7 +32,7 @@ export async function* readUpstreamPayloads(upstreamRes, state = {}) {
   }
   try {
     while (true) {
-      const chunk = await reader.read();
+      const chunk = await read();
       if (chunk.done) { finished = true; buffer += decoder.decode(); break; }
       buffer += decoder.decode(chunk.value, { stream: true });
       let newline;

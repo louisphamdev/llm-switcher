@@ -28,3 +28,22 @@ test('malformed JSON is surfaced and stopping consumption cancels the upstream',
   for await (const item of readUpstreamPayloads({ body })) { assert.equal(item.one, 1); break; }
   assert.equal(canceled, true);
 });
+
+test('an upstream that goes silent mid-stream ends with an error after the idle limit', async () => {
+  // A dead HTTP/2 session can hold a stream open with no bytes (router-for-me/CLIProxyAPI#6534).
+  let sent = false;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(Buffer.from('data: {"a":1}\n\n')); }
+      return new Promise(() => {});
+    },
+    cancel() { cancelled = true; }
+  });
+  const values = [];
+  await assert.rejects(async () => {
+    for await (const v of readUpstreamPayloads({ body }, { idleMs: 50 })) values.push(v);
+  }, /sent nothing for/);
+  assert.deepEqual(values, [{ a: 1 }]);
+  assert.ok(cancelled, 'the silent upstream body is cancelled');
+});
