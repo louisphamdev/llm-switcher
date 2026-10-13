@@ -697,9 +697,22 @@ function responsesOutputImages(out) {
 // A file or document block carries its bytes as base64; stringified into text it costs millions of tokens
 // (The-NeXT-AI/ai-gateway#28), so it is named instead. Null for any other block.
 function mediaPlaceholder(b) {
-  if (b?.type === 'input_file') return `[file: ${b.filename || b.file_id || 'attachment'}]`;
-  if (b?.type === 'document') return `[document${b.title ? `: ${b.title}` : ''}]`;
-  if (b?.source?.type === 'base64' || typeof b?.file_data === 'string') return `[${b.type || 'attachment'}]`;
+  const src = b?.source;
+  if (src?.type === 'base64' || typeof b?.file_data === 'string') {
+    if (b.type === 'input_file') return `[file: ${b.filename || b.file_id || 'attachment'}]`;
+    if (b.type === 'document') return `[document${b.title ? `: ${b.title}` : ''}]`;
+    return `[${b.type || 'attachment'}]`;
+  }
+  // Not base64: the content itself goes on, as text the model can read.
+  if (b?.type === 'document' && src?.type === 'text' && typeof src.data === 'string') return src.data;
+  if (b?.type === 'document' && src?.type === 'content') {
+    if (typeof src.content === 'string') return src.content;
+    if (Array.isArray(src.content)) {
+      return src.content.map(c => (c?.type === 'text' ? c.text || '' : c?.type === 'image' ? '[image omitted]' : '')).filter(Boolean).join('\n');
+    }
+  }
+  if (b?.type === 'document' && src?.type === 'url' && src.url) return `[document: ${src.url}]`;
+  if (b?.type === 'input_file' && b.file_url) return `[file: ${b.file_url}]`;
   return null;
 }
 

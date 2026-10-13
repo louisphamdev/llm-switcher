@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUpstreamPayloads } from '../upstream-stream.mjs';
+import { readUpstreamPayloads, parseIdleMs } from '../upstream-stream.mjs';
 
 async function collect(text, widths = [1, 3, 7]) {
   const bytes = Buffer.from(text); let offset = 0, i = 0;
@@ -46,4 +46,26 @@ test('an upstream that goes silent mid-stream ends with an error after the idle 
   }, /sent nothing for/);
   assert.deepEqual(values, [{ a: 1 }]);
   assert.ok(cancelled, 'the silent upstream body is cancelled');
+});
+
+test('parseIdleMs keeps the idle limit inside what setTimeout accepts', () => {
+  // Node fires a timer of a negative, infinite or > 2^31-1 delay after 1 ms.
+  assert.equal(parseIdleMs('3000000000'), 2147483647);
+  for (const bad of ['-5', 'Infinity', 'abc', '0', '0.5']) assert.equal(parseIdleMs(bad), 300000, bad);
+  assert.equal(parseIdleMs('120000'), 120000);
+  assert.equal(parseIdleMs(undefined), 300000);
+});
+
+test('the idle limit counts the gap between reads, not the whole stream', async () => {
+  let n = 0;
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (n === 5) return controller.close();
+      await new Promise(r => setTimeout(r, 60));
+      controller.enqueue(Buffer.from(`data: {"n":${n++}}\n\n`));
+    }
+  });
+  const values = [];
+  for await (const v of readUpstreamPayloads({ body }, { idleMs: 200 })) values.push(v.n);
+  assert.deepEqual(values, [0, 1, 2, 3, 4]);
 });

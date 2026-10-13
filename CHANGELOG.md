@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.17 — 2026-10-13
+
+- **Documents in a tool result.** A document with a text source, a content source or a URL goes to the model as its text or its URL. Before 1.6.17, it went as a bare `[document]` label. Only base64 data becomes a label, for example `[file: a.pdf]`.
+- **The upstream idle limit.** `LLM_SWITCHER_UPSTREAM_IDLE_MS` must be a positive number. The proxy uses 300000 for any other value, and it writes a warning. A value above 2147483647 becomes 2147483647. Before 1.6.17, a negative, infinite or too large value ended every stream after 1 ms. The limit counts from the response headers. It applies to the body only, and an SSE comment line resets it.
+
 ## Release 1.6.16 — 2026-10-13
 
 - **A silent upstream stream.** The proxy now ends an upstream stream that sends no byte for 5 minutes, with an error. Before, only the default limit of the Node HTTP client stopped it. Set `LLM_SWITCHER_UPSTREAM_IDLE_MS` to change the limit.

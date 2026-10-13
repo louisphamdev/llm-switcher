@@ -1754,3 +1754,91 @@ test('irToAnthropicBody: a whitespace-only text block is blank too', () => {
   const body = irToAnthropicBody(ir, 'claude');
   assert.ok(body.messages.every(m => m.content.every(b => b.type !== 'text' || b.text.trim())), JSON.stringify(body.messages));
 });
+
+// ---- roundtable ruling 2026-10-13: media in tool results, held notices ----
+
+const BLOB = 'QUFB'.repeat(2000);
+const MISSING_TOOL_RESULT = '[Tool result unavailable: it was removed from the conversation history]';
+function anthropicToolText(content) {
+  const ir = anthropicToIR({ model: 'x', messages: [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content }] }
+  ] });
+  return ir.messages.find(m => m.role === 'tool').content;
+}
+
+test('a tool-result document keeps its text, its URL and its label; only base64 becomes a placeholder', () => {
+  assert.match(anthropicToolText([{ type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'hello doc' } }]), /hello doc/);
+  const content = anthropicToolText([{ type: 'document', source: { type: 'content', content: [
+    { type: 'text', text: 'part one' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: BLOB } }] } }]);
+  assert.match(content, /part one/);
+  assert.match(content, /\[image omitted\]/);
+  assert.ok(!content.includes(BLOB));
+  assert.equal(anthropicToolText([{ type: 'document', source: { type: 'content', content: 'plain string' } }]), 'plain string');
+  assert.match(anthropicToolText([{ type: 'document', source: { type: 'url', url: 'https://example.com/a.pdf' } }]), /https:\/\/example\.com\/a\.pdf/);
+  assert.match(anthropicToolText([{ type: 'input_file', file_url: 'https://example.com/f.pdf' }]), /https:\/\/example\.com\/f\.pdf/);
+  assert.equal(anthropicToolText([{ type: 'input_file', filename: 'a.pdf', file_data: `data:application/pdf;base64,${BLOB}` }]), '[file: a.pdf]');
+  assert.equal(anthropicToolText([{ type: 'document', title: 'T', source: { type: 'base64', media_type: 'application/pdf', data: BLOB } }]), '[document: T]');
+  assert.ok(!anthropicToolText([{ type: 'document', source: { type: 'url' } }]).includes('[document: undefined]'));
+});
+
+test('an orphan tool result turned into text keeps a text document', () => {
+  const { payload } = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'orphan', content: [{ type: 'document', source: { type: 'text', data: 'hello doc' } }] }] }
+  ] });
+  assert.match(JSON.stringify(payload.messages), /hello doc/);
+});
+
+function chatShape(input) {
+  return irToChatBody(responsesToIR({ model: 'x', input }), 'gpt-4o').messages
+    .map(m => (m.role === 'tool' ? `tool:${m.content}` : m.role === 'user' ? `user:${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}` : m.role));
+}
+const callAB = [
+  { type: 'function_call', call_id: 'c1', name: 'a', arguments: '{}' },
+  { type: 'function_call', call_id: 'c2', name: 'b', arguments: '{}' }
+];
+
+test('healToolPairs: a held notice follows the placeholder of an output that never came', () => {
+  const missing = chatShape([...callAB, { type: 'function_call_output', call_id: 'c1', output: 'out1' }, { role: 'user', content: 'notice' }]);
+  assert.deepEqual(missing.slice(-4), ['assistant', 'tool:out1', `tool:${MISSING_TOOL_RESULT}`, 'user:notice']);
+  const later = chatShape([...callAB, { type: 'function_call_output', call_id: 'c1', output: 'out1' }, { role: 'user', content: 'notice' },
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'next turn' }] }]);
+  assert.deepEqual(later.slice(-2), ['user:notice', 'assistant']);
+  const two = chatShape([...callAB, { role: 'user', content: 'notice1' }, { type: 'function_call_output', call_id: 'c1', output: 'out1' }, { role: 'user', content: 'notice2' }]);
+  assert.deepEqual(two.slice(-5), ['assistant', 'tool:out1', `tool:${MISSING_TOOL_RESULT}`, 'user:notice1', 'user:notice2']);
+});
+
+test('placeholders and URLs are exact on every route that turns a tool result into text', () => {
+  assert.equal(anthropicToolText([{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: BLOB } }]), '[document]');
+  assert.equal(anthropicToolText([{ type: 'document', source: { type: 'url', url: 'https://example.com/a.pdf' } }]), '[document: https://example.com/a.pdf]');
+  assert.equal(anthropicToolText([{ type: 'input_file', file_url: 'https://example.com/f.pdf' }]), '[file: https://example.com/f.pdf]');
+  const orphanText = (content) => {
+    const { payload } = healAnthropicPayload({ model: 'x', max_tokens: 10, messages: [
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'orphan', content }] }] });
+    return JSON.stringify(payload.messages);
+  };
+  const doc = orphanText([{ type: 'document', title: 'T', source: { type: 'base64', media_type: 'application/pdf', data: BLOB } }]);
+  assert.ok(!doc.includes(BLOB) && doc.includes('[document: T]'), doc.slice(0, 300));
+  const file = orphanText([{ type: 'input_file', filename: 'a.pdf', file_data: `data:application/pdf;base64,${BLOB}` }]);
+  assert.ok(!file.includes(BLOB) && file.includes('[file: a.pdf]'), file.slice(0, 300));
+});
+
+test('the image of a Responses tool output reaches the chat and Anthropic bodies', () => {
+  for (const image_url of ['data:image/png;base64,AAAA', { url: 'data:image/png;base64,AAAA' }]) {
+    const ir = responsesToIR({ model: 'x', input: [
+      { type: 'function_call', call_id: 'c1', name: 'shot', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: [{ type: 'input_image', image_url }] }] });
+    const chat = JSON.stringify(irToChatBody(ir, 'gpt-4o').messages);
+    assert.match(chat, /data:image\/png;base64,AAAA/);
+    const anth = JSON.stringify(irToAnthropicBody(ir, 'claude-x').messages);
+    assert.match(anth, /"type":"image"/);
+  }
+});
+
+test('healToolPairs: an orphan output and a held notice in one batch come out orphan first, then the notice', () => {
+  const shape = chatShape([...callAB,
+    { type: 'function_call_output', call_id: 'zz', output: 'stray' },
+    { role: 'user', content: 'notice' },
+    { type: 'function_call_output', call_id: 'c1', output: 'out1' }]);
+  assert.deepEqual(shape.slice(-5), ['assistant', 'tool:out1', `tool:${MISSING_TOOL_RESULT}`, 'user:[Tool Result (zz)]: stray', 'user:notice']);
+});
