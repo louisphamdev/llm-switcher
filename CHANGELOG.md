@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.15 — 2026-10-13
+
+- **A message inside a tool batch.** Codex can put a notice between two tool outputs of one parallel batch. The proxy now moves the notice after the batch. Before, the next real output was replaced with a placeholder.
+- **Files and documents in a tool output.** An `input_file` in a Responses tool output and a `document` in an Anthropic `tool_result` now go to the model as their name. Before, the proxy wrote their base64 data into the text, which can use millions of tokens. The `input_image` parts of a Responses tool output now reach the model as images.
+- **Two shims on `PATH`.** A shim now skips every LLM Switcher shim directory when it looks for the real binary. Before, two shims on `PATH` called each other with no end, and each call wrote a new CA bundle.
+
 ## Release 1.6.14 — 2026-10-12
 
 - **System turn with an odd content shape.** On the translated route, a `system` turn whose `content` is not text and not a list is dropped. Before, the request failed with a `TypeError`.

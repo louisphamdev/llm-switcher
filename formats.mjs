@@ -509,7 +509,7 @@ function anthropicToIR(payload) {
                   return '';
                 }
                 if (c?.type === 'tool_reference' && typeof c.tool_name === 'string') return c;
-                return JSON.stringify(c);
+                return mediaPlaceholder(c) ?? JSON.stringify(c);
               }).filter(Boolean);
               resultText = resultParts.map(c => typeof c === 'string' ? c : JSON.stringify(c)).join('\n');
             } else if (part.content) resultText = JSON.stringify(part.content);
@@ -679,10 +679,28 @@ function responsesOutputToText(out) {
       if (typeof x === 'string') return x;
       if (typeof x?.text === 'string') return x.text;
       if (x?.type === 'input_image') return '[image]';
-      return JSON.stringify(x);
+      return mediaPlaceholder(x) ?? JSON.stringify(x);
     }).join('\n');
   }
   return out == null ? '' : JSON.stringify(out);
+}
+
+// The input_image parts of a Responses tool output, as chat image parts.
+function responsesOutputImages(out) {
+  if (!Array.isArray(out)) return [];
+  return out.filter(x => x?.type === 'input_image')
+    .map(x => (typeof x.image_url === 'string' ? x.image_url : x.image_url?.url))
+    .filter(Boolean)
+    .map(url => ({ type: 'image_url', image_url: { url } }));
+}
+
+// A file or document block carries its bytes as base64; stringified into text it costs millions of tokens
+// (The-NeXT-AI/ai-gateway#28), so it is named instead. Null for any other block.
+function mediaPlaceholder(b) {
+  if (b?.type === 'input_file') return `[file: ${b.filename || b.file_id || 'attachment'}]`;
+  if (b?.type === 'document') return `[document${b.title ? `: ${b.title}` : ''}]`;
+  if (b?.source?.type === 'base64' || typeof b?.file_data === 'string') return `[${b.type || 'attachment'}]`;
+  return null;
 }
 
 // OpenAI Responses API (Codex) -> IR.
@@ -772,7 +790,8 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
         const a = item.action || {};
         pushCall({ id: item.call_id || item.id || null, name: 'local_shell', args: { command: a.command || [], workdir: a.working_directory ?? undefined, timeout_ms: a.timeout_ms ?? undefined } });
       } else if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output' || item.type === 'local_shell_call_output') {
-        ir.messages.push({ role: 'tool', toolCallId: item.call_id || item.id, content: responsesOutputToText(item.output) });
+        const images = responsesOutputImages(item.output);
+        ir.messages.push({ role: 'tool', toolCallId: item.call_id || item.id, content: responsesOutputToText(item.output), ...(images.length ? { images } : {}) });
       } else if (item.type === 'additional_tools' && Array.isArray(item.tools)) {
         toolList.push(...item.tools);
       } else if (item.type === 'compaction') {
@@ -1032,13 +1051,15 @@ function hasNativeReasoning(model) {
 //    -> OpenAI: "assistant message with 'tool_calls' must be followed by tool messages"
 //
 // Rule: a tool result is only valid when placed right after the assistant turn that declared it. Orphaned results are
-// converted to user text (preserving context); tool calls missing a result get a placeholder result.
+// converted to user text (preserving context); tool calls missing a result get a placeholder result. A non-assistant
+// message inside an unanswered batch (Codex inserts notices there) moves after the batch, so later outputs still pair.
 const MISSING_TOOL_RESULT = '[Tool result unavailable: it was removed from the conversation history]';
 
 function healToolPairs(messages) {
   const out = [];
   let pending = null;   // Map<callId, name> of the most recent assistant turn
   let deferred = [];    // orphaned results seen while awaiting results -> flushed later to preserve adjacency
+  let held = [];        // non-tool messages seen while awaiting results -> emitted after the batch
   let seq = 0;
 
   const orphanText = (m) => ({
@@ -1055,6 +1076,8 @@ function healToolPairs(messages) {
     }
     for (const m of deferred) out.push(orphanText(m));
     deferred = [];
+    out.push(...held);
+    held = [];
   };
 
   let unnamed = [];     // ids given to calls that arrived with no id, in order
@@ -1068,11 +1091,16 @@ function healToolPairs(messages) {
         const name = pending.get(id);
         pending.delete(id);
         out.push({ ...m, toolCallId: id, name: m.name || name });
+        if (!pending.size) flush();
       } else if (pending) {
         deferred.push(m);
       } else {
         out.push(orphanText(m));
       }
+      continue;
+    }
+    if (pending?.size && m.role !== 'assistant') {
+      held.push(m);
       continue;
     }
     flush();
@@ -1850,7 +1878,7 @@ function isBlankText(b) {
 function toolResultText(block) {
   const c = block.content;
   const text = typeof c === 'string' ? c
-    : Array.isArray(c) ? c.map(x => (x?.type === 'text' ? x.text : x?.type === 'image' ? '[image omitted]' : JSON.stringify(x))).join('\n')
+    : Array.isArray(c) ? c.map(x => (x?.type === 'text' ? x.text : x?.type === 'image' ? '[image omitted]' : mediaPlaceholder(x) ?? JSON.stringify(x))).join('\n')
     : c ? JSON.stringify(c) : '';
   return `[Tool Result${block.tool_use_id ? ` (${block.tool_use_id})` : ''}]: ${text}`;
 }

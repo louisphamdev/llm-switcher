@@ -1699,3 +1699,58 @@ test('the placeholder strip refuses a client name that two padded tools share', 
   assert.deepEqual(JSON.parse(vocab.args(alias[0], filled)), { env: {} });
   assert.equal(vocab.args('a_b', filled), filled, 'a_b declared its own _placeholder');
 });
+
+test('responsesToIR + irToChatBody: a notice inside a parallel batch moves after it and every real output is kept', () => {
+  // Codex inserts a notice between two outputs of one batch (openai/codex#52834).
+  const ir = responsesToIR({
+    model: 'x', input: [
+      { role: 'user', content: 'do two things' },
+      { type: 'function_call', call_id: 'c1', name: 'a', arguments: '{}' },
+      { type: 'function_call', call_id: 'c2', name: 'b', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: 'out1' },
+      { role: 'user', content: 'notice' },
+      { type: 'function_call_output', call_id: 'c2', output: 'out2' }
+    ]
+  });
+  for (const body of [irToChatBody(ir, 'gpt-4o')]) {
+    const shape = body.messages.map(m => m.role === 'tool' ? `tool:${m.content}` : `${m.role}`);
+    assert.deepEqual(shape, ['user', 'assistant', 'tool:out1', 'tool:out2', 'user']);
+  }
+  const anth = irToAnthropicBody(ir, 'claude-x');
+  const results = anth.messages[2].content.filter(b => b.type === 'tool_result').map(b => JSON.stringify(b.content));
+  assert.ok(results.every(r => !r.includes('unavailable')), `real outputs replaced: ${results}`);
+});
+
+test('a tool output that carries a file or an image never reaches the model as base64 text', () => {
+  // The-NeXT-AI/ai-gateway#28: a 5.9 MB image serialized as text became 4.1M tokens.
+  const blob = 'QUFB'.repeat(5000);
+  const fromResponses = responsesToIR({
+    model: 'x', input: [
+      { type: 'function_call', call_id: 'c1', name: 'shot', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'c1', output: [
+        { type: 'input_image', image_url: `data:image/png;base64,${blob}` },
+        { type: 'input_file', filename: 'a.pdf', file_data: `data:application/pdf;base64,${blob}` }] }
+    ]
+  });
+  const fromAnthropic = anthropicToIR({
+    model: 'x', messages: [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: blob } }] }] }
+    ]
+  });
+  for (const [name, ir] of [['responses', fromResponses], ['anthropic', fromAnthropic]]) {
+    const tool = ir.messages.find(m => m.role === 'tool');
+    assert.ok(!tool.content.includes(blob), `${name}: tool text carries the base64`);
+  }
+  const tool = fromResponses.messages.find(m => m.role === 'tool');
+  assert.match(tool.content, /a\.pdf/);
+  assert.equal(tool.images?.[0]?.image_url?.url, `data:image/png;base64,${blob}`);
+});
+
+test('irToAnthropicBody: a whitespace-only text block is blank too', () => {
+  // Anthropic: "text content blocks must contain non-whitespace text".
+  const ir = anthropicToIR({ model: 'x', max_tokens: 10, messages: [{ role: 'user', content: [{ type: 'text', text: ' \n' }, { type: 'text', text: 'hi' }] }] });
+  const body = irToAnthropicBody(ir, 'claude');
+  assert.ok(body.messages.every(m => m.content.every(b => b.type !== 'text' || b.text.trim())), JSON.stringify(body.messages));
+});

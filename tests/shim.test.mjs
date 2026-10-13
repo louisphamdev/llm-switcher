@@ -119,6 +119,18 @@ test('shim never recurses into itself', (t) => {
   assert.match(out, /ARGS=x/);
 });
 
+test('two switcher shims on PATH never call each other', (t) => {
+  // A test HOME's shim ahead of the account's own shim: each dropped only its own directory, so they
+  // found each other forever, and every hop built a new CA bundle (2026-10-13: 702 files in 2 minutes).
+  if (process.platform === 'win32') return t.skip('posix only');
+  const other = fs.mkdtempSync(path.join(SCRATCH, 'shimother-'));
+  fs.copyFileSync(path.join(RENDER_DIR, 'claude'), path.join(other, 'claude'));
+  fs.chmodSync(path.join(other, 'claude'), 0o755);
+  const fake = makeFakeBin('claude');
+  const out = runShim('claude', ['x'], { active: true, fakeDir: other, extraPath: `${fake}:/usr/bin:/bin` });
+  assert.match(out, /ARGS=x/);
+});
+
 test('shim fails loudly (127) when the real binary is missing', (t) => {
   if (process.platform === 'win32') return t.skip('posix only');
   const empty = fs.mkdtempSync(path.join(SCRATCH, 'shimempty-'));
