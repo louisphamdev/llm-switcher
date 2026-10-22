@@ -8,7 +8,8 @@
 - **An assistant turn sent as parts keeps its text.** In 1.6.20, the text of such a turn was replaced by the note.
 - **The result of an earlier call is marked as data.** The result goes out unchanged, between an opening line and a closing line. The tag in these lines comes from a key of the process, so the tool output cannot contain the closing line. The same text gives the same tag, so the prompt cache of the upstream stays valid.
 - **A call with no arguments gives `{}`.** In 1.6.19 and 1.6.20, a call without arguments in a non-stream answer reached the client as an empty string.
-- Codex 0.163 resumed the failing session three times through each release, to zencore with no history rewrite. Release 1.6.17 failed 18 of 18 requests with `undeclared tool 'exec'`. Release 1.6.21 failed 0 of 54 with that error.
+- **A misspelt argument key is repaired for Codex.** The model sometimes calls `exec_command` with `command` instead of `cmd`. The proxy moves a key to the schema key that is its short form, or the reverse. This occurs only for a string value with exactly one fit. When two keys fit one schema key, neither moves. On the Codex stream, the proxy holds the arguments of every call and repairs them in the item that Codex runs. This needs zencore `c2fceb1` or later, which passes such a call through instead of stopping the answer.
+- Codex 0.163 resumed the failing session three times through each release. Release 1.6.17 failed 18 of 18 requests with `undeclared tool 'exec'`. Release 1.6.21 with zencore `c2fceb1` failed 0 of 44, and all 43 `exec_command` calls reached Codex with `cmd`.
 
 ## Release 1.6.20 — 2026-10-22
 
