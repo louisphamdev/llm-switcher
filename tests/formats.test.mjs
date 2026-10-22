@@ -284,6 +284,22 @@ test('Anthropic renderer: think -> tool -> think -> text produces a valid event 
   assert.ok(events.some(e => e.data.delta?.signature === 'lsw1.sig123'), 'foreign signature is wrapped, never passed off as an Anthropic signature');
 });
 
+// A streamed call opens with {id, name} and no arguments. Filling "{}" in there glued onto the pieces that
+// followed and gave `{}{"cmd":...}`, which Codex stored and sent back as history; zencore then refused it.
+test('a streamed tool call that opens with no arguments does not start with {}', () => {
+  const norm = createUpstreamNormalizer();
+  const chunks = [
+    { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'exec_command' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"cmd"' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: ':"ls"}' } }] } }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
+  ];
+  let args = '';
+  for (const c of chunks) for (const ev of [].concat(norm(c) || [])) for (const t of ev.tools || []) args += t.args;
+  assert.equal(args, '{"cmd":"ls"}');
+  assert.deepEqual(JSON.parse(args), { cmd: 'ls' });
+});
+
 test('Responses renderer: emits output_item.done for every item with full content', () => {
   const events = [];
   const r = createResponsesStream((event, data) => events.push({ event, data }), 'm');

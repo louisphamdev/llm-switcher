@@ -178,11 +178,17 @@ function smartToolCalls(node) {
     // Follow-up OpenAI stream chunks only carry {index, function:{arguments}} (no name/id):
     // they must still be kept, otherwise all args after the first chunk are lost.
     if (!name && (rawArgs === undefined || rawArgs === null || rawArgs === '')) return null;
+    // The opening chunk of a streamed call names the tool and carries no arguments yet (the
+    // field is absent or null). Filling in "{}" there glues onto the pieces that follow and
+    // yields `{}{"cmd":...}`, which Codex stores and sends back as history. A chunk that has an
+    // index is a stream chunk, so its missing arguments are empty, not an empty object.
+    const opening = (rawArgs === undefined || rawArgs === null) && typeof tc.index === 'number'
+      && tc.function && typeof tc.function === 'object';
     return {
       index: (typeof tc.index === 'number' ? tc.index : idx),
       id: tc.id || fn.id || null,
       name: name || null,
-      args: typeof rawArgs === 'string' ? rawArgs : (name ? JSON.stringify(rawArgs ?? {}) : JSON.stringify(rawArgs)),
+      args: typeof rawArgs === 'string' ? rawArgs : (opening ? '' : (name ? JSON.stringify(rawArgs ?? {}) : JSON.stringify(rawArgs))),
       sig: tc.extra_content?.google?.thought_signature || null
     };
   };
