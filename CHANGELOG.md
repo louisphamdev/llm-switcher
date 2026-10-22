@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.20 — 2026-10-22
+
+- **Earlier calls to a tool the request does not declare stay as text.** Codex runs its shell through a freeform `exec` tool and keeps sending the calls it made, while a later request may declare only `exec_command`. The model read the history as its own vocabulary and answered `exec`, a tool the caller cannot run, and the upstream refused it as `undeclared tool 'exec'`. `irToChatBody` now writes such a call as `[earlier call to \`exec\`: ...]` with its result as a user message, and leaves every call to a declared tool as a real call, so a call and its result are never split. Through llm-switcher, intact and zencore with 6 to 22 earlier `exec` calls: 10 of 12 requests refused before, 0 of 12 after.
+
 ## Release 1.6.19 — 2026-10-22
 
 - **A streamed tool call no longer starts with `{}`.** The first chunk of a streamed call names the tool and carries no arguments. `smartToolCalls` filled in `{}` there, and the pieces that followed were glued on, giving `{}{"cmd":...}`. Codex stored that item and sent it back as history on the next turn, and zencore refused it with `upstream arguments do not match schema of tool 'exec_command'`. The first turn worked, so the failure only showed from the second turn on. Through a Codex-shaped loop of several turns, 6 of 7 turns failed before and 0 of 10 after.

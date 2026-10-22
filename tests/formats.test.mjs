@@ -300,6 +300,45 @@ test('a streamed tool call that opens with no arguments does not start with {}',
   assert.deepEqual(JSON.parse(args), { cmd: 'ls' });
 });
 
+// Codex runs its shell through a freeform `exec` tool and keeps sending the calls it made, while a later request
+// may declare only exec_command. The model copies the history's vocabulary and answers `exec`, which the caller
+// cannot run. The earlier call and its result stay in the conversation as text.
+test('irToChatBody turns earlier calls to a tool the request does not declare into text', () => {
+  const S = { type: 'string' };
+  const ir = responsesToIR({ model: 'x', tools: [
+    { type: 'function', name: 'exec_command', description: 'run', parameters: { type: 'object', properties: { cmd: S }, required: ['cmd'] } }
+  ], input: [
+    { type: 'message', role: 'user', content: 'look' },
+    { type: 'custom_tool_call', call_id: 'c1', name: 'exec', input: 'text(await tools.exec_command({cmd:"ls"}));' },
+    { type: 'custom_tool_call_output', call_id: 'c1', output: 'a b' },
+    { type: 'function_call', call_id: 'f1', name: 'exec_command', arguments: '{"cmd":"pwd"}' },
+    { type: 'function_call_output', call_id: 'f1', output: '/repo' },
+    { type: 'message', role: 'user', content: 'again' }
+  ] });
+  const msgs = irToChatBody(ir, 'zencore/deepseek-v4.1-flash-free', { thinkingMode: 'auto' }).messages;
+  const calls = msgs.flatMap(m => m.tool_calls || []);
+  assert.deepEqual(calls.map(c => c.function.name), ['exec_command']);
+  const note = msgs.find(m => m.role === 'assistant' && !m.tool_calls);
+  assert.match(note.content, /^\[earlier call to `exec`: .*tools\.exec_command/);
+  assert.ok(msgs.some(m => m.role === 'user' && m.content === '[result of the earlier call]\na b'));
+  // The declared call keeps its result as a real tool message, so the pair is never split.
+  assert.deepEqual(msgs.filter(m => m.role === 'tool').map(m => m.tool_call_id), ['f1']);
+});
+
+test('irToChatBody leaves a history of declared tools alone', () => {
+  const ir = responsesToIR({ model: 'x', tools: [
+    { type: 'function', name: 'exec_command', description: 'run', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } }
+  ], input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'function_call', call_id: 'f1', name: 'exec_command', arguments: '{"cmd":"pwd"}' },
+    { type: 'function_call_output', call_id: 'f1', output: '/repo' }
+  ] });
+  const msgs = irToChatBody(ir, 'gpt-5', { thinkingMode: 'auto' }).messages;
+  assert.equal(msgs.filter(m => m.tool_calls).length, 1);
+  assert.equal(msgs.filter(m => m.role === 'tool').length, 1);
+  assert.ok(!msgs.some(m => typeof m.content === 'string' && m.content.includes('earlier call')));
+});
+
 test('Responses renderer: emits output_item.done for every item with full content', () => {
   const events = [];
   const r = createResponsesStream((event, data) => events.push({ event, data }), 'm');

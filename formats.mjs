@@ -1203,8 +1203,21 @@ function irToChatBody(ir, model, opts = {}) {
   if (toolNotice) systemText = systemText ? `${systemText}\n\n${toolNotice}` : toolNotice;
   if (systemText.trim()) messages.push({ role: 'system', content: systemText });
 
+  // An earlier call to a tool this request no longer declares stays in the conversation as text. Codex
+  // runs its shell through a freeform `exec` tool and keeps sending the calls it made, while a later
+  // request may declare only `exec_command`. The model reads the history as its own vocabulary and
+  // answers `exec` again, a tool the caller cannot run; and a strict upstream refuses the history
+  // outright. As text the model keeps what happened and has no tool of that name to copy.
+  const declaredNames = new Set((ir.tools || []).map(t => toolName(t.name)));
+  const demoted = new Set();
   for (const m of healToolPairs(ir.messages)) {
     if (m.role === 'tool') {
+      if (demoted.has(m.toolCallId)) {
+        flushImages();
+        messages.push({ role: 'user', content: `[result of the earlier call]\n${m.content ?? ''}` });
+        if (m.images?.length) pendingImages.push({ type: 'text', text: `Images returned by tool call ${m.toolCallId}:` }, ...m.images);
+        continue;
+      }
       messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content ?? '' });
       if (m.images?.length) pendingImages.push({ type: 'text', text: `Images returned by tool call ${m.toolCallId}:` }, ...m.images);
       continue;
@@ -1212,8 +1225,23 @@ function irToChatBody(ir, model, opts = {}) {
     flushImages();
     const out = { role: m.role === 'assistant' ? 'assistant' : 'user' };
     if (m.content !== undefined) out.content = m.content;
-    if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length) {
-      out.tool_calls = m.toolCalls.map(tc => {
+    let calls = m.role === 'assistant' && Array.isArray(m.toolCalls) ? m.toolCalls : [];
+    if (calls.length && declaredNames.size) {
+      const keep = [];
+      const notes = [];
+      for (const tc of calls) {
+        if (declaredNames.has(toolName(tc.name))) { keep.push(tc); continue; }
+        if (tc.id) demoted.add(tc.id);
+        notes.push(`[earlier call to \`${tc.name}\`: ${stringifyArgs(tc.args).slice(0, 4000)}]`);
+      }
+      if (notes.length) {
+        const text = typeof out.content === 'string' ? out.content : '';
+        out.content = (text ? `${text}\n` : '') + notes.join('\n');
+        calls = keep;
+      }
+    }
+    if (calls.length) {
+      out.tool_calls = calls.map(tc => {
         const call = { id: tc.id, type: 'function', function: { name: toolName(tc.name), arguments: stringifyArgs(tc.args) } };
         const sig = tc.sig || lookupToolSignature(tc.id);
         if (sig) call.extra_content = { google: { thought_signature: sig } };
