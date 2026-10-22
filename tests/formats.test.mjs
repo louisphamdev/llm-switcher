@@ -1263,6 +1263,26 @@ test('irToChatBody replays thinking as reasoning_content on tool-call turns', ()
   assert.equal(rb.messages.find(m => m.tool_calls).reasoning_content, 'Plan: run ls');
 });
 
+// Codex continue/compaction turns carry no reasoning item; DeepSeek still answers 400 "reasoning_content must be passed back".
+test('irToChatBody auto mode replays reasoning_content for DeepSeek/Kimi even when the request has no reasoning', () => {
+  const ir = responsesToIR({ model: 'x', input: [
+    { type: 'message', role: 'user', content: 'go' },
+    { type: 'function_call', call_id: 'c1', name: 'exec', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+    { type: 'message', role: 'user', content: 'continue' }
+  ] });
+  for (const model of ['zencore/deepseek-v4.1-flash-free', 'buddycore/deepseek-v4.1-flash', 'zencore/kimi-k2.7']) {
+    const call = irToChatBody(ir, model, { thinkingMode: 'auto' }).messages.find(m => m.tool_calls);
+    assert.equal(call.reasoning_content, '', model);
+  }
+  for (const model of ['gpt-5', 'zencore/glm-5.3-flash-free']) {
+    const body = irToChatBody(ir, model, { thinkingMode: 'auto' });
+    assert.ok(body.messages.every(m => !('reasoning_content' in m)), model);
+  }
+  const off = irToChatBody(ir, 'zencore/deepseek-v4.1-flash-free', { thinkingMode: 'off' });
+  assert.ok(off.messages.every(m => !('reasoning_content' in m)));
+});
+
 // Strict OpenAI-compatible servers may refuse the extra key, so native mode sends it only on the profile opt-in.
 test('irToChatBody native mode sends no reasoning_content without the profile opt-in', () => {
   const ir = anthropicToIR({ model: 'x', max_tokens: 8000, thinking: { type: 'enabled', budget_tokens: 4000 }, messages: [

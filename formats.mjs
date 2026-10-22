@@ -1049,7 +1049,11 @@ function withUpstreamToolNames(ir, names) {
 function hasNativeReasoning(model) {
   // model IDs change often, but all current Opus variants support reasoning.
   const m = String(model || '').toLowerCase();
+  // DeepSeek and Kimi run in thinking mode by default and refuse the next tool step when an earlier
+  // tool-call turn lacks reasoning_content, even if the client (Codex on a continue/compaction turn)
+  // sent no reasoning item with the request.
   return m.includes('thinking') || m.includes('reasoning') || m.includes('reasoner') || m.includes('opus')
+    || m.includes('deepseek') || m.includes('kimi')
     || /(^|[/_.:-])(o[134]|r1|qwq)([/_.:-]|$)/.test(m);
 }
 
