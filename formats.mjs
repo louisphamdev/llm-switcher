@@ -2856,10 +2856,11 @@ function createResponsesStream(emit, model, opts = {}) {
     if (t.done) return;
     t.done = true;
     // A held call gets its arguments in the caller's own spelling here, with the item that Codex runs.
-    if (t.held && vocab) t.args = vocab.args(t.name, t.args || '{}');
+    // No '{}' default here: a custom call with no input keeps ''; the item builder gives a function call '{}'.
+    if (t.held && vocab && t.args) t.args = vocab.args(t.name, t.args);
     const item = responsesToolItem(toolMeta, { itemId: t.id, callId: t.callId, name: t.name, args: t.args });
     if (item.type === 'function_call') {
-      send({ type: 'response.function_call_arguments.done', item_id: t.id, output_index: t.index, arguments: t.args });
+      send({ type: 'response.function_call_arguments.done', item_id: t.id, output_index: t.index, arguments: item.arguments });
     }
     output[t.index] = item;
     // Codex only runs the tool upon receiving output_item.done with the complete item.
@@ -2905,14 +2906,13 @@ function createResponsesStream(emit, model, opts = {}) {
         const name = vocab ? vocab.name(tc.name) : tc.name;
         const kind = toolMeta?.[name]?.kind || toolMeta?.[tc.name]?.kind || 'function';
         const prefix = kind === 'custom' ? 'ctc' : kind === 'local_shell' ? 'lsh' : 'fc';
-        // Codex runs a tool on output_item.done, and the name is in that item. A renamed call
-        // therefore cannot be streamed argument by argument: the keys are only known once the whole
-        // object exists, so its arguments are held and go out with the item.
-        const isShort = Boolean(vocab && typeof vocab.isShortened === 'function' && vocab.isShortened(tc.name));
+        // Codex runs a tool on output_item.done, with the arguments in that item, so holding them
+        // costs Codex nothing. Every call is held: a key the model misspelt (`command` for `cmd`)
+        // is only known once the whole object exists, and is repaired in the item.
         st = {
           id: `${prefix}_${rand(24)}`, callId: tc.id || `call_${rand(24)}`, index: nextOutput++,
           name: name || '', args: '', done: false, kind, upstream: tc.name,
-          held: Boolean(vocab && ((name && name !== tc.name && !isShort) || vocab.needsArgsRewrite?.(tc.name)))
+          held: Boolean(vocab)
         };
         tools.set(key, st);
         if (kind !== 'local_shell') {

@@ -311,6 +311,118 @@ test('a streamed Codex call is repaired in the item Codex runs', () => {
   assert.equal(events.some(([e]) => e === 'response.function_call_arguments.delta'), false);
 });
 
+// Codex declares `exec_command` with the key `cmd`; a model trained on shell tools answers `command`.
+const codexShell = () => responsesToIR({
+  model: 'gpt-6.1-sol', input: 'go',
+  tools: [{ type: 'function', name: 'exec_command', parameters: { type: 'object', properties: { cmd: { type: 'string' }, workdir: { type: 'string' } }, required: ['cmd'] } },
+          { type: 'function', name: 'apply_patch_json', parameters: { type: 'object', properties: { patch: { type: 'string' } } } },
+          { type: 'function', name: 'render', parameters: { type: 'object', properties: { md: { type: 'string' } } } }]
+});
+
+test('a key the schema names in short form is moved to that short form', () => {
+  const vocab = createToolVocab(codexShell().tools);
+  assert.deepEqual(JSON.parse(vocab.args('exec_command', '{"command":"ls","workdir":"/r"}')), { cmd: 'ls', workdir: '/r' });
+  // Only a string value moves, the key the caller already has wins, and close spellings are not abbreviations.
+  assert.deepEqual(JSON.parse(vocab.args('exec_command', '{"command":["ls"]}')), { command: ['ls'] });
+  assert.deepEqual(JSON.parse(vocab.args('exec_command', '{"cmd":"pwd","command":"ls"}')), { cmd: 'pwd', command: 'ls' });
+  assert.deepEqual(JSON.parse(vocab.args('apply_patch_json', '{"path":"a"}')), { path: 'a' });
+  assert.deepEqual(JSON.parse(vocab.args('render', '{"command":"x"}')), { command: 'x' }, 'md sits inside command but does not start it');
+});
+
+test('a streamed Codex call that keeps its name is still repaired in the item Codex runs', () => {
+  const ir = codexShell();
+  const vocab = createToolVocab(ir.tools);
+  const events = [];
+  const r = createResponsesStream((e, d) => events.push([e, d]), 'm', { vocab, toolMeta: ir.toolMeta });
+  r.start();
+  r.tool({ index: 0, id: 'c1', name: 'exec_command', args: '{"command":' });
+  r.tool({ index: 0, args: '"ls"}' });
+  r.finish('tool_calls', {});
+  const done = events.find(([e]) => e === 'response.output_item.done')[1].item;
+  assert.equal(done.name, 'exec_command');
+  assert.equal(done.arguments, '{"cmd":"ls"}');
+  assert.equal(events.some(([e]) => e === 'response.function_call_arguments.delta'), false);
+  assert.equal(events.find(([e]) => e === 'response.function_call_arguments.done')[1].arguments, '{"cmd":"ls"}');
+});
+
+const schemaVocab = (props, extra = []) => createToolVocab(responsesToIR({ model: 'm', input: 'go', tools: [
+  { type: 'function', name: 't', parameters: { type: 'object', properties: Object.fromEntries(props.map(k => [k, { type: 'string' }])) } }, ...extra
+] }).tools);
+
+test('a request that declares only exec_command still has its keys repaired on the Codex stream', () => {
+  const ir = responsesToIR({ model: 'm', input: 'go', tools: [
+    { type: 'function', name: 'exec_command', parameters: { type: 'object', properties: { cmd: { type: 'string' }, workdir: { type: 'string' } } } }] });
+  const vocab = createToolVocab(ir.tools);
+  const events = [];
+  const r = createResponsesStream((e, d) => events.push([e, d]), 'm', { vocab, toolMeta: ir.toolMeta });
+  r.start();
+  r.tool({ index: 0, id: 'c1', name: 'exec_command', args: '{"command":' });
+  r.tool({ index: 0, args: '"ls"}' });
+  r.finish('tool_calls', {});
+  assert.equal(events.find(([e]) => e === 'response.function_call_arguments.done')[1].arguments, '{"cmd":"ls"}');
+  assert.equal(events.find(([e]) => e === 'response.output_item.done')[1].item.arguments, '{"cmd":"ls"}');
+});
+
+test('two keys that resolve to the same schema key are both left alone', () => {
+  const vocab = schemaVocab(['pwd']);
+  for (const args of ['{"password":"a","passwd":"b"}', '{"passwd":"b","password":"a"}']) {
+    const out = JSON.parse(vocab.args('t', args));
+    assert.deepEqual(Object.keys(out).sort(), ['passwd', 'password']);
+    assert.equal(out.pwd, undefined);
+  }
+  const shell = createToolVocab(codexShell().tools);
+  for (const args of ['{"cd":"/tmp","command":"ls"}', '{"command":"ls","cd":"/tmp"}']) {
+    const out = JSON.parse(shell.args('exec_command', args));
+    assert.deepEqual(Object.keys(out).sort(), ['cd', 'command']);
+    assert.equal(out.cmd, undefined);
+  }
+  assert.deepEqual(JSON.parse(shell.args('exec_command', '{"command":"ls","workdir":"/r"}')), { cmd: 'ls', workdir: '/r' });
+});
+
+test('a held Codex call with broken JSON goes out exactly as it came', () => {
+  const ir = codexShell();
+  const vocab = createToolVocab(ir.tools);
+  const events = [];
+  const r = createResponsesStream((e, d) => events.push([e, d]), 'm', { vocab, toolMeta: ir.toolMeta });
+  r.start();
+  r.tool({ index: 0, id: 'c1', name: 'exec_command', args: '{"command":"ls' });
+  r.finish('tool_calls', {});
+  assert.equal(events.find(([e]) => e === 'response.function_call_arguments.done')[1].arguments, '{"command":"ls');
+  assert.equal(events.find(([e]) => e === 'response.output_item.done')[1].item.arguments, '{"command":"ls');
+});
+
+test('abbreviations work both ways, only with one fit, and never after an ambiguous loose match', () => {
+  assert.deepEqual(JSON.parse(schemaVocab(['command']).args('t', '{"cmd":"ls"}')), { command: 'ls' });
+  assert.deepEqual(JSON.parse(schemaVocab(['cmd', 'cmnd']).args('t', '{"command":"ls"}')), { command: 'ls' });
+  assert.deepEqual(JSON.parse(schemaVocab(['dir_path', 'dir_name', 'dr']).args('t', '{"dir":"/x"}')), { dir: '/x' });
+  assert.deepEqual(JSON.parse(schemaVocab(['cmx']).args('t', '{"command":"ls"}')), { command: 'ls' }, 'the last letter differs');
+});
+
+test('custom and local_shell calls on the Codex stream keep their input, and an empty call gets the right default', () => {
+  const ir = responsesToIR({ model: 'm', input: 'go', tools: [
+    { type: 'custom', name: 'apply_patch', description: 'patch' },
+    { type: 'local_shell' },
+    { type: 'function', name: 'ping', parameters: { type: 'object', properties: {} } }] });
+  const vocab = createToolVocab(ir.tools);
+  const events = [];
+  const r = createResponsesStream((e, d) => events.push([e, d]), 'm', { vocab, toolMeta: ir.toolMeta });
+  r.start();
+  r.tool({ index: 0, id: 'p1', name: 'apply_patch', args: '{"input":"*** Begin Patch' });
+  r.tool({ index: 0, args: '\n*** End Patch"}' });
+  r.tool({ index: 1, id: 's1', name: 'local_shell', args: '{"command":["ls","-la"],"work_dir":"/r"}' });
+  r.tool({ index: 2, id: 'p2', name: 'apply_patch' });
+  r.tool({ index: 3, id: 'f1', name: 'ping' });
+  r.finish('tool_calls', {});
+  const items = events.filter(([e]) => e === 'response.output_item.done').map(([, d]) => d.item);
+  assert.equal(items[0].input, '*** Begin Patch\n*** End Patch');
+  assert.deepEqual(items[1].action.command, ['ls', '-la']);
+  assert.equal(items[1].action.working_directory, '/r', 'work_dir is repaired to workdir');
+  assert.equal(items[2].input, '');
+  assert.equal(items[3].arguments, '{}');
+  const doneArgs = events.filter(([e]) => e === 'response.function_call_arguments.done').map(([, d]) => d.arguments);
+  assert.deepEqual(doneArgs, ['{}'], 'the done event equals the item');
+});
+
 test('tokenize reads a name the way the model that coined it saw it', () => {
   assert.deepEqual(tokenize('TodoWrite'), ['Todo', 'Write']);
   assert.deepEqual(tokenize('str_replace_editor'), ['str', 'replace', 'editor']);

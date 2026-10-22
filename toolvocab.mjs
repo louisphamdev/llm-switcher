@@ -159,7 +159,19 @@ function schemaMatch(key, value, keys) {
     const other = normalizeKey(k);
     return other !== shape && (other.includes(shape) || shape.includes(other));
   });
-  return loose.length === 1 ? loose[0] : null;
+  if (loose.length) return loose.length === 1 ? loose[0] : null;
+  const short = keys.filter(k => isAbbreviation(normalizeKey(k), shape) || isAbbreviation(shape, normalizeKey(k)));
+  return short.length === 1 ? short[0] : null;
+}
+
+// `cmd` for `command`, `pwd` for `password`: the same first and last letter, the letters in order, and
+// at most about half as long. Strict on purpose, so `path` is never taken for `patch`.
+function isAbbreviation(short, long) {
+  if (short.length < 2 || short.length * 2 > long.length + 1) return false;
+  if (short[0] !== long[0] || short.at(-1) !== long.at(-1)) return false;
+  let i = 0;
+  for (const ch of long) if (ch === short[i]) i++;
+  return i === short.length;
 }
 
 /**
@@ -181,6 +193,11 @@ function repairArgs(args, tool) {
     if (!target || Object.hasOwn(args, target)) continue; // no single fit, or the client has both
     renames.set(key, target);
   }
+  // Two keys that land on one schema key: either value can be the one meant, and the second rename
+  // would overwrite the first (`cd` and `command` both fit `cmd`). Neither moves.
+  const counts = new Map();
+  for (const target of renames.values()) counts.set(target, (counts.get(target) || 0) + 1);
+  for (const [key, target] of renames) if (counts.get(target) > 1) renames.delete(key);
   if (!renames.size) return args;
   // Rebuilt in the original order, with each renamed key standing where the old one stood: an
   // argument list is read by people in diffs, and a reordered one hides what changed.
@@ -325,8 +342,9 @@ export function createToolVocab(declared, { allowHyphens = true, names = [] } = 
   }
 
   function args(upstream, argsJson) {
+    // Key repair needs only the caller's schema, so it runs for one declared tool too; `useful`
+    // gates the choice between tool names, not the spelling of a key.
     const fixedName = name(upstream);
-    if (!useful && !shortenedToOriginal.has(String(upstream || '')) && !needsArgsRewrite(upstream)) return argsJson;
     const target = byName.get(fixedName);
     if (!target) return argsJson;
     let parsed;
