@@ -1320,6 +1320,7 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
     const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 500));
+    debugLog(`[${profileKey}] tools declared upstream:`, JSON.stringify((upBody.tools || []).map(t => t.function?.name ?? t.name ?? t.type)), 'tool_choice:', JSON.stringify(upBody.tool_choice ?? null));
 
     let upstreamRes;
     try {
@@ -2592,6 +2593,7 @@ async function handleWsResponseCreate(socket, payload, req, ac, history = null) 
     const { url, headers, upBody } = buildUpstreamRequest(profile, outFormat, ir, mappedModel, req, slot, profileKey);
     if (traceId) headers['x-intact-trace'] = traceId;
     debugLog(`[${profileKey}:ws] ${clientFormat} -> ${outFormat} ${url} ::`, JSON.stringify(upBody).slice(0, 300));
+    debugLog(`[${profileKey}:ws] tools declared upstream:`, JSON.stringify((upBody.tools || []).map(t => t.function?.name ?? t.name ?? t.type)), 'tool_choice:', JSON.stringify(upBody.tool_choice ?? null));
 
     let upstreamRes;
     try {

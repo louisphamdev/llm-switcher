@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.18 — 2026-10-22
+
+- **DeepSeek and Kimi on a turn with no reasoning.** `hasNativeReasoning` now matches `deepseek` and `kimi` model ids. Codex sends a continue or compaction turn with no reasoning item, and the proxy took such a model for a non-thinking one. The tool-call turns then went out with no `reasoning_content`, and DeepSeek thinking mode answered 400 "reasoning_content must be passed back". A model that is not a thinking model still gets no field, and `thinkingMode: off` still sends none.
+- **Tool names in the debug log.** With `debug: true`, the proxy now logs the names of the tools it declares upstream and the `tool_choice`, on both the HTTP and the WebSocket route. Before, the log held the first 300 to 500 characters of the body, which never reached `tools`. This is how to tell whether an upstream "undeclared tool" error comes from a missing declaration.
+
 ## Release 1.6.17 — 2026-10-13
 
 - **Documents in a tool result.** A document with a text source, a content source or a URL goes to the model as its text or its URL. Before 1.6.17, it went as a bare `[document]` label. Only base64 data becomes a label, for example `[file: a.pdf]`.
