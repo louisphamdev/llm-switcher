@@ -1,5 +1,9 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.19 — 2026-10-22
+
+- **A streamed tool call no longer starts with `{}`.** The first chunk of a streamed call names the tool and carries no arguments. `smartToolCalls` filled in `{}` there, and the pieces that followed were glued on, giving `{}{"cmd":...}`. Codex stored that item and sent it back as history on the next turn, and zencore refused it with `upstream arguments do not match schema of tool 'exec_command'`. The first turn worked, so the failure only showed from the second turn on. Through a Codex-shaped loop of several turns, 6 of 7 turns failed before and 0 of 10 after.
+
 ## Release 1.6.18 — 2026-10-22
 
 - **DeepSeek and Kimi on a turn with no reasoning.** `hasNativeReasoning` now matches `deepseek` and `kimi` model ids. Codex sends a continue or compaction turn with no reasoning item, and the proxy took such a model for a non-thinking one. The tool-call turns then went out with no `reasoning_content`, and DeepSeek thinking mode answered 400 "reasoning_content must be passed back". A model that is not a thinking model still gets no field, and `thinkingMode: off` still sends none.
