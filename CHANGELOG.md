@@ -1,5 +1,15 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.21 — 2026-10-22
+
+- **The cause of `undeclared tool 'exec'`.** The catalog of llm-switcher sends Codex no code mode. A session that started on a code-mode model and then moved to a model of llm-switcher keeps its earlier `exec` calls in the history. The new requests declare `exec_command` and not `exec`.
+- **The text for earlier `exec` calls keeps the chat contract.** Release 1.6.20 put the result of such a call in a user message between a tool call and its result. A strict upstream refuses that order with 400. The result now comes after the last tool result of its turn.
+- **Call ids are local to their turn.** In 1.6.20, a later call that used the same id lost its result.
+- **An assistant turn sent as parts keeps its text.** In 1.6.20, the text of such a turn was replaced by the note.
+- **The result of an earlier call is marked as data.** The result goes out unchanged, between an opening line and a closing line. The tag in these lines comes from a key of the process, so the tool output cannot contain the closing line. The same text gives the same tag, so the prompt cache of the upstream stays valid.
+- **A call with no arguments gives `{}`.** In 1.6.19 and 1.6.20, a call without arguments in a non-stream answer reached the client as an empty string.
+- Codex 0.163 resumed the failing session three times through each release, to zencore with no history rewrite. Release 1.6.17 failed 18 of 18 requests with `undeclared tool 'exec'`. Release 1.6.21 failed 0 of 54 with that error.
+
 ## Release 1.6.20 — 2026-10-22
 
 - **Earlier calls to a tool the request does not declare stay as text.** Codex runs its shell through a freeform `exec` tool and keeps sending the calls it made, while a later request may declare only `exec_command`. The model read the history as its own vocabulary and answered `exec`, a tool the caller cannot run, and the upstream refused it as `undeclared tool 'exec'`. `irToChatBody` now writes such a call as `[earlier call to \`exec\`: ...]` with its result as a user message, and leaves every call to a declared tool as a real call, so a call and its result are never split. Through llm-switcher, intact and zencore with 6 to 22 earlier `exec` calls: 10 of 12 requests refused before, 0 of 12 after.
