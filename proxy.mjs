@@ -45,6 +45,7 @@ import {
   combineVerdicts, parseEvaluatorVerdict
 } from './goalcheck.mjs';
 import { callJev, testJevConnection, resolveJevTarget } from './goalcheck-call.mjs';
+import { ompWebSearchAvailable, webSearchQuery, runOmpSearch, sendWebSearchResponse } from './omp-websearch.mjs';
 
 const MAX_GOAL_CHECK_LOGS = 64;
 const goalCheckLogs = [];
@@ -1219,6 +1220,27 @@ async function handleConvert(clientFormat, req, res, bodyBuffer, opts = {}) {
       req, res, clientFormat, payload, ir, profile, profileKey,
       policy: gcPolicy, condition: evalCheck.condition, opts, log
     });
+  }
+
+  // Claude Code's WebSearch tool asks the model's provider to run the search. A gateway upstream
+  // usually cannot, so the search runs in omp and the answer is shaped as that provider's own.
+  if (clientFormat === 'anthropic' && ompWebSearchAvailable()) {
+    const query = webSearchQuery(payload);
+    if (query) {
+      const startedAt = Date.now();
+      const model = mapModel(ir.model || payload.model || '', profile, clientFormat);
+      console.log(`[llm-switcher] anthropic -> omp-websearch "${query}" [${profile.name || profileKey}]`);
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+      const result = await runOmpSearch(query, ac.signal);
+      if (ac.signal.aborted) return;
+      sendWebSearchResponse(res, { stream: ir.stream, model, query, result });
+      return logInspection({
+        clientFormat, outFormat: 'omp-websearch', profile: profileKey, model, stream: ir.stream,
+        requestPreview: previewOf(ir), duration: Date.now() - startedAt, tokens: { prompt: 0, completion: 0 },
+        status: 200, responsePreview: `[omp-websearch:${result.ok ? `${result.sources.length} sources` : 'failed'}]`
+      });
+    }
   }
 
   // Compaction rewrites the request itself, not just the intermediate form: when the client and
