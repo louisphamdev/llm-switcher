@@ -1,5 +1,10 @@
 # Changelog — LLM Switcher
 
+## Unreleased
+
+- **Claude Code web search runs in omp.** The `WebSearch` tool of Claude Code asks the model's provider to run the search (one `web_search_*` tool, user message `Perform a web search for the query: <q>`). A gateway upstream often cannot, and the request used to cross to it and fail. The gateway now answers that request itself: it runs the query through omp's search chain (`omp-websearch/search.ts`, started with `bun`) and replies with the `server_tool_use`, `web_search_tool_result` and `text` blocks of a provider-run search, as a stream or as JSON. A failed search is a `web_search_tool_result_error`. The upstream never sees the request. Other requests are untouched.
+- Needs omp installed with bun. `LLM_SWITCHER_OMP_SRC` and `LLM_SWITCHER_BUN` point at a non-default install; `LLM_SWITCHER_OMP_WEBSEARCH=0` sends web search upstream again.
+
 ## Release 1.6.22 — 2026-11-27
 
 - **A safety stop is incomplete, never a completed answer.** Anthropic `refusal` and the other safety stop reasons now map to `content_filter`. Responses streams and non-stream answers carry `incomplete_details.reason: "content_filter"`, chat carries `finish_reason: "content_filter"`, and the Anthropic side carries `stop_reason: "refusal"`. A tool call with cut JSON is not emitted as `output_item.done`, so Codex cannot run it.
