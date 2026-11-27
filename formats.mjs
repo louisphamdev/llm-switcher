@@ -39,21 +39,24 @@ function canonFinish(raw) {
   if (['stop', 'end_turn', 'stop_sequence', 'eos', 'end'].includes(r)) return 'stop';
   if (['length', 'max_tokens', 'max_output_tokens'].includes(r)) return 'length';
   if (['tool_calls', 'tool_call', 'function_call', 'function_calls', 'tool_use'].includes(r)) return 'tool_calls';
-  if (['content_filter', 'safety', 'recitation', 'language', 'blocklist', 'prohibited_content', 'spii'].includes(r)) return 'content_filter';
+  if (['content_filter', 'safety', 'refusal', 'recitation', 'language', 'blocklist', 'prohibited_content', 'spii'].includes(r)) return 'content_filter';
   // Gemini gave up on a tool call: as 'stop' the client would see a silent, empty turn.
   if (r === 'malformed_function_call') return 'error';
   return 'stop';
 }
 
-// `length` wins over tool calls: a cut-off tool call must reach the client as truncated, not as done.
+// A truncation or safety stop wins over tool calls: a cut-off call must reach the client as
+// incomplete, never as a completed tool call with truncated JSON.
+function isIncompleteFinish(canonical) {
+  return canonical === 'length' || canonical === 'content_filter';
+}
+function responsesIncompleteReason(canonical) {
+  return canonical === 'content_filter' ? 'content_filter' : 'max_output_tokens';
+}
 function chatFinish(canonical, hasTools) {
-  if (canonical === 'length') return 'length';
+  if (isIncompleteFinish(canonical)) return canonical;
   if (hasTools) return 'tool_calls';
-  switch (canonical) {
-    case 'length': return 'length';
-    case 'content_filter': return 'content_filter';
-    default: return 'stop';
-  }
+  return 'stop';
 }
 
 // ---------------- smart field detection (moved from proxy) ----------------
@@ -855,12 +858,25 @@ function responsesToIR(payload, { allowOpaqueCompaction = false } = {}) {
   }
 
   const tc = payload.tool_choice;
-  if (typeof tc === 'string') ir.toolChoice = tc;
+  const forcedHosted = (label) => { throw new Error(`Unsupported forced hosted tool_choice: ${label} is not forwarded by this gateway.`); };
+  if (typeof tc === 'string') {
+    if (!['none', 'auto', 'required'].includes(tc)) forcedHosted(tc);
+    ir.toolChoice = tc;
+  }
   else if ((tc?.type === 'function' || tc?.type === 'custom') && tc.name) ir.toolChoice = { name: responsesToolName(tc.namespace, tc.name) };
-  else if (tc?.type === 'allowed_tools') applyAllowedTools(ir, tc.mode, tc.tools, t => (t?.name ? responsesToolName(t.namespace, t.name) : null));
+  else if (tc?.type === 'allowed_tools') {
+    applyAllowedTools(ir, tc.mode, tc.tools, t => {
+      // local_shell has no `name` but is a real declared tool, unlike hosted tools.
+      if (t?.type === 'local_shell') return 'local_shell';
+      return t?.name ? responsesToolName(t.namespace, t.name) : null;
+    });
+    // A required choice with no surviving declared tool would become a tool_choice naming an
+    // undeclared tool in the converted upstream body. Reject it rather than silently downgrading.
+    if (tc.mode === 'required' && !ir.toolChoice) forcedHosted('allowed_tools');
+  }
   else if (['none', 'auto', 'required'].includes(tc?.type)) ir.toolChoice = tc.type;
   // A hosted tool (web search, file search) is not forwarded, so it cannot be forced.
-  else if (tc && typeof tc === 'object') ir.toolChoice = 'auto';
+  else if (tc && typeof tc === 'object') forcedHosted(tc.type || 'hosted tool');
 
   if (typeof payload.max_output_tokens === 'number') ir.params.maxTokens = payload.max_output_tokens;
   if (typeof payload.temperature === 'number') ir.params.temperature = payload.temperature;
@@ -2494,6 +2510,7 @@ function safeToolId(id) {
 
 function anthropicStopReason(canonical, hasTools) {
   if (canonical === 'length') return 'max_tokens';
+  if (canonical === 'content_filter') return 'refusal';
   if (hasTools) return 'tool_use';
   switch (canonical) {
     case 'length': return 'max_tokens';
@@ -2932,9 +2949,9 @@ function createResponsesStream(emit, model, opts = {}) {
     finish(canonical, stats = {}) {
       closeReasoning();
       closeMessage();
-      const incomplete = canonical === 'length';
-      // Codex runs a tool on output_item.done. After a length stop, drop any tool call whose arguments
-      // do not parse (upstream arguments are JSON for every tool kind) instead of running it cut off.
+      const incomplete = isIncompleteFinish(canonical);
+      // Codex runs a tool on output_item.done. After a truncation or safety stop, drop any call whose
+      // arguments do not parse (upstream arguments are JSON for every tool kind), never run cut JSON.
       // Its output_item.added then gets no done. A done would run the call, so this is the safe side.
       if (incomplete) {
         for (const t of tools.values()) {
@@ -2946,7 +2963,7 @@ function createResponsesStream(emit, model, opts = {}) {
       send({
         type: 'response.completed',
         response: snapshot(incomplete ? 'incomplete' : 'completed', {
-          incomplete_details: incomplete ? { reason: 'max_output_tokens' } : null,
+          incomplete_details: incomplete ? { reason: responsesIncompleteReason(canonical) } : null,
           usage: responsesUsage(stats.prompt, stats.completion, stats.cached, stats.reasoning)
         })
       });
@@ -2968,7 +2985,7 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
       content: [{ type: 'output_text', text: body, annotations: [] }]
     });
   }
-  const incomplete = finish === 'length';
+  const incomplete = isIncompleteFinish(finish);
   for (const tc of (tools || [])) {
     const fixed = repairToolCall(tc, vocab);
     const item = responsesToolItem(toolMeta, {
@@ -2976,16 +2993,22 @@ function buildResponsesMessage({ model, think, text, tools, finish, prompt, comp
       args: fixed.args
     });
     // Same rule as the stream: a length stop never hands Codex a call with truncated arguments.
-    if (incomplete && typeof tc.args === 'string') {
-      try { JSON.parse(tc.args || '{}'); } catch { continue; }
+    if (incomplete && typeof fixed.args === 'string') {
+      try { JSON.parse(fixed.args || '{}'); } catch { continue; }
     }
     output.push(item);
+  }
+  if (!output.length) {
+    output.push({
+      id: `msg_${rand(24)}`, type: 'message', status: 'completed', role: 'assistant',
+      content: [{ type: 'output_text', text: '', annotations: [] }]
+    });
   }
   const r = reasoning ?? stats?.reasoning;
   return {
     id: id || `resp_${Date.now()}${rand(8)}`, object: 'response', created_at: Math.floor(Date.now() / 1000), model,
     status: incomplete ? 'incomplete' : 'completed',
-    incomplete_details: incomplete ? { reason: 'max_output_tokens' } : null,
+    incomplete_details: incomplete ? { reason: responsesIncompleteReason(finish) } : null,
     output,
     output_text: body,
     usage: responsesUsage(prompt, completion, cached, r)

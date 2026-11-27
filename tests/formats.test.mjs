@@ -9,7 +9,7 @@ import {
   healAnthropicPayload, estimateTokens, PLACEHOLDER_SIGNATURE, GEMINI_DUMMY_SIGNATURE,
   buildResponsesMessage, createUpstreamNormalizer as makeNormalizer, emitUpstreamBody,
   isAntigravityModel, smartUsage,
-  createChatStream, buildChatMessage, chatFinish, anthropicStopReason,
+  createChatStream, buildChatMessage, chatFinish, anthropicStopReason, canonFinish,
   smartText, smartReasoning, sanitizeJsonSchema, normalizeUpstream, buildVertexMessage,
   createCodeAssistStream,
   budgetToEffort, effortToBudget, normalizeEffort, capEffort, mapEquivalentEffort, EFFORT_LEVELS, parseArgs, buildAnthropicMessage,
@@ -994,10 +994,92 @@ test('Responses tool_choice: allowed_tools restricts the tools and keeps its mod
   const required = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'b' }] } });
   assert.deepEqual(required.tools.map(t => t.name), ['b']);
   assert.equal(required.toolChoice, 'required');
-  assert.equal(responsesToIR({ ...base, tool_choice: { type: 'web_search_preview' } }).toolChoice, 'auto');
+  assert.throws(() => responsesToIR({ ...base, tool_choice: { type: 'web_search_preview' } }), /forced hosted tool_choice/);
+  assert.throws(() => responsesToIR({ ...base, tool_choice: 'any' }), /forced hosted tool_choice/);
   assert.equal(responsesToIR({ ...base, tool_choice: { type: 'none' } }).toolChoice, 'none');
   assert.equal(responsesToIR({ ...base, tool_choice: { type: 'auto' } }).toolChoice, 'auto');
   assert.deepEqual(responsesToIR({ ...base, tool_choice: { type: 'function', name: 'b' } }).toolChoice, { name: 'b' });
+});
+
+test('content_filter stops keep the turn incomplete and never run cut tool calls', () => {
+  assert.equal(chatFinish('content_filter', true), 'content_filter');
+  assert.equal(chatFinish('content_filter', false), 'content_filter');
+  assert.equal(anthropicStopReason('content_filter', true), 'refusal');
+
+  const events = [];
+  const r = createResponsesStream((event, data) => events.push({ event, data }), 'm');
+  r.start();
+  r.tool({ index: 0, id: 'call_cut', name: 'write_file', args: '{"file_path":"/x","content":"par' });
+  r.finish('content_filter', { prompt: 10, completion: 3, hasTools: true });
+  assert.ok(!events.some(e => e.event === 'response.output_item.done' && e.data.item.type === 'function_call'),
+    'a call with truncated JSON is not emitted as done on a content_filter stop');
+  const completed = events.at(-1).data.response;
+  assert.equal(completed.status, 'incomplete');
+  assert.equal(completed.incomplete_details.reason, 'content_filter');
+
+  const ok = [];
+  const r2 = createResponsesStream((event, data) => ok.push({ event, data }), 'm');
+  r2.start();
+  r2.tool({ index: 0, id: 'call_ok', name: 'shell', args: '{"cmd":"ls"}' });
+  r2.finish('content_filter', { hasTools: true });
+  assert.ok(ok.some(e => e.event === 'response.output_item.done' && e.data.item.type === 'function_call'),
+    'complete arguments still run');
+  assert.equal(ok.at(-1).data.response.status, 'incomplete');
+
+  const msg = buildResponsesMessage({ model: 'm', text: [], tools: [{ id: 'c1', name: 'write_file', args: '{"a":"tru' }], finish: 'content_filter' });
+  assert.equal(msg.status, 'incomplete');
+  assert.equal(msg.incomplete_details.reason, 'content_filter');
+  assert.ok(msg.output.length, 'an incomplete answer with no usable call still has a message item');
+  assert.ok(!msg.output.some(i => i.type === 'function_call'), 'the non-stream builder applies the same guard');
+  const good = buildResponsesMessage({ model: 'm', text: [], tools: [{ id: 'c2', name: 'shell', args: '{"cmd":"ls"}' }], finish: 'content_filter' });
+  assert.ok(good.output.some(i => i.type === 'function_call'));
+});
+
+test('allowed_tools keeps a supported local_shell and a mixed required list', () => {
+  const base = { model: 'm', input: 'x', tools: [{ type: 'local_shell' }, fn('a')] };
+  const required = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'local_shell' }] } });
+  assert.deepEqual(required.tools.map(t => t.name), ['local_shell'], 'local_shell is declared by this converter');
+  assert.equal(required.toolChoice, 'required', 'forcing a supported tool is not a hosted tool');
+  const auto = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [{ type: 'local_shell' }] } });
+  assert.deepEqual(auto.tools.map(t => t.name), ['local_shell']);
+  assert.equal(auto.toolChoice, 'auto');
+  const mixed = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'required', tools: [fn('a'), { type: 'web_search' }] } });
+  assert.deepEqual(mixed.tools.map(t => t.name), ['a'], 'hosted entries are dropped, declared client tools survive');
+  assert.equal(mixed.toolChoice, 'required', 'a required choice with a surviving tool is kept');
+});
+
+test('an upstream refusal is a content_filter stop, not a completed turn', () => {
+  assert.equal(canonFinish('refusal'), 'content_filter');
+  assert.equal(canonFinish('REFUSAL'), 'content_filter');
+
+  const chunks = [];
+  const r = createChatStream((err, chunk) => { if (!err) chunks.push(chunk); }, 'm');
+  r.start();
+  r.tool({ index: 0, id: 'c1', name: 'write_file', args: '{"a":"tru' });
+  r.finish('content_filter', { hasTools: true });
+  assert.equal(chunks.at(-1).choices[0].finish_reason, 'content_filter', 'chat stream carries the stop');
+  const msg = buildChatMessage({ model: 'm', tools: [{ id: 'c1', name: 'write_file', args: '{"a":"tru' }], finish: 'content_filter' });
+  assert.equal(msg.choices[0].finish_reason, 'content_filter', 'chat non-stream carries the stop');
+
+  const events = [];
+  const a = createAnthropicStream((event, data) => events.push({ event, data }), 'm');
+  a.start();
+  a.text('blocked');
+  a.finish('content_filter', { hasTools: false });
+  assert.equal(events.find(e => e.event === 'message_delta').data.delta.stop_reason, 'refusal', 'the Anthropic side keeps the refusal');
+});
+
+test('a forced hosted Responses tool_choice is rejected, never silently downgraded to auto', () => {
+  const base = { model: 'm', input: 'x', tools: [fn('a')] };
+  for (const tool_choice of [
+    { type: 'web_search_preview' }, { type: 'file_search' }, { type: 'image_generation' },
+    { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] }
+  ]) {
+    assert.throws(() => responsesToIR({ ...base, tool_choice }), /forced hosted tool_choice/);
+  }
+  const auto = responsesToIR({ ...base, tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [{ type: 'web_search' }] } });
+  assert.equal(auto.toolChoice, null, 'a non-forced hosted choice stays unset');
+  assert.deepEqual(responsesToIR({ ...base, tool_choice: { type: 'function', name: 'a' } }).toolChoice, { name: 'a' });
 });
 
 test('smartText and smartReasoning return each string once', () => {
@@ -1071,9 +1153,11 @@ test('healAnthropicPayload keeps an unchanged user turn as the same object', () 
   assert.equal(healed.payload.messages[2], user);
 });
 
-test('allowed_tools that matches no declared tool gives a request without tools, not a crash', () => {
-  const hosted = responsesToIR({ model: 'm', input: 'x', tools: [fn('a')], tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] } });
-  for (const body of [irToChatBody(hosted, 'm'), irToAnthropicBody(hosted, 'claude-x'), irToVertexBody(hosted, 'gemini-x')]) {
+test('allowed_tools that matches no declared tool gives a request without tools, unless forced', () => {
+  const hosted = { model: 'm', input: 'x', tools: [fn('a')], tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'web_search' }] } };
+  assert.throws(() => responsesToIR(hosted), /forced hosted tool_choice/);
+  const auto = responsesToIR({ model: 'm', input: 'x', tools: [fn('a')], tool_choice: { type: 'allowed_tools', mode: 'auto', tools: [{ type: 'web_search' }] } });
+  for (const body of [irToChatBody(auto, 'm'), irToAnthropicBody(auto, 'claude-x'), irToVertexBody(auto, 'gemini-x')]) {
     assert.equal(body.tools, undefined);
     assert.equal(body.tool_choice, undefined);
   }

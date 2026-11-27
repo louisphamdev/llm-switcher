@@ -1,5 +1,11 @@
 # Changelog — LLM Switcher
 
+## Release 1.6.22 — 2026-11-27
+
+- **A safety stop is incomplete, never a completed answer.** Anthropic `refusal` and the other safety stop reasons now map to `content_filter`. Responses streams and non-stream answers carry `incomplete_details.reason: "content_filter"`, chat carries `finish_reason: "content_filter"`, and the Anthropic side carries `stop_reason: "refusal"`. A tool call with cut JSON is not emitted as `output_item.done`, so Codex cannot run it.
+- **A forced hosted tool is refused instead of silently downgraded.** A `tool_choice` naming a hosted tool this gateway cannot forward (web search, file search, image generation, and so on) now gives a clear client error instead of becoming `auto`. Forwarded client tools — including `local_shell` in `allowed_tools` — and native Anthropic tool choice keep working.
+- **An incomplete answer is never empty.** When every tool call is dropped by a truncation or safety stop and there is no text, the Responses builder emits an empty message item instead of `output: []`.
+
 ## Release 1.6.21 — 2026-10-22
 
 - **The cause of `undeclared tool 'exec'`.** The catalog of llm-switcher sends Codex no code mode. A session that started on a code-mode model and then moved to a model of llm-switcher keeps its earlier `exec` calls in the history. The new requests declare `exec_command` and not `exec`.
